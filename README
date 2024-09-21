@@ -1,0 +1,3 @@
+### POLARI
+Use 'npm link' in the polari-cli folder to register the polari cli to your computer's npm.
+After doing so 'polari' commands should be available globally so long as npm is also available globally.

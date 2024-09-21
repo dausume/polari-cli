@@ -1,0 +1,10 @@
+{
+    "name":"polari-cli",
+    "version":"0.0.1",
+    "description":"",
+    "main":"index.js",
+    "bin":{
+        "polari":"index.js"
+    },
+    "author":"Dustin Etts"
+}
