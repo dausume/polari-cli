@@ -63,13 +63,20 @@ switch (command) {
   case 'test-cli':
     execSync(`bash ${scriptPaths['test-cli']}`, { stdio: 'inherit' });
     break;
-  case 'uninstall': // Used to uninstall this cli tool globally via npm.
+  case 'uninstall':
     execSync(`bash ${scriptPaths['uninstall']}`, { stdio: 'inherit' });
     break;
   case 'run':
     execSync(`bash ${scriptPaths['run']}`, { stdio: 'inherit' });
     break;
+  case 'help':
+    console.log(`Available commands:
+      test-cli   - Test if the CLI is working
+      run        - Run the application using Docker Compose
+      uninstall  - Uninstall this CLI tool globally
+      help       - Show this help message`);
+    break;
   default:
-    console.log('Unknown command. Use "test-cli" to test if the CLI is working.');
+    console.log('Unknown command. Use "help" to see available commands.');
     process.exit(1);
 }

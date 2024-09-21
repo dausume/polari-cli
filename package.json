@@ -1,10 +1,20 @@
 {
     "name":"polari-cli",
     "version":"0.0.1",
-    "description":"",
+    "description": "A CLI for managing Docker Compose projects for Polari",
     "main":"index.js",
     "bin":{
-        "polari":"index.js"
+        "pol":"index.js"
     },
+    "keywords": [
+    "CLI",
+    "Docker",
+    "docker-compose",
+    "Polari",
+    "scorecard",
+    "political-scorecard",
+    "pol"
+    ],
+    "dependencies": {},
     "author":"Dustin Etts"
 }
