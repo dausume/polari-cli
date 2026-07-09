@@ -88,18 +88,16 @@ case "$COMMAND" in
         if [ "$TOPOLOGY" = "swarm" ]; then
             die "swarm topology is not built yet — it lands in bld-5 (BUILD_SYSTEM_PLAN.md §3). Only --topology single renders today."
         fi
-        # bld-2: python renderer (ansible-compatible output); falls back to
-        # the ansible playbook only if jinja2 is unavailable.
-        if python3 -c "import jinja2, yaml" 2>/dev/null; then
-            log_info "Rendering ${ONLY:-the full compose bundle family} via pol-build/render.py"
-            python3 "$POL_SUITE_ROOT/pol-build/render.py" "$POL_RF_NODE" ${ONLY:+--only "$ONLY"}
-        elif command -v ansible-playbook >/dev/null 2>&1; then
-            log_warn "python3-jinja2 missing — falling back to ansible playbook"
-            cd "$POL_RF_NODE" && ansible-playbook jinja-gen/playbook.yml
-        else
-            die "need python3-jinja2 (preferred) or ansible-playbook to render"
-        fi
-        log_success "rendered into $POL_RF_NODE/jinja-build/" ;;
+        # bld-3: manifest render — per-service/bundle annotated sources
+        # (polari-rf-node/pol-services/) -> all ten variants, byte-parity
+        # gated against the root files.
+        python3 -c "import jinja2, yaml" 2>/dev/null || \
+            die "needs python3-jinja2 + pyyaml to render (pip install jinja2 pyyaml)"
+        log_info "Rendering the rf-node bundle family (per-service annotated sources)"
+        python3 "$POL_SUITE_ROOT/pol-build/render.py" "$POL_RF_NODE" \
+            --manifest "$POL_SUITE_ROOT/pol-build/manifests/node-bundles.yml" \
+            && log_success "all ten rf-node bundles rendered, byte-parity verified" \
+            || die "node bundle parity FAILED — a root compose file drifted from pol-services/ (edit the source, render, then 'pol build promote')" ;;
     promote)
         # Only the suite manifest promotes today; rf-node root files are
         # still hand-canonical until its re-authoring lands.
