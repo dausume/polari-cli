@@ -41,6 +41,16 @@ pol isle
 # Service accountability                                [alias: reg, services]
 pol registry list|show <kind>|interconnects|check
 
+# Topology as core-instance data (top-1..8)              [alias: top, topo]
+pol topology status|graph|validate|diff        read views (drift + findings)
+pol topology pull|push [file]                  rows <-> topologies/*.topology.yml
+pol topology report [--node <n>]               observe what actually runs
+pol topology render|apply [--plan]             rows -> manifests -> running (parity-gated)
+pol topology deploy <package> [--plan]         portable-package flow (push+render+apply)
+pol topology assign <module> <instance>        move a module (rows only)
+pol allocate <module|instance> <instance|machine>   targeted deploy (swarm placement)
+pol swarm join <node>                          drive a nodes.yml machine into the swarm
+
 # Effective configuration (read-only; nested per-service) [alias: cfg]
 pol config show|knobs|env|generated
 pol config service <kind> [show|files|knobs|connects]
@@ -50,7 +60,7 @@ pol db show|options
 pol db use combo|sqlite --role twin        primary switching = honest refusal
 
 # PRF feature modules                                     [alias: mod]
-pol modules list|deps|selftest <module>    enable/disable = honest refusal
+pol modules list|deps|selftest <module>    enable/disable -> pol topology assign
 
 # Certificates per env tier                               [alias: certs, ca]
 pol cert setup|issue|verify|walkthrough|renew
