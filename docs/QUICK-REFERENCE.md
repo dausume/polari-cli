@@ -20,9 +20,20 @@ pol compose node up backend                   any single service by name
 pol suite … / pol node …                      shortcuts for the two main roles
 pol suite urls                                staging nip.io URLs
 
-# Swarm orchestration (the isle-mesh STAND-IN)
-pol swarm init|status|join-token              working today
-pol swarm render|secrets|deploy|rm|ps         arrive with bld-5 (refuse now)
+# Swarm orchestration (the isle-mesh STAND-IN) — LIVE
+pol swarm init|status|join-token              cluster management
+pol swarm render|deploy|rm|ps|services <role> stacks (roles: engines|suite|node)
+#   engines proven E2E; suite/node conflict with their compose twins (refuse)
+#   v1 inlines generated env values via compose-config; secrets = refinement
+
+# Generated nginx proxies (replaces the sed .template path)
+pol proxy render|check|promote|status         check = nginx -t in a container
+#   rf prod render needs POLARI_PROD_DOMAIN exported
+
+# ssh deploys to configured nodes (pol-build/manifests/nodes.yml)
+pol deploy nodes|preflight <node>
+pol deploy run <node> --role engines|remote-worker|node [--dry-run]
+#   push branches first — targets pull the PUBLIC github repos
 
 # Isle-mesh mode (future) — refuses; swarm stands in
 pol isle

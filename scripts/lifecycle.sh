@@ -15,18 +15,22 @@ route() {   # route <action> [extra...] — dispatch to the recorded approach
         compose:node)  exec bash "$SCRIPT_DIR/node.sh"  "$action" --env "$POL_LAST_ENV" "$@" ;;
         compose:*)     exec bash "$SCRIPT_DIR/compose.sh" "$POL_LAST_ROLE" "$action" "$@" ;;
         swarm:*)
-            # bld-5: will route to swarm deploy/rm of the rendered stack.
-            die "recorded approach is a swarm build, and swarm deploys aren't rendered yet — the pipeline will be: edit pol-services/ -> pol build render --topology swarm -> jinja-build/ stack files -> pol swarm deploy (bld-5, BUILD_SYSTEM_PLAN.md §3)" ;;
+            case "$action" in
+                up)   exec bash "$SCRIPT_DIR/swarm.sh" deploy "$POL_LAST_ROLE" ;;
+                down) exec bash "$SCRIPT_DIR/swarm.sh" rm "$POL_LAST_ROLE" ;;
+                *)    exec bash "$SCRIPT_DIR/swarm.sh" "$action" "$POL_LAST_ROLE" ;;
+            esac ;;
         *) die "unrecognized recorded approach '$POL_LAST_MODE:$POL_LAST_ROLE' — re-run an up command to re-record" ;;
     esac
 }
 
-is_up() {   # any containers for the recorded approach?
+is_up() {   # any containers/tasks for the recorded approach?
     case "$POL_LAST_MODE:$POL_LAST_ROLE" in
         compose:suite) docker ps --format '{{.Names}}' | grep -qE '^(pol-proxy|pol-keycloak|prf-backend)$' ;;
         compose:node)  docker ps --format '{{.Names}}' | grep -qE '^prf-backend$' ;;
         compose:engines) docker ps --format '{{.Names}}' | grep -q msci ;;
         compose:dask)  docker ps --format '{{.Names}}' | grep -q dask ;;
+        swarm:*)       docker stack ls --format '{{.Name}}' 2>/dev/null | grep -qx "polari-$POL_LAST_ROLE" ;;
         *) return 1 ;;
     esac
 }
@@ -48,7 +52,9 @@ case "$VERB" in
             compose:node)  bash "$SCRIPT_DIR/node.sh" build --env "$POL_LAST_ENV" && exec bash "$SCRIPT_DIR/node.sh" up --env "$POL_LAST_ENV" ;;
             compose:*)     bash "$SCRIPT_DIR/compose.sh" "$POL_LAST_ROLE" build 2>/dev/null || true
                            exec bash "$SCRIPT_DIR/compose.sh" "$POL_LAST_ROLE" up ;;
-            swarm:*)       route rebuild ;;
+            swarm:*)       bash "$SCRIPT_DIR/swarm.sh" rm "$POL_LAST_ROLE" 2>/dev/null || true
+                           sleep 5
+                           exec bash "$SCRIPT_DIR/swarm.sh" deploy "$POL_LAST_ROLE" ;;
         esac ;;
     stop)
         read_build || exit 1

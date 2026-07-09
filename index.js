@@ -67,13 +67,14 @@ const commands = {
   modules:  { script: 'modules.sh',  desc: 'PRF feature modules: list, deps, selftests', aliases: ['mod'] },
   build:    { script: 'build.sh',    desc: 'jinja-script build pipeline (render/parity)', aliases: ['b'] },
   proxy:    { script: 'proxy.sh',    desc: 'Generated nginx configs (render/check/promote)', docker: true },
+  deploy:   { script: 'deploy.sh',   desc: 'ssh deploys to configured nodes (nodes.yml)' },
   registry: { script: 'registry.sh', desc: 'Service-kind accountability + interconnect map', aliases: ['reg', 'services'] },
   cert:     { script: 'cert.sh',     desc: 'Certs per env tier; prod: self-signed OR Let\'s Encrypt + auto-renew', aliases: ['certs', 'ca'] },
 };
 
 // Bare verbs that people will guess; they need a namespace. Guard them with
 // a helpful error instead of a silent unknown-command failure.
-const namespacelessCommands = ['up', 'down', 'logs', 'ps', 'render', 'parity', 'setup', 'deploy'];
+const namespacelessCommands = ['up', 'down', 'logs', 'ps', 'render', 'parity', 'setup'];
 // (start/rebuild/stop are deliberately namespaceless — they replay the
 // recorded last-build approach; see scripts/lifecycle.sh)
 
