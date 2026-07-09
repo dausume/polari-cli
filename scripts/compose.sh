@@ -57,7 +57,10 @@ case "$ROLE" in
     dask)
         ACTION=$1; shift || true
         cd "$POL_RF_NODE"
-        CMD="docker compose -f docker-compose.dask.yml"
+        # -p matches the project the original dask deploy created —
+        # without it compose defaults to the directory name and
+        # collides with the running containers' fixed names.
+        CMD="docker compose -p polari-dask -f docker-compose.dask.yml"
         case "$ACTION" in
             up)    $CMD up -d "$@" ;;
             down)  $CMD down "$@" ;;

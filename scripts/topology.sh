@@ -40,9 +40,16 @@ ${BOLD}WRITE (rows only — deploys stay human-invoked)${NC}
                        re-resolves dependency edges)
   ${CYAN}resolve${NC} [name]       recompute edge providers from assignments
 
-${BOLD}NOT BUILT YET${NC} (honest refusal):
-  render/apply/deploy — TopologyDefinition -> manifests -> running
-  services is top-3/4 of TOPOLOGY_ORCHESTRATION_PLAN.md.
+${BOLD}BUILD + RUN (top-3)${NC}
+  ${CYAN}render${NC} [name]        topology rows -> pol-build/manifests/topology-<name>/
+                       (bundle manifests + stacks + ordered actions), then
+                       render.py byte-parity against the generated bundles
+  ${CYAN}apply${NC} [name] [--plan]  replay the rendered actions (compose up /
+                       stack deploy per group). --plan prints only. LOCAL
+                       machine only — remote nodes are top-4
+  ${CYAN}deploy${NC} <file|name> [--plan]  full portable-package flow:
+                       push -> render -> apply. Round trip: pull after
+                       deploy reproduces the package byte-for-byte
 
 Backend: the core instance's /api/topology/* — reached via
 \$POLARI_CORE_URL when set, else docker exec into local prf-backend."
@@ -258,8 +265,80 @@ print('  rows updated — deploying the change stays yours:', d['suggestedComman
 print(f\"  {d['edges']} edges checked, {len(d['changed'])} changed\" if d.get('ok') else '  failed: ' + str(d.get('error')))
 for c in d.get('changed', []):
     print(f\"    {c['edge']}: -> {c['to']['provider'] or '(none)'} [{c['to']['status']}]\")" ;;
-    render|apply|deploy|export)
-        die "pol topology $COMMAND is not built yet — TopologyDefinition -> manifests -> deploy is top-3/4 (TOPOLOGY_ORCHESTRATION_PLAN.md). Today: pull/push/diff/report/assign work; pol swarm + pol compose deploy what the manifests already define." ;;
+    render)
+        need_pyyaml
+        NAME=$(resolve_name "$1"); [ -n "$NAME" ] || die "no active topology"
+        PKG="$PACKAGES_DIR/$NAME.topology.yml"
+        # rows are the source of truth — refresh the package first
+        bash "$SCRIPT_DIR/topology.sh" pull "$NAME" >/dev/null
+        python3 "$POL_SUITE_ROOT/pol-build/tools/topology_render.py" "$PKG" --out-root "$POL_SUITE_ROOT"
+        OUT="$POL_SUITE_ROOT/pol-build/manifests/topology-$NAME"
+        # byte-parity gate: the emitted manifests must reproduce the
+        # project's generated bundles exactly (render.py --check idiom)
+        if [ -f "$OUT/bundles-suite.yml" ]; then
+            python3 "$POL_SUITE_ROOT/pol-build/render.py" "$POL_SUITE_ROOT" --manifest "$OUT/bundles-suite.yml" || die "suite bundle parity failed"
+        fi
+        if [ -f "$OUT/bundles-node.yml" ]; then
+            python3 "$POL_SUITE_ROOT/pol-build/render.py" "$POL_RF_NODE" --manifest "$OUT/bundles-node.yml" || die "node bundle parity failed"
+        fi
+        log_success "topology '$NAME' rendered -> pol-build/manifests/topology-$NAME/ (parity OK)" ;;
+    apply)
+        need_pyyaml
+        PLAN=""; NAME_ARG=""
+        for arg in "$@"; do
+            case "$arg" in
+                --plan) PLAN=1 ;;
+                *) NAME_ARG=$arg ;;
+            esac
+        done
+        NAME=$(resolve_name "$NAME_ARG"); [ -n "$NAME" ] || die "no active topology"
+        ACTIONS="$POL_SUITE_ROOT/pol-build/manifests/topology-$NAME/actions.yml"
+        [ -f "$ACTIONS" ] || bash "$SCRIPT_DIR/topology.sh" render "$NAME"
+        pol_box "topology apply${PLAN:+ (plan only)}: $NAME"
+        python3 -c "
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]))
+for a in doc['actions']:
+    where = 'REMOTE ' + a['machine'] if a['remote'] else 'local'
+    print(f\"  {a['order']}. [{where}] {a['group']:<14} {a['command']}\")
+" "$ACTIONS"
+        if [ -n "$PLAN" ]; then
+            log_info "plan only — nothing executed. Run without --plan to apply local actions."
+            exit 0
+        fi
+        # execute LOCAL actions in order via the existing pol paths
+        # (they self-record for pol start/rebuild/stop); remote
+        # machines refuse honestly until top-4 wires pol deploy in.
+        python3 -c "
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]))
+for a in doc['actions']:
+    print(('SKIP-REMOTE' if a['remote'] else 'RUN') + '\t' + a['command'])
+" "$ACTIONS" | while IFS=$'\t' read -r MODE CMD; do
+            if [ "$MODE" = "SKIP-REMOTE" ]; then
+                log_warn "remote action skipped (top-4 wires ssh deploys): $CMD"
+                continue
+            fi
+            log_info "applying: $CMD"
+            # shellcheck disable=SC2086
+            pol ${CMD#pol } || die "action failed: $CMD"
+        done
+        log_success "topology '$NAME' applied — pol topology report && pol topology diff to verify" ;;
+    deploy)
+        TARGET=$1; shift || true
+        [ -n "$TARGET" ] || die "usage: pol topology deploy <package-file|name> [--plan]"
+        if [ -f "$TARGET" ]; then PKG="$TARGET";
+        elif [ -f "$PACKAGES_DIR/$TARGET.topology.yml" ]; then PKG="$PACKAGES_DIR/$TARGET.topology.yml";
+        else die "no such package: $TARGET (topologies/*.topology.yml)"; fi
+        need_pyyaml
+        NAME=$(python3 -c "import sys,yaml; print(yaml.safe_load(open(sys.argv[1]))['topology']['name'])" "$PKG")
+        log_info "deploying portable package '$NAME' (push -> render -> apply $*)"
+        bash "$SCRIPT_DIR/topology.sh" push "$PKG"
+        bash "$SCRIPT_DIR/topology.sh" render "$NAME"
+        bash "$SCRIPT_DIR/topology.sh" apply "$@" "$NAME" ;;
+    export)
+        # export == pull: the package file IS the export artifact
+        bash "$SCRIPT_DIR/topology.sh" pull "$@" ;;
     help|-h|--help|"") show_help ;;
     *) log_error "Unknown topology command: $COMMAND"; show_help; exit 1 ;;
 esac
