@@ -316,12 +316,29 @@ for a in doc['actions']:
     print(('SKIP-REMOTE' if a['remote'] else 'RUN') + '\t' + a['command'])
 " "$ACTIONS" | while IFS=$'\t' read -r MODE CMD; do
             if [ "$MODE" = "SKIP-REMOTE" ]; then
-                log_warn "remote action skipped (top-4 wires ssh deploys): $CMD"
+                log_warn "remote compose action skipped (pol deploy run <node> --role <r> drives it): $CMD"
                 continue
             fi
             log_info "applying: $CMD"
-            # shellcheck disable=SC2086
-            pol ${CMD#pol } || die "action failed: $CMD"
+            if [[ "$CMD" == *"swarm deploy"* ]]; then
+                # stack actions carry their placement constraints from
+                # the topology (stacks.yml) into stackify
+                STACKS="$POL_SUITE_ROOT/pol-build/manifests/topology-$NAME/stacks.yml"
+                CONSTRAINTS=$(python3 -c "
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1])) if len(sys.argv) > 1 else {}
+out = []
+for s in (doc or {}).get('stacks', []):
+    if s.get('placement'):
+        svc = s['source'].replace('docker-compose.', '').replace('.yml', '')
+        out.append(svc + '=' + s['placement'].replace(' ', ''))
+print(' '.join(out))" "$STACKS" 2>/dev/null || true)
+                # shellcheck disable=SC2086
+                POL_STACK_CONSTRAINTS="$CONSTRAINTS" pol ${CMD#pol } || die "action failed: $CMD"
+            else
+                # shellcheck disable=SC2086
+                pol ${CMD#pol } || die "action failed: $CMD"
+            fi
         done
         log_success "topology '$NAME' applied — pol topology report && pol topology diff to verify" ;;
     deploy)
@@ -339,6 +356,76 @@ for a in doc['actions']:
     export)
         # export == pull: the package file IS the export artifact
         bash "$SCRIPT_DIR/topology.sh" pull "$@" ;;
+    allocate)
+        # pol allocate <module|instance> <instance|machine> — the
+        # targeted-deploy path (top-4). Module -> instance rewrites the
+        # assignment (rows only); instance -> machine moves the
+        # instance, re-renders, and re-deploys THAT group.
+        need_pyyaml
+        WHAT=$1; WHERE=$2
+        [ -n "$WHAT" ] && [ -n "$WHERE" ] || die "usage: pol allocate <module> <instance> | pol allocate <instance> <machine>"
+        NAME=$(resolve_name ""); [ -n "$NAME" ] || die "no active topology"
+        MODE=$(be_call GET "/api/topology/graph?name=$NAME" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+what, where = sys.argv[1], sys.argv[2]
+instances = {i['name'] for i in d.get('instances', [])}
+machines = {m['name'] for m in d.get('machines', [])}
+if what in instances and where in machines: print('instance')
+elif where in instances: print('module')
+else: print('unknown')" "$WHAT" "$WHERE")
+        case "$MODE" in
+            module)
+                bash "$SCRIPT_DIR/topology.sh" assign "$WHAT" "$WHERE" ;;
+            instance)
+                log_info "moving instance '$WHAT' -> machine '$WHERE' (row + render + targeted deploy)"
+                printf '{"name": "%s", "machine_name": "%s", "placement_constraint": ""}' "$WHAT" "$WHERE" | \
+                    be_call POST /api/topology/instance | pretty "
+print(('  instance row updated: ' + ', '.join(d['updated'])) if d.get('ok') else sys.exit('  failed: ' + str(d.get('error'))))"
+                bash "$SCRIPT_DIR/topology.sh" render "$NAME"
+                STACKS="$POL_SUITE_ROOT/pol-build/manifests/topology-$NAME/stacks.yml"
+                GROUP=$(python3 -c "
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]))
+for a in doc['actions']:
+    if sys.argv[2] in a['instances']:
+        print(a['group'] + '\t' + a['command'] + '\t' + ('1' if a['remote'] else ''))
+        break" "$POL_SUITE_ROOT/pol-build/manifests/topology-$NAME/actions.yml" "$WHAT")
+            IFS=$'\t' read -r GNAME GCMD GREMOTE <<< "$GROUP"
+                [ -n "$GNAME" ] || die "instance '$WHAT' maps to no build group after render"
+                if [ "$GNAME" = "engines-stack" ]; then
+                    # swarm distributes CONFIG, not images — sync the
+                    # locally-built image to the target node first
+                    ALIAS=$(python3 -c "import sys,yaml; print((yaml.safe_load(open(sys.argv[1]))['nodes'].get(sys.argv[2]) or {}).get('ssh',''))" "$NODES_FILE" "$WHERE" 2>/dev/null || true)
+                    IMG="prf-msci-engines:staging"
+                    if [ -n "$ALIAS" ]; then
+                        if ! ssh "$ALIAS" "docker image inspect $IMG" >/dev/null 2>&1; then
+                            log_info "syncing $IMG to $WHERE (docker save | ssh docker load — one-time)"
+                            docker save "$IMG" | ssh "$ALIAS" docker load || die "image sync to $WHERE failed"
+                        fi
+                    fi
+                    CONSTRAINTS=$(python3 -c "
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]))
+out = []
+for s in (doc or {}).get('stacks', []):
+    if s.get('placement'):
+        svc = s['source'].replace('docker-compose.', '').replace('.yml', '')
+        out.append(svc + '=' + s['placement'].replace(' ', ''))
+print(' '.join(out))" "$STACKS")
+                    log_info "deploying engines stack with constraints: $CONSTRAINTS"
+                    POL_STACK_CONSTRAINTS="$CONSTRAINTS" pol swarm deploy engines || die "targeted deploy failed"
+                    docker stack ps polari-engines --format '{{.Name}}\t{{.Node}}\t{{.CurrentState}}' | head -5
+                elif [ -n "$GREMOTE" ]; then
+                    log_warn "'$WHAT' is a compose group on a remote machine — drive it with: pol deploy run $WHERE --role <r> (push branches first; nodes pull GitHub)"
+                else
+                    log_info "re-running local group: $GCMD"
+                    pol ${GCMD#pol } || die "targeted deploy failed"
+                fi
+                log_success "allocated $WHAT -> $WHERE — pol topology report && pol topology diff to verify" ;;
+            *)
+                die "cannot interpret 'pol allocate $WHAT $WHERE' — first arg must be a module or instance, second an instance or machine (pol topology graph)" ;;
+        esac ;;
     help|-h|--help|"") show_help ;;
     *) log_error "Unknown topology command: $COMMAND"; show_help; exit 1 ;;
 esac
