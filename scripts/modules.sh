@@ -61,7 +61,7 @@ case "$COMMAND" in
         done
         [ "$FOUND" = "1" ] || die "no selftests found for module '$MOD' (pol modules list)" ;;
     enable|disable)
-        die "module enable/disable knobs are not built yet — activation is registration-in-code (polariServer). See 'pol modules help'." ;;
+        die "module enable/disable lives on the TOPOLOGY now: ModuleAssignment rows on the core instance. Use 'pol topology assign <module> <instance>' (or drag the module chip in the Topology tab). In-process activation is still registration-in-code (polariServer)." ;;
     help|-h|--help|"") show_help ;;
     *) log_error "Unknown modules command: $COMMAND"; show_help; exit 1 ;;
 esac

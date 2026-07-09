@@ -1,0 +1,265 @@
+#!/bin/bash
+# pol topology — the swarm/compose topology as core-instance DATA (top-2).
+#
+# Desired state lives as rows on the CORE Polari instance
+# (/api/topology/*, built top-1); files (topologies/*.topology.yml,
+# nodes.yml) are the INTERCHANGE format. This script syncs the two
+# (pull/push), reports OBSERVED state (report), and shows drift
+# (diff). Nothing here deploys anything — apply/export-to-manifests
+# land in top-3/4 and refuse honestly below.
+set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/log.sh"
+
+NODES_FILE="$POL_SUITE_ROOT/pol-build/manifests/nodes.yml"
+PACKAGES_DIR="$POL_SUITE_ROOT/topologies"
+#: The machine name the local (non-ssh) host reports as. The core
+#: seeds itself as 'staging-a'; override for a differently-named core.
+LOCAL_NODE="${POLARI_LOCAL_NODE:-staging-a}"
+
+show_help() {
+    pol_box "pol topology — topology as core-instance data"
+    echo -e "
+${BOLD}READ${NC}
+  ${CYAN}status${NC}               active topology + row counts
+  ${CYAN}graph${NC} [name]         instances / modules / edges / connections
+  ${CYAN}validate${NC} [name]      evidence-bearing findings (each names its knob)
+  ${CYAN}diff${NC} [name]          desired vs observed drift + package-file drift
+
+${BOLD}SYNC (files <-> rows)${NC}
+  ${CYAN}pull${NC} [name]          rows -> topologies/<name>.topology.yml (portable,
+                       credential-free package)
+  ${CYAN}push${NC} [file]          package file -> rows (idempotent-by-name); always
+                       refreshes machines from nodes.yml. No file = just nodes.yml
+  ${CYAN}report${NC} [--node <n>]  observe what THIS host (or ssh node <n>) actually
+                       runs -> TopologyObservation row (never guessed)
+
+${BOLD}WRITE (rows only — deploys stay human-invoked)${NC}
+  ${CYAN}assign${NC} <module> <instance> [--from <instance>]
+                       move/enable a module (rewrites ModuleAssignment,
+                       re-resolves dependency edges)
+  ${CYAN}resolve${NC} [name]       recompute edge providers from assignments
+
+${BOLD}NOT BUILT YET${NC} (honest refusal):
+  render/apply/deploy — TopologyDefinition -> manifests -> running
+  services is top-3/4 of TOPOLOGY_ORCHESTRATION_PLAN.md.
+
+Backend: the core instance's /api/topology/* — reached via
+\$POLARI_CORE_URL when set, else docker exec into local prf-backend."
+}
+
+need_pyyaml() {
+    python3 -c "import yaml" 2>/dev/null || die "needs python3-yaml (apt install python3-yaml)"
+}
+
+# be_call METHOD PATH  — body on stdin for POST; response on stdout.
+be_call() {
+    local method=$1 path=$2
+    if [ -n "${POLARI_CORE_URL:-}" ]; then
+        if [ "$method" = "POST" ]; then
+            curl -sk -X POST -H 'Content-Type: application/json' --data-binary @- "$POLARI_CORE_URL$path"
+        else
+            curl -sk "$POLARI_CORE_URL$path"
+        fi
+    else
+        docker ps --format '{{.Names}}' | grep -qx prf-backend \
+            || die "no prf-backend container and POLARI_CORE_URL unset — start the suite (pol suite up) or point POLARI_CORE_URL at the core"
+        docker exec -i prf-backend python3 -c "
+import sys, urllib.request
+method, path = sys.argv[1], sys.argv[2]
+data = sys.stdin.buffer.read() if method == 'POST' else None
+req = urllib.request.Request('http://localhost:3000' + path,
+                             data=data, method=method,
+                             headers={'Content-Type': 'application/json'})
+try:
+    with urllib.request.urlopen(req, timeout=60) as r:
+        sys.stdout.write(r.read().decode())
+except urllib.error.HTTPError as e:
+    sys.stdout.write(e.read().decode())
+" "$method" "$path"
+    fi
+}
+
+# pretty PYTHON_SNIPPET — feeds be_call output through a formatter.
+pretty() { python3 -c "import json,sys; d=json.load(sys.stdin); $1"; }
+
+resolve_name() {  # $1 = explicit name or empty -> active topology
+    if [ -n "$1" ]; then echo "$1"; return; fi
+    be_call GET /api/topology/summary | pretty "print(d.get('activeTopology',''))"
+}
+
+COMMAND=$1; shift || true
+case "$COMMAND" in
+    status)
+        pol_box "topology status"
+        be_call GET /api/topology/summary | pretty "
+print('  active topology:', d.get('activeTopology') or '(none)')
+for t in d.get('topologies', []):
+    star = '*' if t['isActive'] else ' '
+    print(f\"  {star} {t['name']:<16} {t['status']:<10} {t['description'][:60]}\")
+print('  rows:', ', '.join(f'{k.replace(chr(39),chr(39))}={v}' for k,v in sorted(d.get('counts',{}).items()) if v))" ;;
+    graph)
+        NAME=$(resolve_name "$1"); [ -n "$NAME" ] || die "no active topology — pol topology push first"
+        be_call GET "/api/topology/graph?name=$NAME" | pretty "
+if not d.get('ok'): raise SystemExit('  ' + str(d.get('error')))
+t = d['topology']
+print(f\"  {t['name']} [{t['status']}] default target: {t['defaultTarget']}\")
+print('  INSTANCES')
+for i in d['instances']:
+    print(f\"    {i['name']:<10} {i['kind']:<7} {i['orchestrationTarget']:<8} db={i['dbBackend']:<14} @{i['machineName'] or '(unpinned)'}\")
+    mods = [a['moduleName'] + ('' if a['state']=='enabled' else f\" ({a['state']})\") for a in d['assignments'] if a['instanceName']==i['name']]
+    if mods: print('               modules: ' + ', '.join(mods))
+print('  DEPENDENCY EDGES')
+for e in d['edges']:
+    mark = 'OK ' if e['status']=='resolved' else ('DEG' if e['status']=='degraded' else '!! ')
+    print(f\"    [{mark}] {e['moduleName']}@{e['consumerInstanceName']} -> {e['dependsOnModule']} @ {e['providerInstanceName'] or '(no provider)'}\")
+print(f\"  CONNECTIONS ({len(d['connections'])} typed wires; pol registry interconnects for artifacts)\")
+for c in d['connections']:
+    print(f\"    {c['interconnectKey']:<24} {c['fromKind']} -> {c['toKind']}\")" ;;
+    validate)
+        NAME=$(resolve_name "$1"); [ -n "$NAME" ] || die "no active topology"
+        echo '{}' | be_call POST "/api/topology/validate?name=$NAME" | pretty "
+if not d.get('ok'): raise SystemExit('  ' + str(d.get('error')))
+print(f\"  topology {d['topology']}: {'VALID' if d['valid'] else 'INVALID'} ({d['errorCount']} errors, {d['warnCount']} warnings)\")
+for f in d['findings']:
+    print(f\"  [{f['severity']}] {f['check']} @ {f['subject']}\")
+    print(f\"      evidence: {f['evidence']}\")
+    print(f\"      knob:     {f['knob']}\")
+    print(f\"      action:   {f['action']}\")"
+        ;;
+    pull)
+        need_pyyaml
+        NAME=$(resolve_name "$1"); [ -n "$NAME" ] || die "no active topology"
+        mkdir -p "$PACKAGES_DIR"
+        OUT="$PACKAGES_DIR/$NAME.topology.yml"
+        be_call GET "/api/topology/export?name=$NAME" | python3 -c "
+import json, sys, yaml
+d = json.load(sys.stdin)
+if not d.get('ok'): raise SystemExit('  export failed: ' + str(d.get('error')))
+doc = d['document']
+header = (
+ '# ============================================================\n'
+ '# PORTABLE POLARI TOPOLOGY PACKAGE — credential-free by\n'
+ '# construction (secrets self-generate on every target).\n'
+ '# Re-deploy anywhere: pol topology push <this file>, then\n'
+ '# pol topology apply (top-3/4). Safe to commit/share.\n'
+ '# ============================================================\n')
+with open(sys.argv[1], 'w') as fh:
+    fh.write(header)
+    yaml.safe_dump(doc, fh, sort_keys=False, default_flow_style=False)
+print('  wrote', sys.argv[1])
+print(f\"  {len(doc['instances'])} instances, {len(doc['assignments'])} assignments, \"
+      f\"{len(doc['edges'])} edges, {len(doc['connections'])} connections\")" "$OUT"
+        log_success "pulled topology '$NAME' -> topologies/$NAME.topology.yml" ;;
+    push)
+        need_pyyaml
+        FILE=$1
+        [ -z "$FILE" ] || [ -f "$FILE" ] || [ -f "$PACKAGES_DIR/$FILE" ] || [ -f "$PACKAGES_DIR/$FILE.topology.yml" ] || die "no such package file: $FILE"
+        [ -n "$FILE" ] && { [ -f "$FILE" ] || FILE=$(ls "$PACKAGES_DIR/$FILE" 2>/dev/null || ls "$PACKAGES_DIR/$FILE.topology.yml"); }
+        python3 -c "
+import json, sys, yaml
+pkg_file, nodes_file = sys.argv[1], sys.argv[2]
+doc = {'kind': 'polari-topology-package', 'schema_version': '1'}
+if pkg_file:
+    doc = yaml.safe_load(open(pkg_file))
+# files -> rows: nodes.yml machines ALWAYS refresh into the doc
+# (idempotent-by-name on the backend).
+nodes = yaml.safe_load(open(nodes_file)) or {}
+machines = {m['name']: m for m in doc.get('machines', [])}
+for name, spec in (nodes.get('nodes') or {}).items():
+    machines.setdefault(name, {
+        'name': name, 'ssh_alias': spec.get('ssh', name),
+        'arch': '', 'mem_gb': 0.0,
+        'roles_json': json.dumps(spec.get('roles', [])),
+        'swarm_role': 'none',
+        'repo_dir': spec.get('repo_dir', '~/polari-suite'),
+        'source': 'nodes.yml', 'notes': spec.get('notes', '')})
+doc['machines'] = sorted(machines.values(), key=lambda m: m['name'])
+json.dump(doc, sys.stdout)
+" "$FILE" "$NODES_FILE" | be_call POST /api/topology/import | pretty "
+if not d.get('ok'): raise SystemExit('  push failed: ' + str(d.get('error')))
+print(f\"  created {len(d['created'])} rows, skipped {len(d['skipped'])} (idempotent-by-name)\")
+for c in d['created']: print(f\"    + {c['class']} {c['name']}\")"
+        log_success "pushed ${FILE:-nodes.yml machines} -> core rows" ;;
+    diff)
+        NAME=$(resolve_name "$1"); [ -n "$NAME" ] || die "no active topology"
+        pol_box "drift: desired vs observed ($NAME)"
+        be_call GET "/api/topology/drift?name=$NAME" | pretty "
+if not d.get('ok'): raise SystemExit('  ' + str(d.get('error')))
+print('  observed nodes:', ', '.join(d['observedNodes']) or '(none — run pol topology report)')
+if not d['inDrift']: print('  NO DRIFT — observed state matches the topology')
+for r in d['rows']:
+    print(f\"  [{r['kind']}] {r['subject']} @ {r.get('machine','')}\")
+    print(f\"      {r['evidence']}\")
+    print(f\"      suggested: {r['suggestedCommand']}\")"
+        # package-file drift: committed package vs live rows
+        PKG="$PACKAGES_DIR/$NAME.topology.yml"
+        if [ -f "$PKG" ]; then
+            need_pyyaml
+            be_call GET "/api/topology/export?name=$NAME" | python3 -c "
+import json, sys, yaml
+live = json.load(sys.stdin)
+if live.get('ok'):
+    pkg = yaml.safe_load(open(sys.argv[1]))
+    if json.dumps(pkg, sort_keys=True) == json.dumps(live['document'], sort_keys=True):
+        print('  package file topologies/%s.topology.yml == live rows' % sys.argv[2])
+    else:
+        print('  PACKAGE DRIFT: topologies/%s.topology.yml differs from live rows' % sys.argv[2])
+        print('      suggested: pol topology pull %s   (refresh the file)' % sys.argv[2])
+        print('      or:        pol topology push topologies/%s.topology.yml' % sys.argv[2])
+" "$PKG" "$NAME"
+        fi ;;
+    report)
+        NODE="$LOCAL_NODE"; RUN=""
+        [ "$1" = "--node" ] && { NODE=$2; shift 2; }
+        if [ "$NODE" != "$LOCAL_NODE" ]; then
+            need_pyyaml
+            ALIAS=$(python3 -c "import sys,yaml; print((yaml.safe_load(open(sys.argv[1]))['nodes'].get(sys.argv[2]) or {}).get('ssh',''))" "$NODES_FILE" "$NODE")
+            [ -n "$ALIAS" ] || die "node '$NODE' not in nodes.yml (pol deploy nodes)"
+            RUN="ssh -o ConnectTimeout=8 $ALIAS"
+        fi
+        log_info "observing $NODE (docker ps + stacks)"
+        # the compose/swarm service LABELS are what drift matching
+        # resolves to registry kinds (container names are aliases)
+        SERVICES=$($RUN docker ps --format '{{.Names}}\t{{.State}}\t{{.Image}}\t{{.Label "com.docker.compose.service"}}{{.Label "com.docker.swarm.service.name"}}' 2>/dev/null || true)
+        STACKS=$($RUN docker stack ls --format '{{.Name}}' 2>/dev/null || true)
+        python3 -c "
+import json, sys
+services = [{'name': p[0], 'state': p[1] if len(p) > 1 else '',
+             'image': p[2] if len(p) > 2 else '',
+             'service': (p[3] if len(p) > 3 else '').split('_')[-1]}
+            for line in sys.argv[1].splitlines() if line
+            for p in [line.split('\t')]]
+stacks = [{'name': s} for s in sys.argv[2].splitlines() if s]
+json.dump({'node': sys.argv[3], 'services': services,
+           'stacks': stacks, 'source': 'pol topology report'},
+          sys.stdout)
+" "$SERVICES" "$STACKS" "$NODE" | be_call POST /api/topology/observe | pretty "
+print(('  recorded ' + d['observation'] + ' against topology ' + (d['topology'] or '(none)')) if d.get('ok') else '  failed: ' + str(d.get('error')))"
+        log_success "observation posted — pol topology diff to compare" ;;
+    assign)
+        MODULE=$1; TO=$2; FROM=""
+        [ "$3" = "--from" ] && FROM=$4
+        [ -n "$MODULE" ] && [ -n "$TO" ] || die "usage: pol topology assign <module> <instance> [--from <instance>]"
+        python3 -c "
+import json, sys
+p = {'module': sys.argv[1], 'to_instance': sys.argv[2]}
+if sys.argv[3]: p['from_instance'] = sys.argv[3]
+json.dump(p, sys.stdout)" "$MODULE" "$TO" "$FROM" | be_call POST /api/topology/assign | pretty "
+if not d.get('ok'): raise SystemExit('  assign failed: ' + str(d.get('error')))
+print('  assignment:', d['assignment'])
+if d['disabled']: print('  disabled:', ', '.join(d['disabled']))
+for c in d['resolve']['changed']:
+    print(f\"  edge {c['edge']}: {c['from']['provider'] or '(none)'} -> {c['to']['provider'] or '(none)'} [{c['to']['status']}]\")
+print('  rows updated — deploying the change stays yours:', d['suggestedCommand'])" ;;
+    resolve)
+        NAME=$(resolve_name "$1"); [ -n "$NAME" ] || die "no active topology"
+        echo '{}' | be_call POST "/api/topology/resolve?name=$NAME" | pretty "
+print(f\"  {d['edges']} edges checked, {len(d['changed'])} changed\" if d.get('ok') else '  failed: ' + str(d.get('error')))
+for c in d.get('changed', []):
+    print(f\"    {c['edge']}: -> {c['to']['provider'] or '(none)'} [{c['to']['status']}]\")" ;;
+    render|apply|deploy|export)
+        die "pol topology $COMMAND is not built yet — TopologyDefinition -> manifests -> deploy is top-3/4 (TOPOLOGY_ORCHESTRATION_PLAN.md). Today: pull/push/diff/report/assign work; pol swarm + pol compose deploy what the manifests already define." ;;
+    help|-h|--help|"") show_help ;;
+    *) log_error "Unknown topology command: $COMMAND"; show_help; exit 1 ;;
+esac

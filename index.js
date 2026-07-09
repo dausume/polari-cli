@@ -69,6 +69,7 @@ const commands = {
   proxy:    { script: 'proxy.sh',    desc: 'Generated nginx configs (render/check/promote)', docker: true },
   deploy:   { script: 'deploy.sh',   desc: 'ssh deploys to configured nodes (nodes.yml)' },
   registry: { script: 'registry.sh', desc: 'Service-kind accountability + interconnect map', aliases: ['reg', 'services'] },
+  topology: { script: 'topology.sh', desc: 'Topology as core-instance data: pull/push/diff/report/assign', aliases: ['top', 'topo'] },
   cert:     { script: 'cert.sh',     desc: 'Certs per env tier; prod: self-signed OR Let\'s Encrypt + auto-renew', aliases: ['certs', 'ca'] },
 };
 
