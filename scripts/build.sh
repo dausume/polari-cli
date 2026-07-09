@@ -29,6 +29,11 @@ ${BOLD}COMMANDS${NC}
         whether a generator covers it (the suite-root trio has none
         until bld-3).
 
+  ${CYAN}promote${NC} [--project suite]
+        Copy freshly rendered bundles OVER the root deployable files —
+        the explicit step after editing pol-services/ sources. Shows a
+        diffstat per file; refuses if nothing was rendered.
+
   ${CYAN}parity${NC}
         Semantic parity: 'docker compose config' of each generated file
         diffed against its hand-written twin (all 10 rf-node variants).
@@ -95,6 +100,24 @@ case "$COMMAND" in
             die "need python3-jinja2 (preferred) or ansible-playbook to render"
         fi
         log_success "rendered into $POL_RF_NODE/jinja-build/" ;;
+    promote)
+        # Only the suite manifest promotes today; rf-node root files are
+        # still hand-canonical until its re-authoring lands.
+        MAPPING="docker-compose.yml docker-compose.staging-nip.yml docker-compose.prod.yml"
+        PROMOTED=0
+        for f in $MAPPING; do
+            GEN="$POL_SUITE_ROOT/jinja-build/$f"
+            [ -f "$GEN" ] || die "no rendered $f — run: pol build render --project suite"
+            if ! diff -q "$GEN" "$POL_SUITE_ROOT/$f" >/dev/null 2>&1; then
+                CH=$(diff "$GEN" "$POL_SUITE_ROOT/$f" | grep -c '^[<>]' || true)
+                cp "$GEN" "$POL_SUITE_ROOT/$f"
+                log_success "promoted $f ($CH changed line(s))"
+                PROMOTED=1
+            else
+                log_info "$f already up to date"
+            fi
+        done
+        [ "$PROMOTED" = "1" ] && log_warn "review + commit the promoted root files" ;;
     parity)
         cd "$POL_RF_NODE"
         exec bash jinja-gen/check-parity.sh ;;
