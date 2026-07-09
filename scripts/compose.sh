@@ -22,6 +22,7 @@ ${BOLD}ROLES${NC}
   ${CYAN}engines${NC}   msci-engines worker, independent   (docker-compose.msci-engines.yml)
   ${CYAN}dask${NC}      dask scheduler + workers           (docker-compose.dask.yml)
   ${CYAN}twin${NC}      instance-B twin                    (via twin-polari-build.sh)
+  ${CYAN}remote-worker${NC} engines/dask worker for ANOTHER machine (remote-worker.yml)
 
 ${BOLD}ACTIONS${NC}  up | down | build | ps | logs   (role-dependent extras noted below)
 
@@ -67,6 +68,20 @@ case "$ROLE" in
         # twin-b needs the peer network + token handshake — the existing
         # builder script owns that; don't fork its logic here.
         exec bash "$POL_RF_NODE/twin-polari-build.sh" "$@" ;;
+    remote-worker)
+        # Runs the engines/dask worker bundle on ANOTHER machine, pointing
+        # back at this node's scheduler. Local actions manage the bundle
+        # here (e.g. a second box you've ssh'd into with this repo).
+        ACTION=$1; shift || true
+        cd "$POL_RF_NODE"
+        CMD="docker compose -f docker-compose.remote-worker.yml --profile dask"
+        case "$ACTION" in
+            up)    $CMD up -d "$@"; log_success "remote-worker bundle up (profile dask)" ;;
+            down)  $CMD down "$@" ;;
+            ps)    $CMD ps "$@" ;;
+            logs)  $CMD logs -f "$@" ;;
+            *)     die "pol compose remote-worker: up|down|ps|logs (run ON the worker machine; CORE_IP env points at the scheduler node)" ;;
+        esac ;;
     help|-h|--help|"") show_help ;;
     *) log_error "Unknown compose role: $ROLE"; show_help; exit 1 ;;
 esac

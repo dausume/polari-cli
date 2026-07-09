@@ -19,10 +19,15 @@ show_help() {
     pol_box "pol build — jinja-script pipeline"
     echo -e "
 ${BOLD}COMMANDS${NC}
-  ${CYAN}render${NC} [--topology single|swarm]
-        Render the compose family from templates into jinja-build/.
-        Currently: rf-node jinja-gen (ansible). --topology swarm is
-        NOT built yet (arrives in bld-5; single is the only mode).
+  ${CYAN}render${NC} [bundle] [--topology single|swarm]
+        Render the compose bundle family into jinja-build/ — all ten, or
+        ONE bundle by name (e.g. 'render docker-compose.twin-b.yml').
+        --topology swarm is NOT built yet (bld-5; single only).
+
+  ${CYAN}list${NC}
+        Every compose bundle: hand-written file, generated twin, and
+        whether a generator covers it (the suite-root trio has none
+        until bld-3).
 
   ${CYAN}parity${NC}
         Semantic parity: 'docker compose config' of each generated file
@@ -43,20 +48,50 @@ ${BOLD}PIPELINE${NC} (isle-mesh embed-jinja idiom)
 
 COMMAND=$1; shift || true
 case "$COMMAND" in
+    list)
+        pol_box "compose bundles (hand-written vs generated)"
+        echo "  rf-node family (generator: pol build render — parity-harnessed):"
+        for f in "$POL_RF_NODE"/docker-compose*.yml; do
+            b=$(basename "$f")
+            gen="$POL_RF_NODE/jinja-build/$b"
+            state="generated-twin $( [ -f "$gen" ] && echo present || echo MISSING — run pol build render )"
+            printf "    %-38s %s\n" "$b" "$state"
+        done
+        echo "  suite-root trio (NO generator yet — bld-3 covers them):"
+        for f in "$POL_SUITE_ROOT"/docker-compose*.yml; do
+            printf "    %-38s hand-written only\n" "$(basename "$f")"
+        done
+        echo
+        echo "  lifecycle wrappers: suite/node/engines/dask/twin/remote-worker roles"
+        echo "  (pol compose help); dbcombo overlay via 'pol db use combo --role twin'" ;;
     render)
-        TOPOLOGY="single"
+        TOPOLOGY="single"; ONLY=""; PROJECT="node"
         while [ $# -gt 0 ]; do case "$1" in
             --topology) TOPOLOGY="$2"; shift 2 ;;
-            *) shift ;;
+            --project)  PROJECT="$2"; shift 2 ;;
+            -*) shift ;;
+            *) ONLY="$1"; shift ;;
         esac; done
+        if [ "$PROJECT" = "suite" ]; then
+            log_info "Rendering suite annotated sources (pol-services/) via render.py"
+            python3 "$POL_SUITE_ROOT/pol-build/render.py" "$POL_SUITE_ROOT" ${ONLY:+--only "$ONLY"}
+            GEN="$POL_SUITE_ROOT/jinja-build/pol-services/compose/docker-compose.staging-nip.yml"
+            if [ -f "$GEN" ] && diff -q "$GEN" "$POL_SUITE_ROOT/docker-compose.staging-nip.yml" >/dev/null; then
+                log_success "suite staging bundle: generated == hand-written (byte parity)"
+            elif [ -f "$GEN" ]; then
+                log_warn "suite staging bundle DRIFTED from hand-written — diff:"
+                diff "$GEN" "$POL_SUITE_ROOT/docker-compose.staging-nip.yml" | head -20 || true
+            fi
+            exit 0
+        fi
         if [ "$TOPOLOGY" = "swarm" ]; then
             die "swarm topology is not built yet — it lands in bld-5 (BUILD_SYSTEM_PLAN.md §3). Only --topology single renders today."
         fi
         # bld-2: python renderer (ansible-compatible output); falls back to
         # the ansible playbook only if jinja2 is unavailable.
         if python3 -c "import jinja2, yaml" 2>/dev/null; then
-            log_info "Rendering rf-node compose family via pol-build/render.py"
-            python3 "$POL_SUITE_ROOT/pol-build/render.py" "$POL_RF_NODE"
+            log_info "Rendering ${ONLY:-the full compose bundle family} via pol-build/render.py"
+            python3 "$POL_SUITE_ROOT/pol-build/render.py" "$POL_RF_NODE" ${ONLY:+--only "$ONLY"}
         elif command -v ansible-playbook >/dev/null 2>&1; then
             log_warn "python3-jinja2 missing — falling back to ansible playbook"
             cd "$POL_RF_NODE" && ansible-playbook jinja-gen/playbook.yml
