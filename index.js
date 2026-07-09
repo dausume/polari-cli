@@ -66,6 +66,7 @@ const commands = {
   db:       { script: 'db.sh',       desc: 'Database backend per PRF instance (sqlite|combo)', docker: true },
   modules:  { script: 'modules.sh',  desc: 'PRF feature modules: list, deps, selftests', aliases: ['mod'] },
   build:    { script: 'build.sh',    desc: 'jinja-script build pipeline (render/parity)', aliases: ['b'] },
+  proxy:    { script: 'proxy.sh',    desc: 'Generated nginx configs (render/check/promote)', docker: true },
   registry: { script: 'registry.sh', desc: 'Service-kind accountability + interconnect map', aliases: ['reg', 'services'] },
   cert:     { script: 'cert.sh',     desc: 'Certs per env tier; prod: self-signed OR Let\'s Encrypt + auto-renew', aliases: ['certs', 'ca'] },
 };
