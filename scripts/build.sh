@@ -73,15 +73,11 @@ case "$COMMAND" in
             *) ONLY="$1"; shift ;;
         esac; done
         if [ "$PROJECT" = "suite" ]; then
-            log_info "Rendering suite annotated sources (pol-services/) via render.py"
-            python3 "$POL_SUITE_ROOT/pol-build/render.py" "$POL_SUITE_ROOT" ${ONLY:+--only "$ONLY"}
-            GEN="$POL_SUITE_ROOT/jinja-build/pol-services/compose/docker-compose.staging-nip.yml"
-            if [ -f "$GEN" ] && diff -q "$GEN" "$POL_SUITE_ROOT/docker-compose.staging-nip.yml" >/dev/null; then
-                log_success "suite staging bundle: generated == hand-written (byte parity)"
-            elif [ -f "$GEN" ]; then
-                log_warn "suite staging bundle DRIFTED from hand-written — diff:"
-                diff "$GEN" "$POL_SUITE_ROOT/docker-compose.staging-nip.yml" | head -20 || true
-            fi
+            log_info "Rendering suite bundles (per-service annotated sources -> dev/staging/prod)"
+            python3 "$POL_SUITE_ROOT/pol-build/render.py" "$POL_SUITE_ROOT" \
+                --manifest "$POL_SUITE_ROOT/pol-build/manifests/suite-bundles.yml" \
+                && log_success "suite trio rendered, byte-parity verified" \
+                || die "suite bundle parity FAILED — inspect jinja-build/ diffs"
             exit 0
         fi
         if [ "$TOPOLOGY" = "swarm" ]; then
