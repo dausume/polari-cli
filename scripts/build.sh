@@ -52,11 +52,17 @@ case "$COMMAND" in
         if [ "$TOPOLOGY" = "swarm" ]; then
             die "swarm topology is not built yet — it lands in bld-5 (BUILD_SYSTEM_PLAN.md §3). Only --topology single renders today."
         fi
-        command -v ansible-playbook >/dev/null 2>&1 || \
-            die "ansible-playbook not found (bld-2 replaces it with a python renderer). Install: pipx install ansible-core"
-        cd "$POL_RF_NODE"
-        log_info "Rendering rf-node compose family via jinja-gen/playbook.yml"
-        ansible-playbook jinja-gen/playbook.yml
+        # bld-2: python renderer (ansible-compatible output); falls back to
+        # the ansible playbook only if jinja2 is unavailable.
+        if python3 -c "import jinja2, yaml" 2>/dev/null; then
+            log_info "Rendering rf-node compose family via pol-build/render.py"
+            python3 "$POL_SUITE_ROOT/pol-build/render.py" "$POL_RF_NODE"
+        elif command -v ansible-playbook >/dev/null 2>&1; then
+            log_warn "python3-jinja2 missing — falling back to ansible playbook"
+            cd "$POL_RF_NODE" && ansible-playbook jinja-gen/playbook.yml
+        else
+            die "need python3-jinja2 (preferred) or ansible-playbook to render"
+        fi
         log_success "rendered into $POL_RF_NODE/jinja-build/" ;;
     parity)
         cd "$POL_RF_NODE"

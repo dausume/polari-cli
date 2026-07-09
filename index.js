@@ -53,14 +53,17 @@ function resolveSuiteRoot() {
 // into compose's two main roles.
 const commands = {
   security: { script: 'security.sh', desc: 'Credential + cert setup (self-generating)', aliases: ['sec'] },
+  config:   { script: 'config.sh',   desc: 'Effective config + nested per-service views', aliases: ['cfg'] },
   compose:  { script: 'compose.sh',  desc: 'Compose orchestration: suite|node|engines|dask|twin roles', aliases: ['c'], docker: true },
   swarm:    { script: 'swarm.sh',    desc: 'Swarm orchestration — the isle-mesh stand-in', docker: true },
   isle:     { script: 'isle.sh',     desc: 'Isle-mesh mode (future; swarm stands in today)' },
   node:     { script: 'node.sh',     desc: 'Shortcut for `pol compose node`',   docker: true },
   suite:    { script: 'suite.sh',    desc: 'Shortcut for `pol compose suite`',  docker: true },
+  db:       { script: 'db.sh',       desc: 'Database backend per PRF instance (sqlite|combo)', docker: true },
+  modules:  { script: 'modules.sh',  desc: 'PRF feature modules: list, deps, selftests', aliases: ['mod'] },
   build:    { script: 'build.sh',    desc: 'jinja-script build pipeline (render/parity)', aliases: ['b'] },
   registry: { script: 'registry.sh', desc: 'Service-kind accountability + interconnect map', aliases: ['reg', 'services'] },
-  cert:     { script: 'cert.sh',     desc: 'CA toolkit wrappers (step-ca, issue, renew)', aliases: ['certs', 'ca'] },
+  cert:     { script: 'cert.sh',     desc: 'Certs per env tier; prod: self-signed OR Let\'s Encrypt + auto-renew', aliases: ['certs', 'ca'] },
 };
 
 // Bare verbs that people will guess; they need a namespace. Guard them with

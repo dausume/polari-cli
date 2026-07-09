@@ -8,7 +8,9 @@ source "$SCRIPT_DIR/lib/log.sh"
 show_help() {
     pol_box "pol node — standalone PRF node stack"
     echo -e "
-${BOLD}COMMANDS${NC}   (all take ${CYAN}--env dev|staging|prod|stateless${NC}, default staging)
+${BOLD}COMMANDS${NC}   (all take ${CYAN}--env dev|test|staging|prod|stateless${NC}, default staging)
+              dev=docker-compose.yml  test=fullstack-test  staging=nip.io
+              prod=real domain        stateless=no persistence
   ${CYAN}up${NC}        ensure setup (env files, .generated), then compose up -d
   ${CYAN}down${NC}      compose down
   ${CYAN}build${NC}     compose build [services...]
@@ -38,10 +40,11 @@ COMMAND=$1; shift || true
 compose_cmd() {
     case "$ENV_MODE" in
         dev)       echo "docker compose -f docker-compose.yml" ;;
+        test)      echo "docker compose -f docker-compose.fullstack-test.yml" ;;
         staging)   echo "docker compose -f docker-compose.staging-nip.yml" ;;
         prod)      echo "docker compose -f docker-compose.prod.yml" ;;
         stateless) echo "docker compose -f docker-compose.stateless.yml" ;;
-        *)         die "unknown --env '$ENV_MODE' (dev|staging|prod|stateless)" ;;
+        *)         die "unknown --env '$ENV_MODE' (dev|test|staging|prod|stateless)" ;;
     esac
 }
 

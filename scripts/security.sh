@@ -10,12 +10,17 @@ show_help() {
     pol_box "pol security — credentials + certificates"
     echo -e "
 ${BOLD}COMMANDS${NC}
-  ${CYAN}setup${NC} [dev|prod] [--env-only|--certs-only|--skip-subs]
-        Generate every credential env file + certs. dev = random values,
-        no prompts (safe for scripts); prod = interactive prompts.
-        SKIP-IF-EXISTS: volume-baked passwords are never regenerated.
-        Knobs: POLARI_KC_ADMIN_USER/_PASS, POLARI_MYSQL_ROOT_PASS,
-        POLARI_KC_DB_PASS, POLARI_PSC_DB_PASS, POLARI_MINIO_ROOT_USER/_PASS.
+  ${CYAN}setup${NC} [dev|prod] [--auto] [--env-only|--certs-only|--skip-subs]
+        Generate every credential env file + certs.
+        ${BOLD}dev${NC}          random values, no prompts (safe for scripts)
+        ${BOLD}prod${NC}         YOUR CHOICE per password: type one manually, or
+                     press Enter to auto-generate it
+        ${BOLD}prod --auto${NC}  no prompts — every password auto-generated
+        Knobs (win over both modes): POLARI_KC_ADMIN_USER/_PASS,
+        POLARI_MYSQL_ROOT_PASS, POLARI_KC_DB_PASS, POLARI_PSC_DB_PASS,
+        POLARI_MINIO_ROOT_USER/_PASS.
+        SKIP-IF-EXISTS: volume-baked passwords are never regenerated —
+        delete the file (+ fresh DB volume) to rotate.
 
   ${CYAN}node-setup${NC} [staging|prod]
         Generate the PRF-node standalone env files + .generated configs

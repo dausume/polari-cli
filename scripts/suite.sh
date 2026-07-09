@@ -38,9 +38,10 @@ COMMAND=$1; shift || true
 compose_cmd() {
     case "$ENV_MODE" in
         dev)     echo "docker compose -f docker-compose.yml" ;;
+        test)    die "no suite-level test stack exists — the rf-node has one: pol node up --env test (fullstack-test). A suite test stack would be a new compose variant (registry first)." ;;
         staging) echo "docker compose -f docker-compose.staging-nip.yml --env-file .generated/.env.staging" ;;
         prod)    echo "docker compose -f docker-compose.prod.yml --env-file .generated/.env.prod" ;;
-        *)       die "unknown --env '$ENV_MODE' (dev|staging|prod)" ;;
+        *)       die "unknown --env '$ENV_MODE' (dev|staging|prod; test = rf-node only)" ;;
     esac
 }
 

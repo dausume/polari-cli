@@ -11,6 +11,8 @@ pol security status                     which credential files exist / legacy
 pol security cleanup                    remove all generated certs+creds
 
 # Compose orchestration (the existing compose family)  [alias: c]
+# Env tiers per project: rf-node has dev|test|staging|prod(+stateless);
+# suite root has dev|staging|prod (test exists only at rf-node level).
 pol compose suite|node <action> [--env E]     full roles
 pol compose engines|dask up|down|ps|logs      independent service deploys
 pol compose twin <args>                       via twin-polari-build.sh
@@ -27,6 +29,22 @@ pol isle
 
 # Service accountability                                [alias: reg, services]
 pol registry list|show <kind>|interconnects|check
+
+# Effective configuration (read-only; nested per-service) [alias: cfg]
+pol config show|knobs|env|generated
+pol config service <kind> [show|files|knobs|connects]
+
+# Database backend per PRF instance
+pol db show|options
+pol db use combo|sqlite --role twin        primary switching = honest refusal
+
+# PRF feature modules                                     [alias: mod]
+pol modules list|deps|selftest <module>    enable/disable = honest refusal
+
+# Certificates per env tier                               [alias: certs, ca]
+pol cert setup|issue|verify|walkthrough|renew
+pol cert prod self-signed | pol cert prod letsencrypt [--dry-run]
+pol cert auto-renew install|status|remove  (open-source cron + certbot)
 
 # Build pipeline (jinja-script)                        [alias: b]
 pol build render [--topology single|swarm]   swarm = bld-5, refuses today
