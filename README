@@ -1,3 +1,29 @@
-### POLARI
-Use 'npm link' in the polari-cli folder to register the polari cli to your computer's npm.
-After doing so 'polari' commands should be available globally so long as npm is also available globally.
+# polari-cli — the `pol` command
+
+One CLI for the Polari suite: security substrate (self-generating
+credentials + certs), stack lifecycles (standalone PRF node / combined
+prf+psc suite), the jinja-script build pipeline, and — in upcoming
+phases — swarm output and ssh-automated deploys.
+
+Modeled on the Isle-Mesh `isle` CLI: a Node dispatcher driven by ONE
+declarative command table, routing uniformly into per-namespace bash
+scripts, each with thorough built-in help.
+
+## Install (dev)
+
+```bash
+./shells/install-cli.sh     # symlink live checkout -> /usr/local/bin/pol
+pol help
+```
+
+## Start here
+
+- `pol help`, `pol <module> help` — always-current built-in docs
+- `docs/INDEX.md` — documentation index (architecture, extension guide,
+  quick reference)
+- `../BUILD_SYSTEM_PLAN.md` (suite root) — the build revamp this CLI
+  fronts (jinja-script per-service files, swarm, generated proxies,
+  phases bld-1…bld-7)
+
+This checkout normally lives inside `polari-suite/`; for out-of-tree
+installs set `POLARI_SUITE_ROOT=/path/to/polari-suite`.
