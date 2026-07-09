@@ -227,9 +227,18 @@ if live.get('ok'):
         fi
         log_info "observing $NODE (docker ps + stacks)"
         # the compose/swarm service LABELS are what drift matching
-        # resolves to registry kinds (container names are aliases)
-        SERVICES=$($RUN docker ps --format '{{.Names}}\t{{.State}}\t{{.Image}}\t{{.Label "com.docker.compose.service"}}{{.Label "com.docker.swarm.service.name"}}' 2>/dev/null || true)
-        STACKS=$($RUN docker stack ls --format '{{.Name}}' 2>/dev/null || true)
+        # resolves to registry kinds (container names are aliases).
+        # remote runs get ONE quoted command string — ssh re-splits
+        # bare args and the label templates carry inner quotes.
+        PS_CMD='docker ps --format "{{.Names}}\t{{.State}}\t{{.Image}}\t{{.Label \"com.docker.compose.service\"}}{{.Label \"com.docker.swarm.service.name\"}}"'
+        LS_CMD='docker stack ls --format "{{.Name}}"'
+        if [ -n "$RUN" ]; then
+            SERVICES=$($RUN "$PS_CMD" 2>/dev/null || true)
+            STACKS=$($RUN "$LS_CMD" 2>/dev/null || true)
+        else
+            SERVICES=$(bash -c "$PS_CMD" 2>/dev/null || true)
+            STACKS=$(bash -c "$LS_CMD" 2>/dev/null || true)
+        fi
         python3 -c "
 import json, sys
 services = [{'name': p[0], 'state': p[1] if len(p) > 1 else '',
