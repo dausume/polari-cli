@@ -5,6 +5,7 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/log.sh"
+source "$SCRIPT_DIR/lib/state.sh"
 
 show_help() {
     pol_box "pol suite — combined prf+psc stack"
@@ -60,7 +61,8 @@ case "$COMMAND" in
         [ "$ENV_MODE" = "dev" ] && [ ! -f .env ] && { log_info "No suite .env — running security setup"; bash setup-polari-security.sh dev --env-only --skip-subs; }
         export LOCAL_IP="${LOCAL_IP:-$(hostname -I | awk '{print $1}')}"
         $(compose_cmd) up -d "$@"
-        log_success "suite up ($ENV_MODE). 'pol suite ps' to check health." ;;
+        record_build compose suite "$ENV_MODE"
+        log_success "suite up ($ENV_MODE). 'pol suite ps' to check health; 'pol start/rebuild/stop' now shorthand this." ;;
     down)  export LOCAL_IP="${LOCAL_IP:-127.0.0.1}"; $(compose_cmd) down "$@" ;;
     build) export LOCAL_IP="${LOCAL_IP:-$(hostname -I | awk '{print $1}')}"; $(compose_cmd) build "$@" ;;
     ps)    export LOCAL_IP="${LOCAL_IP:-127.0.0.1}"; $(compose_cmd) ps "$@" ;;

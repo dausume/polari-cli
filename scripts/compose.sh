@@ -10,6 +10,7 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/log.sh"
+source "$SCRIPT_DIR/lib/state.sh"
 
 show_help() {
     pol_box "pol compose — compose-file orchestration"
@@ -46,7 +47,7 @@ case "$ROLE" in
         cd "$POL_RF_NODE"
         CMD="docker compose -f docker-compose.msci-engines.yml"
         case "$ACTION" in
-            up)    $CMD up -d "$@"; log_success "engines worker up (independent deploy)" ;;
+            up)    $CMD up -d "$@"; record_build compose engines staging; log_success "engines worker up (independent deploy)" ;;
             down)  $CMD down "$@" ;;
             build) $CMD build "$@" ;;
             ps)    $CMD ps "$@" ;;

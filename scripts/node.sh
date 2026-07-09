@@ -4,6 +4,7 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/log.sh"
+source "$SCRIPT_DIR/lib/state.sh"
 
 show_help() {
     pol_box "pol node — standalone PRF node stack"
@@ -61,7 +62,8 @@ ensure_setup() {
 cd "$POL_RF_NODE"
 case "$COMMAND" in
     up)    ensure_setup; export LOCAL_IP="${LOCAL_IP:-$(hostname -I | awk '{print $1}')}"; $(compose_cmd) up -d "$@";
-           log_success "node up ($ENV_MODE)" ;;
+           record_build compose node "$ENV_MODE"
+           log_success "node up ($ENV_MODE) — 'pol start/rebuild/stop' now shorthand this" ;;
     down)  export LOCAL_IP="${LOCAL_IP:-127.0.0.1}"; $(compose_cmd) down "$@" ;;
     build) export LOCAL_IP="${LOCAL_IP:-$(hostname -I | awk '{print $1}')}"; $(compose_cmd) build "$@" ;;
     ps)    export LOCAL_IP="${LOCAL_IP:-127.0.0.1}"; $(compose_cmd) ps "$@" ;;

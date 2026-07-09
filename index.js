@@ -53,6 +53,10 @@ function resolveSuiteRoot() {
 // into compose's two main roles.
 const commands = {
   security: { script: 'security.sh', desc: 'Credential + cert setup (self-generating)', aliases: ['sec'] },
+  start:    { script: 'lifecycle.sh', injectArgs: ['start'],   desc: 'Bring the last configured build up',  docker: true },
+  rebuild:  { script: 'lifecycle.sh', injectArgs: ['rebuild'], desc: 'Rebuild the last configured build from scratch', docker: true },
+  stop:     { script: 'lifecycle.sh', injectArgs: ['stop'],    desc: 'Stop the last configured build',      docker: true },
+  last:     { script: 'lifecycle.sh', injectArgs: ['last'],    desc: 'Show the recorded build approach' },
   config:   { script: 'config.sh',   desc: 'Effective config + nested per-service views', aliases: ['cfg'] },
   compose:  { script: 'compose.sh',  desc: 'Compose orchestration: suite|node|engines|dask|twin roles', aliases: ['c'], docker: true },
   swarm:    { script: 'swarm.sh',    desc: 'Swarm orchestration — the isle-mesh stand-in', docker: true },
@@ -69,6 +73,8 @@ const commands = {
 // Bare verbs that people will guess; they need a namespace. Guard them with
 // a helpful error instead of a silent unknown-command failure.
 const namespacelessCommands = ['up', 'down', 'logs', 'ps', 'render', 'parity', 'setup', 'deploy'];
+// (start/rebuild/stop are deliberately namespaceless — they replay the
+// recorded last-build approach; see scripts/lifecycle.sh)
 
 const aliasMap = {};
 for (const [name, def] of Object.entries(commands)) {
@@ -155,8 +161,9 @@ if (!suiteRoot) {
 }
 
 const scriptPath = path.join(scriptsDir, def.script);
+const allArgs = [...(def.injectArgs || []), ...rest];
 try {
-  execSync(`bash ${JSON.stringify(scriptPath)} ${rest.map((a) => JSON.stringify(a)).join(' ')}`, {
+  execSync(`bash ${JSON.stringify(scriptPath)} ${allArgs.map((a) => JSON.stringify(a)).join(' ')}`, {
     stdio: 'inherit',
     cwd: suiteRoot,
     env: { ...process.env, POL_SUITE_ROOT: suiteRoot, POL_CLI_DIR: CLI_DIR },
