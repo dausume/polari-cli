@@ -9,13 +9,12 @@
 # packages.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib/common.sh
-. "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=lib/log.sh
+source "$SCRIPT_DIR/lib/log.sh"
 
 usage() {
-    cat <<EOF
-$(bold "pol apps — use-case module configurations (Polari-Apps)")
-
+    pol_box "pol apps — use-case module configurations (Polari-Apps)"
+    echo -e "
   ${CYAN}list${NC}                  the apps this core knows
   ${CYAN}plan <app> [topo]${NC}     where each module stands on the topology
                         (already-placed / needs-assignment / missing)
@@ -26,9 +25,10 @@ $(bold "pol apps — use-case module configurations (Polari-Apps)")
                         the active topology: upserts the definition,
                         writes ModuleAssignment rows, re-resolves.
                         --plan prints the plan and touches NOTHING.
+
 Backend is reached via \$POLARI_CORE_URL when set, else docker exec
-into the local prf-backend.
-EOF
+into the local prf-backend. Container deploys stay human-invoked
+(pol topology apply)."
 }
 
 # be_call METHOD PATH — body on stdin for POST; response on stdout.
@@ -89,7 +89,7 @@ import sys
 sys.exit(0) if d.get('ok') else sys.exit(print(d.get('error')) or 1)"
         if [ -n "$OUT" ]; then
             echo "$DOC" | pretty "print(json.dumps(d['document'], indent=2))" > "$OUT"
-            log_ok "wrote $OUT (polari-app-package — deploy anywhere via 'pol apps deploy $OUT')"
+            log_success "wrote $OUT (polari-app-package — deploy anywhere via 'pol apps deploy $OUT')"
         else
             echo "$DOC" | pretty "print(json.dumps(d['document'], indent=2))"
         fi ;;
