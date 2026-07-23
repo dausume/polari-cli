@@ -2,3 +2,6 @@
 # Claude Code local files (settings, memory) — keep private
 .claude/
 CLAUDE.local.md
+
+# WireGuard remote-access artifacts (private keys)
+.remote-wg/
