@@ -6,6 +6,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/log.sh"
 source "$SCRIPT_DIR/lib/state.sh"
+source "$SCRIPT_DIR/lib/remote-hint.sh"
 
 show_help() {
     pol_box "pol suite — combined prf+psc stack"
@@ -19,9 +20,11 @@ ${BOLD}COMMANDS${NC}   (all take ${CYAN}--env dev|staging|prod${NC}, default sta
   ${CYAN}urls${NC}      print the stack's URLs (staging)
 
 ${BOLD}NOTES${NC}
-  staging GOTCHA: prf-backend's healthcheck start_period is shorter than a
-  cold seed — if pol-proxy stays blocked on first 'up', re-run 'pol suite
-  up' once prf-backend is healthy (see NEXT_AGENT_HANDOFF.md §1).
+  staging on a custom domain: export POLARI_STAGING_DOMAIN=your.domain before
+  'up' once to switch; after that it's remembered from .generated/.env.staging
+  (no need to keep re-exporting it every run).
+  cold prf-backend DB seed can take ~10-15 min; its healthcheck start_period
+  (900s) covers this so pol-proxy's dependency wait resolves in one pass.
 "
 }
 
@@ -48,9 +51,20 @@ compose_cmd() {
 
 ensure_staging_setup() {
     export LOCAL_IP="${LOCAL_IP:-$(hostname -I | awk '{print $1}')}"
-    if [ ! -f "$POL_SUITE_ROOT/.generated/.env.staging" ]; then
-        log_info "No .generated/.env.staging — running nip-staging-setup.sh $LOCAL_IP"
-        bash "$POL_SUITE_ROOT/nip-staging-setup.sh" "$LOCAL_IP"
+    # Re-run setup when there's no env-file yet, or when the operator EXPLICITLY
+    # asks for a different base domain via POLARI_STAGING_DOMAIN this run.
+    # IMPORTANT: if POLARI_STAGING_DOMAIN is unset, "want" must default to
+    # whatever domain is ALREADY configured (not LOCAL_IP.nip.io) — otherwise a
+    # plain `pol suite up` in a fresh shell (no env var re-exported) silently
+    # looks like a domain change, re-runs setup, and reverts a custom domain
+    # (e.g. polari-staging.test) back to nip.io, force-recreating everything.
+    local have=""
+    [ -f "$POL_SUITE_ROOT/.generated/.env.staging" ] && \
+        have="$(grep -E '^BASE_DOMAIN=' "$POL_SUITE_ROOT/.generated/.env.staging" | cut -d= -f2)"
+    local want="${POLARI_STAGING_DOMAIN:-${have:-${LOCAL_IP}.nip.io}}"
+    if [ ! -f "$POL_SUITE_ROOT/.generated/.env.staging" ] || [ "$want" != "$have" ]; then
+        log_info "Generating staging config for base domain: $want"
+        POLARI_STAGING_DOMAIN="$want" bash "$POL_SUITE_ROOT/nip-staging-setup.sh" "$LOCAL_IP"
     fi
 }
 
@@ -62,16 +76,19 @@ case "$COMMAND" in
         export LOCAL_IP="${LOCAL_IP:-$(hostname -I | awk '{print $1}')}"
         $(compose_cmd) up -d "$@"
         record_build compose suite "$ENV_MODE"
-        log_success "suite up ($ENV_MODE). 'pol suite ps' to check health; 'pol start/rebuild/stop' now shorthand this." ;;
+        log_success "suite up ($ENV_MODE). 'pol suite ps' to check health; 'pol start/rebuild/stop' now shorthand this."
+        [ "$ENV_MODE" = "staging" ] && remote_access_hint || true ;;
     down)  export LOCAL_IP="${LOCAL_IP:-127.0.0.1}"; $(compose_cmd) down "$@" ;;
     build) export LOCAL_IP="${LOCAL_IP:-$(hostname -I | awk '{print $1}')}"; $(compose_cmd) build "$@" ;;
     ps)    export LOCAL_IP="${LOCAL_IP:-127.0.0.1}"; $(compose_cmd) ps "$@" ;;
     logs)  export LOCAL_IP="${LOCAL_IP:-127.0.0.1}"; $(compose_cmd) logs -f "$@" ;;
     urls)
-        IP="${LOCAL_IP:-$(hostname -I | awk '{print $1}')}"
-        echo "  https://prf.$IP.nip.io      https://api.prf.$IP.nip.io"
-        echo "  https://psc.$IP.nip.io      https://api.psc.$IP.nip.io"
-        echo "  https://auth.$IP.nip.io     https://files.$IP.nip.io" ;;
+        DOM="$(grep -E '^BASE_DOMAIN=' "$POL_SUITE_ROOT/.generated/.env.staging" 2>/dev/null | cut -d= -f2)"
+        DOM="${DOM:-${LOCAL_IP:-$(hostname -I | awk '{print $1}')}.nip.io}"
+        echo "  https://$DOM               (hub)"
+        echo "  https://prf.$DOM      https://api.prf.$DOM"
+        echo "  https://psc.$DOM      https://api.psc.$DOM"
+        echo "  https://auth.$DOM     https://files.$DOM" ;;
     help|-h|--help|"") show_help ;;
     *) log_error "Unknown suite command: $COMMAND"; show_help; exit 1 ;;
 esac

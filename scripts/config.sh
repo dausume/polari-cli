@@ -53,7 +53,14 @@ POLARI_OBJECTS_DB_PASS|rf-node polari object-DB password (dbcombo)|staging/prod-
 POLARI_KEYDB_PASS|twin-B KeyDB password|dbcombo compose
 POLARI_BE_SECRET|polari-backend KC client secret override|staging/prod-setup.sh
 POLARI_CONFIRM_PROD|skip the are-you-on-prod prompt (yes)|setup-polari-security.sh
-POLARI_PROD_DOMAIN|production domain|rf prod-setup.sh"
+POLARI_PROD_DOMAIN|production domain|rf prod-setup.sh
+POLARI_STAGING_DOMAIN|custom staging base domain (e.g. polari-staging.test); unset = <LOCAL_IP>.nip.io|nip-staging-setup.sh, pol suite up
+CERT_MODE|staging cert trust: self-signed (default) or step-ca (unified internal root + guided walkthrough)|nip-staging-setup.sh
+CERT_BACKEND|prod/suite Phase-3 knob: step-ca (default once triggered) — internal cert issuer|setup-polari-security.sh, ca/*.sh
+PUBLIC_EDGE|prod Phase-3 knob: letsencrypt for a browser-trusted public edge, else none|setup-polari-security.sh, ca/*.sh
+LE_DOMAIN|Let's Encrypt domain for the public edge cert|ca/setup-letsencrypt.sh
+LE_EMAIL|Let's Encrypt account email|ca/setup-letsencrypt.sh
+DO_API_TOKEN|DigitalOcean DNS API token (DNS-01 challenge for Let's Encrypt)|ca/setup-letsencrypt.sh"
 
 knob_state() { [ -n "${!1:-}" ] && echo -e "${GREEN}set${NC}" || echo -e "${DIM}unset${NC}"; }
 
