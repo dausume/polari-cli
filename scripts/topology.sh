@@ -411,6 +411,13 @@ for a in doc['actions']:
                     # :9500 answering throughout.
                     SVC="polari-engines_msci-engines"
                     IMG="prf-msci-engines:staging"
+                    # gm-safety guard: never start a move while a
+                    # service update is converging.
+                    UPD=$(docker service inspect "$SVC" --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}' 2>/dev/null || true)
+                    case "$UPD" in
+                        updating|paused|rollback_started|rollback_paused)
+                            die "service $SVC has an update in progress ($UPD) — wait for convergence, then retry" ;;
+                    esac
                     FROM=$(docker service inspect "$SVC" --format '{{json .Spec.TaskTemplate.Placement.Constraints}}' 2>/dev/null | python3 -c "
 import json,sys
 for c in json.load(sys.stdin) or []:
