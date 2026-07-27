@@ -161,9 +161,9 @@ print(urllib.request.urlopen(req, timeout=15).read().decode())" \
         # before confirmation; live target data untouched until the
         # verified swap; journals in both volumes; source volume
         # never deleted). Every step a MoveOperation receipt.
-        # usage: pol swarm relocate [backend|file-store|keydb] <machine>
+        # usage: pol swarm relocate [backend|file-store|keydb|keycloak|mariadb] <machine>
         require_swarm
-        if [ -n "${2:-}" ]; then WHATSVC=$1; TO=$2; else WHATSVC=backend; TO=${1:?usage: pol swarm relocate [backend|file-store|keydb] <machine>}; fi
+        if [ -n "${2:-}" ]; then WHATSVC=$1; TO=$2; else WHATSVC=backend; TO=${1:?usage: pol swarm relocate [backend|file-store|keydb|keycloak|mariadb] <machine>}; fi
         [ -n "${POLARI_CORE_URL:-}" ] || die "POLARI_CORE_URL required (the mover posts receipts + quiesce through the API)"
         case "$WHATSVC" in
             backend)
@@ -176,6 +176,133 @@ print(urllib.request.urlopen(req, timeout=15).read().decode())" \
                 SUBJECT="prf-file-store"; VERIFY="files" ;;
             keydb)
                 die "no KeyDB service in the node stack (PSC/suite side) — the generic staged mover supports it once deployed (kind keydb-move); the zero-cold-cache replica-promote route is the gm-3 refinement, not built" ;;
+            mariadb)
+                # gm-5: THE careful one. v1 correct-before-clever:
+                # drain the writers (Keycloak — measured auth window,
+                # never a torn write), mysqldump = backup + semantic
+                # receipt, staged volume copy with the DB STOPPED
+                # (perfectly consistent), swap, verify counts against
+                # the receipt, restore writers. Source volume + dump
+                # both kept. v2 replica-promote = refinement.
+                SVC="polari-node_prf-mariadb"
+                VOL="polari-rf-node_prf-mariadb-data"
+                IMG="prf-mariadb:staging"
+                KCSVC="polari-node_prf-keycloak"
+                TO_DB=$TO
+                api() { if [ "$1" = "POST" ]; then curl -sk -X POST -H 'Content-Type: application/json' --data-binary @- "$POLARI_CORE_URL$2"; else curl -sk "$POLARI_CORE_URL$2"; fi; }
+                db_stable() {
+                    local st
+                    st=$(docker service inspect "$1" --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}' 2>/dev/null || true)
+                    case "$st" in updating|paused|rollback_started|rollback_paused) die "service $1 has an update in progress ($st) — wait, then retry" ;; esac
+                }
+                db_stable "$SVC"; db_stable "$KCSVC"; db_stable "polari-node_backend"
+                FROM=$(docker service inspect "$SVC" --format '{{json .Spec.TaskTemplate.Placement.Constraints}}' 2>/dev/null | python3 -c "
+import json,sys
+for c in json.load(sys.stdin) or []:
+    if 'polari.machine' in c:
+        print(c.split('==')[-1].strip()); break" || true)
+                [ -n "$FROM" ] || die "cannot read $SVC's machine constraint"
+                [ "$FROM" != "$TO_DB" ] || die "mariadb already on $TO_DB"
+                NODES_FILE="$POL_SUITE_ROOT/pol-build/manifests/nodes.yml"
+                ALIAS=$(python3 -c "import sys,yaml; print((yaml.safe_load(open(sys.argv[1]))['nodes'].get(sys.argv[2]) or {}).get('ssh',''))" "$NODES_FILE" "$TO_DB" 2>/dev/null || true)
+                SALIAS=$(python3 -c "import sys,yaml; print((yaml.safe_load(open(sys.argv[1]))['nodes'].get(sys.argv[2]) or {}).get('ssh',''))" "$NODES_FILE" "$FROM" 2>/dev/null || true)
+                run_on_target() { if [ -n "$ALIAS" ]; then ssh "$ALIAS" "$@"; else bash -c "$*"; fi; }
+                run_on_source() { if [ -n "$SALIAS" ]; then ssh "$SALIAS" "$@"; else bash -c "$*"; fi; }
+                MOVE=$(printf '{"kind":"database-move","subject":"prf-mariadb","fromMachine":"%s","toMachine":"%s","triggeredBy":"pol swarm relocate"}' "$FROM" "$TO_DB" | api POST /api/topology/move-operations | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['move']['name'] if d.get('ok') else '')")
+                [ -n "$MOVE" ] || die "MoveOperation row not created — backend unreachable at $POLARI_CORE_URL"
+                mv_step() { printf '{"name":"%s","step":"%s","status":"%s","receipt":"%s"}' "$MOVE" "$1" "$2" "${3:-}" | api POST /api/topology/move-operations/step >/dev/null || true; }
+                mv_fail() {
+                    # Best-effort restoration FIRST: a failed DB move
+                    # must never strand auth down.
+                    docker service scale "$SVC"=1 --detach >/dev/null 2>&1 || true
+                    docker service scale "$KCSVC"=1 --detach >/dev/null 2>&1 || true
+                    printf '{"name":"%s","status":"failed","error":"%s (writers + DB scale-1 re-issued best-effort)"}' "$MOVE" "$1" | api POST /api/topology/move-operations/finish >/dev/null || true
+                    die "$1"
+                }
+                db_counts() { # host-runner task-id -> "realms clients users tables"
+                    $1 "docker exec $2 sh -c 'mariadb -uroot -p\"\$MARIADB_ROOT_PASSWORD\" -N -e \"SELECT (SELECT COUNT(*) FROM keycloak.REALM), (SELECT COUNT(*) FROM keycloak.CLIENT), (SELECT COUNT(*) FROM keycloak.USER_ENTITY), (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=CHAR(107,101,121,99,108,111,97,107))\"'" 2>/dev/null | tr '\t' ' '
+                }
+                mv_step preflight running
+                run_on_target "true" >/dev/null 2>&1 || mv_fail "target $TO_DB unreachable"
+                SRC_KB=$(run_on_source "docker run --rm -v $VOL:/data alpine du -sk /data" | awk '{print $1}')
+                TGT_FREE_KB=$(run_on_target "df -k /var/lib/docker 2>/dev/null || df -k /" | tail -1 | awk '{print $4}')
+                [ -n "$SRC_KB" ] && [ "$TGT_FREE_KB" -ge $((SRC_KB * 3)) ] || mv_fail "target $TO_DB too full or unsized (free ${TGT_FREE_KB:-?}KB vs 3x ${SRC_KB:-?}KB)"
+                mv_step preflight done "source ${SRC_KB}KB; target free ${TGT_FREE_KB}KB; no updates converging"
+                mv_step sync-image running
+                LOCAL_ID=$(docker image inspect "$IMG" --format '{{.Id}}' 2>/dev/null || true)
+                TARGET_ID=$(run_on_target "docker image inspect $IMG --format '{{.Id}}'" 2>/dev/null || true)
+                if [ -n "$LOCAL_ID" ] && [ "$LOCAL_ID" != "$TARGET_ID" ]; then
+                    docker save "$IMG" | run_on_target "docker load" || mv_fail "image sync to $TO_DB failed"
+                    mv_step sync-image done "shipped $IMG (content differed)"
+                else
+                    mv_step sync-image done "image IDs match on $TO_DB"
+                fi
+                mv_step writers-drain running
+                T_AUTH0=$(date +%s)
+                docker service scale "$KCSVC"=0 --detach=false >/dev/null 2>&1 || mv_fail "could not drain keycloak"
+                mv_step writers-drain done "keycloak scaled to 0 (the only MariaDB writer) — auth window open, measured"
+                mv_step backup-dump running
+                STASK=$(run_on_source "docker ps -q -f name=$SVC" | head -1)
+                [ -n "$STASK" ] || mv_fail "no running $SVC task on $FROM"
+                PRECOUNTS=$(db_counts run_on_source "$STASK")
+                BAKDIR="$POL_SUITE_ROOT/.generated/backups"; mkdir -p "$BAKDIR"
+                BAK="$BAKDIR/keycloak-$MOVE.sql"
+                run_on_source "docker exec $STASK sh -c 'mariadb-dump -uroot -p\"\$MARIADB_ROOT_PASSWORD\" --single-transaction keycloak'" > "$BAK" || mv_fail "mysqldump failed"
+                BAKSZ=$(du -k "$BAK" | awk '{print $1}')
+                [ "$BAKSZ" -gt 0 ] || mv_fail "dump file is empty"
+                mv_step backup-dump done "dump ${BAKSZ}KB -> .generated/backups/ (the backup AND the baseline: counts=$PRECOUNTS)"
+                mv_step quiesce-db running
+                T_DB0=$(date +%s)
+                docker service scale "$SVC"=0 --detach=false >/dev/null 2>&1 || mv_fail "could not stop mariadb"
+                mv_step quiesce-db done "DB scaled to 0 — volume perfectly still"
+                mv_step copy-data running
+                STAGE=".incoming-${MOVE}"; PREV=".previous-${MOVE}"
+                JLINE="{\"move\":\"$MOVE\",\"from\":\"$FROM\",\"to\":\"$TO_DB\",\"phase\":\"copying\",\"at\":$(date +%s)}"
+                printf '%s' "$JLINE" | run_on_source "docker run --rm -i -v $VOL:/data alpine sh -c 'cat > /data/.move-journal.json'" || true
+                run_on_target "docker volume create $VOL" >/dev/null 2>&1 || true
+                printf '%s' "$JLINE" | run_on_target "docker run --rm -i -v $VOL:/data alpine sh -c 'cat > /data/.move-journal.json'" || true
+                run_on_source "docker run --rm -v $VOL:/data alpine tar -C /data -cf - ." | run_on_target "docker run --rm -i -v $VOL:/data alpine sh -c 'rm -rf /data/$STAGE && mkdir -p /data/$STAGE && tar -C /data/$STAGE -xf -'" || mv_fail "staged copy failed — live target data untouched; re-run to resume"
+                SRCN=$(run_on_source "docker run --rm -v $VOL:/data alpine sh -c 'find /data -type f -not -name .move-journal.json | wc -l'" | tr -d ' ')
+                TGTN=$(run_on_target "docker run --rm -v $VOL:/data alpine sh -c 'find /data/$STAGE -type f -not -name .move-journal.json | wc -l'" | tr -d ' ')
+                [ -n "$SRCN" ] && [ "$SRCN" = "$TGTN" ] || mv_fail "staged copy has ${TGTN:-?} files != source ${SRCN:-?} — inconsistent; live target data untouched"
+                run_on_target "docker run --rm -v $VOL:/data alpine sh -c 'mkdir -p /data/$PREV && for f in /data/*; do [ -e \"\$f\" ] || continue; mv \"\$f\" /data/$PREV/; done; mv /data/$STAGE/* /data/ 2>/dev/null; for d in /data/$STAGE/.[!.]*; do [ -e \"\$d\" ] && [ \"\$(basename \$d)\" != .move-journal.json ] && mv \"\$d\" /data/ || true; done; rm -rf /data/$STAGE'" || mv_fail "swap failed — staged + $PREV both on $TO_DB, journal marks the state"
+                printf '%s' "${JLINE/copying/swapped}" | run_on_target "docker run --rm -i -v $VOL:/data alpine sh -c 'cat > /data/.move-journal.json'" || true
+                mv_step copy-data done "staged copy verified ($SRCN files) then swapped; journals in both volumes"
+                mv_step service-update running
+                docker service update --constraint-rm "node.labels.polari.machine==$FROM" --constraint-add "node.labels.polari.machine==$TO_DB" --detach "$SVC" >/dev/null || mv_fail "constraint swap failed"
+                docker service scale "$SVC"=1 --detach >/dev/null 2>&1 || true
+                mv_step service-update done "constraint swapped + scaled back up on $TO_DB"
+                mv_step boot-ready running
+                READY=""
+                for i in $(seq 1 60); do
+                    STATE=$(run_on_target "docker ps --filter name=$SVC --format '{{.Status}}'" | head -1)
+                    case "$STATE" in *healthy*) READY=1; break ;; esac
+                    sleep 5
+                done
+                [ -n "$READY" ] || mv_fail "relocated mariadb never became healthy on $TO_DB"
+                DB_WIN=$(( $(date +%s) - T_DB0 ))
+                mv_step boot-ready done "healthy on $TO_DB; DB window ~${DB_WIN}s (stop -> healthy)"
+                mv_step verify-data running
+                TTASK=$(run_on_target "docker ps -q -f name=$SVC" | head -1)
+                POSTCOUNTS=$(db_counts run_on_target "$TTASK")
+                [ -n "$POSTCOUNTS" ] && [ "$POSTCOUNTS" = "$PRECOUNTS" ] || mv_fail "DATA LOSS: counts '$POSTCOUNTS' != receipt '$PRECOUNTS' (realms clients users tables)"
+                docker service scale "$KCSVC"=1 --detach >/dev/null 2>&1 || true
+                KCOK=""
+                for i in $(seq 1 90); do
+                    if curl -skf --max-time 4 "https://auth.prf.${LOCAL_IP:-192.168.0.210}.nip.io/realms/Polari/protocol/openid-connect/certs" >/dev/null 2>&1; then KCOK=1; break; fi
+                    sleep 5
+                done
+                [ -n "$KCOK" ] || mv_fail "keycloak did not recover against the relocated DB"
+                AUTH_WIN=$(( $(date +%s) - T_AUTH0 ))
+                mv_step verify-data done "counts match receipt ($PRECOUNTS = realms clients users tables); keycloak recovered, JWKS answers; auth window ~${AUTH_WIN}s"
+                mv_step retire running
+                run_on_target "docker run --rm -v $VOL:/data alpine sh -c 'rm -rf /data/$PREV /data/.incoming-* && rm -f /data/.move-journal.json'" >/dev/null 2>&1 || true
+                printf '{"move":"%s","from":"%s","to":"%s","phase":"retired-moved-to-%s","at":%s}' "$MOVE" "$FROM" "$TO_DB" "$TO_DB" "$(date +%s)" | run_on_source "docker run --rm -i -v $VOL:/data alpine sh -c 'cat > /data/.move-journal.json'" || true
+                mv_step retire done "source volume kept on $FROM (rollback) + dump kept in .generated/backups/; journals settled"
+                printf '{"name":"%s","status":"verified"}' "$MOVE" | api POST /api/topology/move-operations/finish >/dev/null || true
+                docker service ps "$SVC" --format '{{.Name}}\t{{.Node}}\t{{.CurrentState}}' | head -3
+                log_success "mariadb relocated $FROM -> $TO_DB (DB window ~${DB_WIN}s, auth window ~${AUTH_WIN}s; MoveOperation $MOVE)"
+                exit 0 ;;
             keycloak)
                 # gm-4: SERVER-ONLY move — realms/clients/KEYS live in
                 # MariaDB, which does NOT move (keycloak+DB in one
@@ -285,7 +412,7 @@ print('1' if any(m['kind'] == 'database-move' or m['subject'] == 'prf-mariadb'
                 docker service ps "$SVC" --format '{{.Name}}\t{{.Node}}\t{{.CurrentState}}' | head -3
                 log_success "keycloak relocated $FROM -> $TO_KC (blue-green; MoveOperation $MOVE)"
                 exit 0 ;;
-            *) die "unknown service '$WHATSVC' (backend|file-store|keydb)" ;;
+            *) die "unknown service '$WHATSVC' (backend|file-store|keydb|keycloak|mariadb)" ;;
         esac
         api() { # method path [json-stdin]
             if [ "$1" = "POST" ]; then curl -sk -X POST -H 'Content-Type: application/json' --data-binary @- "$POLARI_CORE_URL$2"; else curl -sk "$POLARI_CORE_URL$2"; fi
