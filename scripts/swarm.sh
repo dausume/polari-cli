@@ -194,6 +194,16 @@ for c in json.load(sys.stdin) or []:
         }
         TASK=$(run_on_source "docker ps -q -f name=$SVC" | head -1)
         [ -n "$TASK" ] || mv_fail "no running $SVC task found on $FROM"
+        # gm-safety preflight: fail EARLY, never mid-copy. Target must
+        # be reachable and hold >=3x the source data (staged copy +
+        # previous generation + margin).
+        mv_step preflight running
+        run_on_target "true" >/dev/null 2>&1 || mv_fail "target $TO unreachable"
+        SRC_KB=$(run_on_source "docker exec $TASK du -sk /app/data" | awk '{print $1}')
+        TGT_FREE_KB=$(run_on_target "df -k /var/lib/docker 2>/dev/null || df -k /" | tail -1 | awk '{print $4}')
+        [ -n "$SRC_KB" ] && [ -n "$TGT_FREE_KB" ] || mv_fail "cannot size source/target (src=${SRC_KB:-?}KB free=${TGT_FREE_KB:-?}KB)"
+        [ "$TGT_FREE_KB" -ge $((SRC_KB * 3)) ] || mv_fail "target $TO too full: ${TGT_FREE_KB}KB free < 3x source ${SRC_KB}KB — refusing before touching anything"
+        mv_step preflight done "source ${SRC_KB}KB; target free ${TGT_FREE_KB}KB (>=3x ok)"
         # Same tag never means same code across nodes — swarm ships
         # CONFIG, not images. Compare image IDs; ship on mismatch.
         mv_step sync-image running
@@ -241,18 +251,36 @@ else:
         read -r NTAB NROW NDD <<< "$SNAP"
         mv_step snapshot done "$NTAB tables / $NROW rows (DigitizedDataset $NDD)"
         mv_step copy-data running
+        # gm-safety STAGED copy: the live target data is NEVER
+        # touched until the staged copy VERIFIES; a mid-copy failure
+        # (connection drop, disk full) leaves live data intact and
+        # the move resumable by re-running. Journals in BOTH volumes
+        # make an interrupted transfer discoverable after any crash
+        # (/api/health surfaces them at boot).
+        STAGE=".incoming-${MOVE}"
+        PREV=".previous-${MOVE}"
+        JLINE="{\"move\":\"$MOVE\",\"from\":\"$FROM\",\"to\":\"$TO\",\"phase\":\"copying\",\"at\":$(date +%s)}"
+        printf '%s' "$JLINE" | run_on_source "docker exec -i $TASK sh -c 'cat > /app/data/.move-journal.json'" || true
         run_on_target "docker volume create $VOL" >/dev/null 2>&1 || true
-        run_on_source "docker exec $TASK tar -C /app/data -cf - ." | run_on_target "docker run --rm -i -v $VOL:/data alpine sh -c 'rm -rf /data/* && tar -C /data -xf -'" || mv_fail "data copy to $TO failed" release
-        mv_step copy-data done "sqlite volume copied to $TO ($VOL)"
+        printf '%s' "$JLINE" | run_on_target "docker run --rm -i -v $VOL:/data alpine sh -c 'cat > /data/.move-journal.json'" || true
+        run_on_source "docker exec $TASK tar -C /app/data -cf - ." | run_on_target "docker run --rm -i -v $VOL:/data alpine sh -c 'rm -rf /data/$STAGE && mkdir -p /data/$STAGE && tar -C /data/$STAGE -xf -'" || mv_fail "staged copy to $TO failed — live target data untouched; re-run to resume" release
+        mv_step copy-data done "staged into $STAGE on $TO (live data untouched)"
         # Second pass captures the receipt row just written (quiesced,
         # so nothing else changed) — the copy stays exactly consistent.
-        run_on_source "docker exec $TASK tar -C /app/data -cf - ." | run_on_target "docker run --rm -i -v $VOL:/data alpine tar -C /data -xf -" || mv_fail "consistency re-copy failed" release
-        # Pre-boot file verify: the COPIED FILE must match the source
-        # exactly (post-boot totals legitimately SHRINK — restore
-        # dedupes historical duplicate rows, then persistTree rewrites
-        # clean; stable tables + the marker are the post-boot checks).
-        FROW=$(run_on_target "docker run --rm -v $VOL:/app/data prf-backend:staging python3 -c \"$COUNT_PY\"" 2>/dev/null | awk '{print $2}' || true)
-        [ "$FROW" = "$NROW" ] || mv_fail "copied file has $FROW rows != source $NROW — copy inconsistent" release
+        run_on_source "docker exec $TASK tar -C /app/data -cf - ." | run_on_target "docker run --rm -i -v $VOL:/data alpine sh -c 'tar -C /data/$STAGE -xf -'" || mv_fail "consistency re-copy failed — live target data untouched; re-run to resume" release
+        # Verify the STAGED file BEFORE any swap: it must match the
+        # source row-for-row (post-boot totals legitimately shrink —
+        # restore dedupes; stable tables + marker are the post-boot
+        # checks).
+        STAGED_COUNT_PY="import sqlite3;c=sqlite3.connect('/vol/$STAGE/managerObject_DB.db');ts=[r[0] for r in c.execute('select name from sqlite_master where type=' + chr(39) + 'table' + chr(39))];total=sum(c.execute('select count(*) from ' + chr(34) + t + chr(34)).fetchone()[0] for t in ts);print(len(ts), total)"
+        FROW=$(run_on_target "docker run --rm -v $VOL:/vol prf-backend:staging python3 -c \"$STAGED_COUNT_PY\"" 2>/dev/null | awk '{print $2}' || true)
+        [ "$FROW" = "$NROW" ] || mv_fail "staged file has ${FROW:-?} rows != source $NROW — staged copy inconsistent; live target data untouched, re-run to resume" release
+        # SWAP, only now: current live data -> $PREV (kept until
+        # retire = the reverse path), staged -> live. Dot-entries
+        # (journal, stage/prev dirs) are excluded from the sweep by
+        # the shell glob.
+        run_on_target "docker run --rm -v $VOL:/data alpine sh -c 'mkdir -p /data/$PREV && for f in /data/*; do [ -e \"\$f\" ] || continue; mv \"\$f\" /data/$PREV/; done; mv /data/$STAGE/* /data/ && rm -rf /data/$STAGE'" || mv_fail "swap failed — staged copy + $PREV both on $TO, journal marks the state; recover manually or re-run" release
+        printf '%s' "${JLINE/copying/swapped}" | run_on_target "docker run --rm -i -v $VOL:/data alpine sh -c 'cat > /data/.move-journal.json'" || true
         mv_step service-update running
         T0=$(date +%s)
         docker service update --update-order stop-first \
@@ -296,8 +324,16 @@ else:
         [ "$TDD" = "$NDD" ] || mv_fail "DATA LOSS: DigitizedDataset $TDD != snapshot $NDD"
         MARKER=$(api GET "/api/topology/move-operations" | python3 -c "import json,sys; d=json.load(sys.stdin); print('1' if any(m['name']=='$MOVE' for m in d.get('moves',[])) else '')")
         [ -n "$MARKER" ] || mv_fail "marker MoveOperation row missing on relocated instance"
-        mv_step verify-data done "tables $TTAB==$NTAB; DigitizedDataset $TDD==$NDD; marker present; rows $TROW post-dedup (copied file matched $NROW exactly pre-boot)"
-        mv_step retire done "old volume $VOL kept on $FROM as the rollback copy"
+        mv_step verify-data done "tables $TTAB==$NTAB; DigitizedDataset $TDD==$NDD; marker present; rows $TROW post-dedup (staged file matched $NROW exactly pre-swap)"
+        # Retire = the ONLY deletions in the whole move, and only of
+        # things now proven redundant: target's .previous generation
+        # + its journal. The SOURCE volume is never deleted — its
+        # journal is rewritten 'moved-to' so a later boot of that
+        # volume declares where the live data went.
+        mv_step retire running
+        run_on_target "docker run --rm -v $VOL:/data alpine sh -c 'rm -rf /data/$PREV /data/.incoming-* && rm -f /data/.move-journal.json'" || true
+        printf '{"move":"%s","from":"%s","to":"%s","phase":"retired-moved-to-%s","at":%s}' "$MOVE" "$FROM" "$TO" "$TO" "$(date +%s)" | run_on_source "docker run --rm -i -v $VOL:/data alpine sh -c 'cat > /data/.move-journal.json'" || true
+        mv_step retire done "target .previous + journal cleared; SOURCE volume kept intact on $FROM (rollback) with journal marking data moved to $TO"
         printf '{"name":"%s","status":"verified"}' "$MOVE" | api POST /api/topology/move-operations/finish >/dev/null || true
         log_success "backend relocated $FROM -> $TO (downtime ~${DOWN}s; MoveOperation $MOVE)"
         log_info "row updated? also run: pol allocate prf-a $TO  (topology row) — and the old volume on $FROM is the rollback" ;;
