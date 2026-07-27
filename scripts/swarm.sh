@@ -278,6 +278,10 @@ else:
         done
         [ -n "$READY" ] || mv_fail "relocated backend never reached core-ready"
         DOWN=$(( $(date +%s) - T0 ))
+        # Re-assert the service-update receipt: its first post landed
+        # on the OLD instance after the copy (lost by design — the
+        # relocated row restores it as pending until this).
+        mv_step service-update done "stop-first constraint swap converged (re-asserted post-cutover)"
         mv_step boot-ready done "core-ready on $TO; measured downtime ~${DOWN}s (update -> /api/health 200)"
         mv_step verify-data running
         TTASK=$(run_on_target "docker ps -q -f name=$SVC" | head -1)
