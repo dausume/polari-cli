@@ -371,8 +371,9 @@ print(' '.join(out))" "$STACKS" 2>/dev/null || true)
         # assignment (rows only); instance -> machine moves the
         # instance, re-renders, and re-deploys THAT group.
         need_pyyaml
-        WHAT=$1; WHERE=$2
-        [ -n "$WHAT" ] && [ -n "$WHERE" ] || die "usage: pol allocate <module> <instance> | pol allocate <instance> <machine>"
+        WHAT=$1; WHERE=$2; GRACEFUL=""
+        [ "${3:-}" = "--graceful" ] && GRACEFUL=1
+        [ -n "$WHAT" ] && [ -n "$WHERE" ] || die "usage: pol allocate <module> <instance> | pol allocate <instance> <machine> [--graceful]"
         NAME=$(resolve_name ""); [ -n "$NAME" ] || die "no active topology"
         MODE=$(be_call GET "/api/topology/graph?name=$NAME" | python3 -c "
 import json, sys
@@ -402,7 +403,73 @@ for a in doc['actions']:
         break" "$POL_SUITE_ROOT/pol-build/manifests/topology-$NAME/actions.yml" "$WHAT")
             IFS=$'\t' read -r GNAME GCMD GREMOTE <<< "$GROUP"
                 [ -n "$GNAME" ] || die "instance '$WHAT' maps to no build group after render"
-                if [ "$GNAME" = "engines-stack" ]; then
+                if [ "$GNAME" = "engines-stack" ] && [ -n "$GRACEFUL" ]; then
+                    # gm-1: BLUE-GREEN engine relocation — every step
+                    # receipted as a MoveOperation row (durations
+                    # measured server-side; prior moves yield expected
+                    # durations). start-first + the routing mesh keep
+                    # :9500 answering throughout.
+                    SVC="polari-engines_msci-engines"
+                    IMG="prf-msci-engines:staging"
+                    FROM=$(docker service inspect "$SVC" --format '{{json .Spec.TaskTemplate.Placement.Constraints}}' 2>/dev/null | python3 -c "
+import json,sys
+for c in json.load(sys.stdin) or []:
+    if 'polari.machine' in c:
+        print(c.split('==')[-1].strip()); break" || true)
+                    [ -n "$FROM" ] || die "cannot read $SVC's current machine constraint — is the engines stack deployed?"
+                    [ "$FROM" != "$WHERE" ] || die "engines already on $WHERE"
+                    MOVE=$(printf '{"kind":"engine-relocation","subject":"msci-engines","fromMachine":"%s","toMachine":"%s","triggeredBy":"pol allocate --graceful"}' "$FROM" "$WHERE" | be_call POST /api/topology/move-operations | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['move']['name'] if d.get('ok') else '')")
+                    [ -n "$MOVE" ] || log_warn "MoveOperation row not created (backend unreachable?) — continuing, steps unreceipted"
+                    mv_step() { # key status [receipt]
+                        [ -n "$MOVE" ] || return 0
+                        printf '{"name":"%s","step":"%s","status":"%s","receipt":"%s"}' "$MOVE" "$1" "$2" "${3:-}" | be_call POST /api/topology/move-operations/step >/dev/null || true
+                    }
+                    mv_fail() { # error
+                        [ -n "$MOVE" ] && printf '{"name":"%s","status":"failed","error":"%s"}' "$MOVE" "$1" | be_call POST /api/topology/move-operations/finish >/dev/null || true
+                        die "$1"
+                    }
+                    ALIAS=$(python3 -c "import sys,yaml; print((yaml.safe_load(open(sys.argv[1]))['nodes'].get(sys.argv[2]) or {}).get('ssh',''))" "$NODES_FILE" "$WHERE" 2>/dev/null || true)
+                    mv_step check-image running
+                    if [ -n "$ALIAS" ] && ! ssh "$ALIAS" "docker image inspect $IMG" >/dev/null 2>&1; then
+                        mv_step check-image done "absent on $WHERE"
+                        mv_step ship-image running
+                        log_info "syncing $IMG to $WHERE (docker save | ssh docker load)"
+                        docker save "$IMG" | ssh "$ALIAS" docker load || mv_fail "image sync to $WHERE failed"
+                        SIZE=$(docker image inspect "$IMG" --format '{{.Size}}')
+                        mv_step ship-image done "shipped $((SIZE/1000000))MB to $WHERE"
+                    else
+                        mv_step check-image done "present on $WHERE (or local node)"
+                        mv_step ship-image skipped "already on target"
+                    fi
+                    mv_step ensure-label running
+                    docker node ls --format '{{.ID}}' | while read -r NID; do docker node inspect "$NID" --format '{{index .Spec.Labels "polari.machine"}}'; done | grep -qx "$WHERE" || mv_fail "no swarm node labeled polari.machine=$WHERE (pol swarm join $WHERE)"
+                    mv_step ensure-label done "node labeled $WHERE in swarm"
+                    mv_step service-update running
+                    log_info "blue-green: start-first constraint swap $FROM -> $WHERE"
+                    docker service update --update-order start-first \
+                        --constraint-rm "node.labels.polari.machine==$FROM" \
+                        --constraint-add "node.labels.polari.machine==$WHERE" \
+                        --detach=false "$SVC" >/dev/null || mv_fail "service update failed"
+                    mv_step service-update done "swarm converged (start-first)"
+                    mv_step readiness running
+                    READY=""
+                    for i in $(seq 1 60); do
+                        NODE=$(docker service ps "$SVC" --filter desired-state=running --format '{{.Node}}' | head -1)
+                        ON=$(docker node inspect "$NODE" --format '{{index .Spec.Labels "polari.machine"}}' 2>/dev/null || true)
+                        if [ "$ON" = "$WHERE" ] && curl -sf --max-time 3 "http://${LOCAL_IP:-localhost}:9500/capability" >/dev/null 2>&1; then READY=1; break; fi
+                        sleep 2
+                    done
+                    [ -n "$READY" ] || mv_fail "new task on $WHERE never answered /capability"
+                    mv_step readiness done "task on $WHERE answers /capability via mesh"
+                    mv_step verify running
+                    be_call POST /api/topology/providers/reprobe </dev/null >/dev/null 2>&1 || true
+                    CAP=$(curl -sf --max-time 5 "http://${LOCAL_IP:-localhost}:9500/capability" | head -c 60 || true)
+                    [ -n "$CAP" ] || mv_fail "capability verify failed after relocation"
+                    mv_step verify done "capability answers; probe cache invalidated"
+                    [ -n "$MOVE" ] && printf '{"name":"%s","status":"verified"}' "$MOVE" | be_call POST /api/topology/move-operations/finish >/dev/null || true
+                    docker service ps "$SVC" --format '{{.Name}}\t{{.Node}}\t{{.CurrentState}}' | head -3
+                    log_success "graceful relocation $FROM -> $WHERE complete (MoveOperation ${MOVE:-unreceipted})"
+                elif [ "$GNAME" = "engines-stack" ]; then
                     # swarm distributes CONFIG, not images — sync the
                     # locally-built image to the target node first
                     ALIAS=$(python3 -c "import sys,yaml; print((yaml.safe_load(open(sys.argv[1]))['nodes'].get(sys.argv[2]) or {}).get('ssh',''))" "$NODES_FILE" "$WHERE" 2>/dev/null || true)
