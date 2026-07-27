@@ -153,6 +153,150 @@ print(urllib.request.urlopen(req, timeout=15).read().decode())" \
         docker stack deploy -c "$POL_SUITE_ROOT/.generated/stack-$ROLE.yml" "polari-$ROLE"
         record_build swarm "$ROLE" staging
         log_success "stack polari-$ROLE deployed — pol swarm ps $ROLE (pol start/rebuild/stop now shorthand this)" ;;
+    relocate)
+        # gm-5 (GRACEFUL_MOBILITY_PLAN): move the swarm BACKEND — an
+        # owned-sqlite Polari instance — to another machine. QUIESCED,
+        # stop-first (a stateful instance must never double-write),
+        # honest measured downtime, every step a MoveOperation receipt.
+        # The MoveOperation row itself is the data-loss marker: it is
+        # created before the flush, so it MUST be visible on the
+        # relocated instance or the copy lost data.
+        # usage: pol swarm relocate <machine>   (backend only, v1)
+        require_swarm
+        TO=${1:?usage: pol swarm relocate <machine>}
+        [ -n "${POLARI_CORE_URL:-}" ] || die "POLARI_CORE_URL required (the mover posts receipts + quiesce through the API)"
+        SVC="polari-node_backend"
+        VOL="polari-rf-node_backend-data"
+        DBF="/app/data/managerObject_DB.db"
+        api() { # method path [json-stdin]
+            if [ "$1" = "POST" ]; then curl -sk -X POST -H 'Content-Type: application/json' --data-binary @- "$POLARI_CORE_URL$2"; else curl -sk "$POLARI_CORE_URL$2"; fi
+        }
+        FROM=$(docker service inspect "$SVC" --format '{{json .Spec.TaskTemplate.Placement.Constraints}}' 2>/dev/null | python3 -c "
+import json,sys
+for c in json.load(sys.stdin) or []:
+    if 'polari.machine' in c:
+        print(c.split('==')[-1].strip()); break" || true)
+        [ -n "$FROM" ] || die "cannot read $SVC's machine constraint — is the node stack deployed?"
+        [ "$FROM" != "$TO" ] || die "backend already on $TO"
+        NODES_FILE="$POL_SUITE_ROOT/pol-build/manifests/nodes.yml"
+        ALIAS=$(python3 -c "import sys,yaml; print((yaml.safe_load(open(sys.argv[1]))['nodes'].get(sys.argv[2]) or {}).get('ssh',''))" "$NODES_FILE" "$TO" 2>/dev/null || true)
+        SALIAS=$(python3 -c "import sys,yaml; print((yaml.safe_load(open(sys.argv[1]))['nodes'].get(sys.argv[2]) or {}).get('ssh',''))" "$NODES_FILE" "$FROM" 2>/dev/null || true)
+        # '' alias = this machine (staging-a convention in nodes.yml)
+        run_on_target() { if [ -n "$ALIAS" ]; then ssh "$ALIAS" "$@"; else bash -c "$*"; fi; }
+        run_on_source() { if [ -n "$SALIAS" ]; then ssh "$SALIAS" "$@"; else bash -c "$*"; fi; }
+        MOVE=$(printf '{"kind":"instance-move","subject":"backend","fromMachine":"%s","toMachine":"%s","triggeredBy":"pol swarm relocate"}' "$FROM" "$TO" | api POST /api/topology/move-operations | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['move']['name'] if d.get('ok') else '')")
+        [ -n "$MOVE" ] || die "MoveOperation row not created — backend unreachable at $POLARI_CORE_URL"
+        mv_step() { printf '{"name":"%s","step":"%s","status":"%s","receipt":"%s"}' "$MOVE" "$1" "$2" "${3:-}" | api POST /api/topology/move-operations/step >/dev/null || true; }
+        mv_fail() { # error [release-quiesce]
+            printf '{"name":"%s","status":"failed","error":"%s"}' "$MOVE" "$1" | api POST /api/topology/move-operations/finish >/dev/null || true
+            [ "${2:-}" = "release" ] && echo '{}' | api POST /api/quiesce/release >/dev/null || true
+            die "$1"
+        }
+        TASK=$(run_on_source "docker ps -q -f name=$SVC" | head -1)
+        [ -n "$TASK" ] || mv_fail "no running $SVC task found on $FROM"
+        # Same tag never means same code across nodes — swarm ships
+        # CONFIG, not images. Compare image IDs; ship on mismatch.
+        mv_step sync-image running
+        IMG="prf-backend:staging"
+        LOCAL_ID=$(docker image inspect "$IMG" --format '{{.Id}}' 2>/dev/null || true)
+        TARGET_ID=$(run_on_target "docker image inspect $IMG --format '{{.Id}}'" 2>/dev/null || true)
+        if [ -n "$LOCAL_ID" ] && [ "$LOCAL_ID" != "$TARGET_ID" ]; then
+            log_info "image content differs on $TO — shipping $IMG"
+            docker save "$IMG" | run_on_target "docker load" || mv_fail "image sync to $TO failed"
+            mv_step sync-image done "shipped $IMG (content differed)"
+        else
+            mv_step sync-image done "image IDs match on $TO"
+        fi
+        mv_step quiesce running
+        # Engage with a SHORT call, then POLL status — the flush can
+        # take minutes-to-an-hour (measured: 2758s on a slow disk;
+        # persistTree is row-by-row until mlb-5b batches it) and a
+        # single long POST outlives every proxy timeout.
+        printf '{"reason":"instance relocation","moveName":"%s"}' "$MOVE" | timeout 30 curl -sk -X POST -H 'Content-Type: application/json' --data-binary @- --max-time 25 "$POLARI_CORE_URL/api/quiesce" >/dev/null 2>&1 || true
+        QOK=""
+        for i in $(seq 1 720); do  # up to 2h — flush time is honest, not bounded
+            ST=$(api GET /api/quiesce/status | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+r = d.get('receipt') or {}
+if d.get('quiesced') and r.get('persisted'):
+    print('done', r.get('flushSeconds'))
+elif d.get('quiesced') and r.get('error'):
+    print('error', r.get('error'))
+elif d.get('quiesced'):
+    print('flushing')
+else:
+    print('idle')" 2>/dev/null || echo poll-failed)
+            case "$ST" in
+                done*) QOK="${ST#done }"; break ;;
+                error*) mv_fail "quiesce flush failed: ${ST#error }" release ;;
+            esac
+            sleep 10
+        done
+        [ -n "$QOK" ] || mv_fail "quiesce flush never completed — gate left UP for inspection (release manually: POST /api/quiesce/release)"
+        mv_step quiesce done "gate up + flushed in ${QOK}s (in-flight 0)"
+        mv_step snapshot running
+        COUNT_PY="import sqlite3;c=sqlite3.connect('$DBF');ts=[r[0] for r in c.execute('select name from sqlite_master where type=' + chr(39) + 'table' + chr(39))];total=sum(c.execute('select count(*) from ' + chr(34) + t + chr(34)).fetchone()[0] for t in ts);dd=c.execute('select count(*) from DigitizedDataset').fetchone()[0] if 'DigitizedDataset' in ts else -1;print(len(ts), total, dd)"
+        SNAP=$(run_on_source "docker exec $TASK python3 -c \"$COUNT_PY\"") || mv_fail "snapshot failed" release
+        read -r NTAB NROW NDD <<< "$SNAP"
+        mv_step snapshot done "$NTAB tables / $NROW rows (DigitizedDataset $NDD)"
+        mv_step copy-data running
+        run_on_target "docker volume create $VOL" >/dev/null 2>&1 || true
+        run_on_source "docker exec $TASK tar -C /app/data -cf - ." | run_on_target "docker run --rm -i -v $VOL:/data alpine sh -c 'rm -rf /data/* && tar -C /data -xf -'" || mv_fail "data copy to $TO failed" release
+        mv_step copy-data done "sqlite volume copied to $TO ($VOL)"
+        # Second pass captures the receipt row just written (quiesced,
+        # so nothing else changed) — the copy stays exactly consistent.
+        run_on_source "docker exec $TASK tar -C /app/data -cf - ." | run_on_target "docker run --rm -i -v $VOL:/data alpine tar -C /data -xf -" || mv_fail "consistency re-copy failed" release
+        # Pre-boot file verify: the COPIED FILE must match the source
+        # exactly (post-boot totals legitimately SHRINK — restore
+        # dedupes historical duplicate rows, then persistTree rewrites
+        # clean; stable tables + the marker are the post-boot checks).
+        FROW=$(run_on_target "docker run --rm -v $VOL:/app/data prf-backend:staging python3 -c \"$COUNT_PY\"" 2>/dev/null | awk '{print $2}' || true)
+        [ "$FROW" = "$NROW" ] || mv_fail "copied file has $FROW rows != source $NROW — copy inconsistent" release
+        mv_step service-update running
+        T0=$(date +%s)
+        docker service update --update-order stop-first \
+            --constraint-rm "node.labels.polari.machine==$FROM" \
+            --constraint-add "node.labels.polari.machine==$TO" \
+            --detach "$SVC" >/dev/null || mv_fail "service update failed" release
+        mv_step service-update done "stop-first constraint swap issued"
+        mv_step boot-ready running
+        # Placement FIRST (health can answer from the old task while
+        # the stop-first swap is still converging), then core-ready.
+        PLACED=""
+        for i in $(seq 1 60); do
+            NODE=$(docker service ps "$SVC" --filter desired-state=running --format '{{.Node}}' | head -1)
+            ON=$(docker node inspect "$NODE" --format '{{index .Spec.Labels "polari.machine"}}' 2>/dev/null || true)
+            [ "$ON" = "$TO" ] && PLACED=1 && break
+            sleep 3
+        done
+        [ -n "$PLACED" ] || mv_fail "task never placed on $TO"
+        READY=""
+        for i in $(seq 1 90); do
+            if curl -skf --max-time 4 "$POLARI_CORE_URL/api/health" >/dev/null 2>&1; then READY=1; break; fi
+            sleep 5
+        done
+        [ -n "$READY" ] || mv_fail "relocated backend never reached core-ready"
+        DOWN=$(( $(date +%s) - T0 ))
+        mv_step boot-ready done "core-ready on $TO; measured downtime ~${DOWN}s (update -> /api/health 200)"
+        mv_step verify-data running
+        TTASK=$(run_on_target "docker ps -q -f name=$SVC" | head -1)
+        [ -n "$TTASK" ] || mv_fail "no $SVC task running on $TO"
+        VER=$(run_on_target "docker exec $TTASK python3 -c \"$COUNT_PY\"") || mv_fail "target row count failed"
+        read -r TTAB TROW TDD <<< "$VER"
+        # Post-boot: totals legitimately SHRINK (restore dedupes then
+        # persistTree rewrites clean) — the invariants are the table
+        # count, stable definition tables, and the marker row that
+        # traveled inside the copied DB.
+        [ "$TTAB" = "$NTAB" ] || mv_fail "DATA LOSS: target has $TTAB tables != snapshot $NTAB"
+        [ "$TDD" = "$NDD" ] || mv_fail "DATA LOSS: DigitizedDataset $TDD != snapshot $NDD"
+        MARKER=$(api GET "/api/topology/move-operations" | python3 -c "import json,sys; d=json.load(sys.stdin); print('1' if any(m['name']=='$MOVE' for m in d.get('moves',[])) else '')")
+        [ -n "$MARKER" ] || mv_fail "marker MoveOperation row missing on relocated instance"
+        mv_step verify-data done "tables $TTAB==$NTAB; DigitizedDataset $TDD==$NDD; marker present; rows $TROW post-dedup (copied file matched $NROW exactly pre-boot)"
+        mv_step retire done "old volume $VOL kept on $FROM as the rollback copy"
+        printf '{"name":"%s","status":"verified"}' "$MOVE" | api POST /api/topology/move-operations/finish >/dev/null || true
+        log_success "backend relocated $FROM -> $TO (downtime ~${DOWN}s; MoveOperation $MOVE)"
+        log_info "row updated? also run: pol allocate prf-a $TO  (topology row) — and the old volume on $FROM is the rollback" ;;
     rm)
         require_swarm
         docker stack rm "polari-${1:?role required}" ;;
