@@ -176,6 +176,115 @@ print(urllib.request.urlopen(req, timeout=15).read().decode())" \
                 SUBJECT="prf-file-store"; VERIFY="files" ;;
             keydb)
                 die "no KeyDB service in the node stack (PSC/suite side) — the generic staged mover supports it once deployed (kind keydb-move); the zero-cold-cache replica-promote route is the gm-3 refinement, not built" ;;
+            keycloak)
+                # gm-4: SERVER-ONLY move — realms/clients/KEYS live in
+                # MariaDB, which does NOT move (keycloak+DB in one
+                # step is refused: two moves, DB first). Blue-green
+                # start-first: old serves until new runs; the issuer
+                # hostname never changes, so existing tokens stay
+                # valid. No quiesce, no volumes, nothing deleted.
+                SVC="polari-node_prf-keycloak"
+                IMG="prf-keycloak:staging"
+                DBSVC="polari-node_prf-mariadb"
+                TO_KC=$TO
+                api() { if [ "$1" = "POST" ]; then curl -sk -X POST -H 'Content-Type: application/json' --data-binary @- "$POLARI_CORE_URL$2"; else curl -sk "$POLARI_CORE_URL$2"; fi; }
+                kc_stable() {
+                    local st
+                    st=$(docker service inspect "$1" --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}' 2>/dev/null || true)
+                    case "$st" in updating|paused|rollback_started|rollback_paused) die "service $1 has an update in progress ($st) — wait, then retry" ;; esac
+                }
+                kc_stable "$SVC"; kc_stable "$DBSVC"; kc_stable "polari-node_backend"
+                FROM=$(docker service inspect "$SVC" --format '{{json .Spec.TaskTemplate.Placement.Constraints}}' 2>/dev/null | python3 -c "
+import json,sys
+for c in json.load(sys.stdin) or []:
+    if 'polari.machine' in c:
+        print(c.split('==')[-1].strip()); break" || true)
+                [ -n "$FROM" ] || die "cannot read $SVC's machine constraint"
+                [ "$FROM" != "$TO_KC" ] || die "keycloak already on $TO_KC"
+                NODES_FILE="$POL_SUITE_ROOT/pol-build/manifests/nodes.yml"
+                ALIAS=$(python3 -c "import sys,yaml; print((yaml.safe_load(open(sys.argv[1]))['nodes'].get(sys.argv[2]) or {}).get('ssh',''))" "$NODES_FILE" "$TO_KC" 2>/dev/null || true)
+                run_on_target() { if [ -n "$ALIAS" ]; then ssh "$ALIAS" "$@"; else bash -c "$*"; fi; }
+                MOVE=$(printf '{"kind":"auth-move","subject":"prf-keycloak","fromMachine":"%s","toMachine":"%s","triggeredBy":"pol swarm relocate"}' "$FROM" "$TO_KC" | api POST /api/topology/move-operations | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['move']['name'] if d.get('ok') else '')")
+                [ -n "$MOVE" ] || die "MoveOperation row not created — backend unreachable at $POLARI_CORE_URL"
+                mv_step() { printf '{"name":"%s","step":"%s","status":"%s","receipt":"%s"}' "$MOVE" "$1" "$2" "${3:-}" | api POST /api/topology/move-operations/step >/dev/null || true; }
+                mv_fail() { printf '{"name":"%s","status":"failed","error":"%s"}' "$MOVE" "$1" | api POST /api/topology/move-operations/finish >/dev/null || true; die "$1"; }
+                AUTH_BASE="${POLARI_AUTH_URL:-https://auth.prf.${LOCAL_IP:-192.168.0.210}.nip.io}"
+                JWKS="$AUTH_BASE/realms/Polari/protocol/openid-connect/certs"
+                mv_step preflight running
+                run_on_target "true" >/dev/null 2>&1 || mv_fail "target $TO_KC unreachable"
+                curl -skf --max-time 6 "$JWKS" >/dev/null || mv_fail "keycloak is not healthy BEFORE the move (JWKS unreachable) — fix auth first, then move"
+                mv_step preflight done "target reachable; JWKS answers pre-move; no updates converging"
+                mv_step db-check running
+                ACTIVE_DB_MOVE=$(api GET "/api/topology/move-operations?active=true" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+print('1' if any(m['kind'] == 'database-move' or m['subject'] == 'prf-mariadb'
+                 for m in d.get('moves', []) if m['name'] != '$MOVE') else '')" 2>/dev/null || true)
+                [ -z "$ACTIVE_DB_MOVE" ] || mv_fail "the DB is ALSO moving — keycloak+DB in one step is two moves, DB first (gm-5), then this"
+                DBSTATE=$(docker ps --filter name=$DBSVC --format '{{.Status}}' | head -1)
+                case "$DBSTATE" in *healthy*) ;; *) mv_fail "prf-mariadb is not healthy ($DBSTATE) — the server-only move needs its DB answering" ;; esac
+                mv_step db-check done "DB healthy + not moving; server-only move is legal"
+                mv_step sync-image running
+                LOCAL_ID=$(docker image inspect "$IMG" --format '{{.Id}}' 2>/dev/null || true)
+                TARGET_ID=$(run_on_target "docker image inspect $IMG --format '{{.Id}}'" 2>/dev/null || true)
+                if [ -n "$LOCAL_ID" ] && [ "$LOCAL_ID" != "$TARGET_ID" ]; then
+                    log_info "image content differs on $TO_KC — shipping $IMG"
+                    docker save "$IMG" | run_on_target "docker load" || mv_fail "image sync to $TO_KC failed"
+                    mv_step sync-image done "shipped $IMG (content differed)"
+                else
+                    mv_step sync-image done "image IDs match on $TO_KC"
+                fi
+                # Blue-green REQUIRES a readiness-gated healthcheck:
+                # an ungated JVM container is "running" in seconds but
+                # serves minutes later (measured as an outage). Apply
+                # it to the live service if absent — this transition
+                # is itself start-first + gated, so zero-downtime.
+                HC=$(docker service inspect "$SVC" --format '{{json .Spec.TaskTemplate.ContainerSpec.Healthcheck}}' 2>/dev/null)
+                if [ "$HC" = "null" ] || [ -z "$HC" ]; then
+                    log_info "no healthcheck on $SVC — applying one (prerequisite for a zero-downtime swap)"
+                    docker service update --update-order start-first \
+                        --health-cmd "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /realms/master HTTP/1.0\r\n\r\n' >&3 && head -1 <&3 | grep -q 200" \
+                        --health-interval 15s --health-timeout 10s \
+                        --health-start-period 300s --health-retries 3 \
+                        --detach=false "$SVC" >/dev/null || mv_fail "could not apply the readiness healthcheck"
+                fi
+                # Token continuity evidence: the SIGNING KEYS must be
+                # identical after the move (same DB = same keys ⇒
+                # every existing token/session stays valid; a raw
+                # access token expires in ~60s, shorter than any
+                # move — comparing kids is the honest check).
+                PRE_KIDS=$(curl -sk --max-time 8 "$JWKS" | python3 -c "import json,sys; print(','.join(sorted(k['kid'] for k in json.load(sys.stdin).get('keys',[]))))" 2>/dev/null || true)
+                mv_step service-update running
+                docker service update --update-order start-first \
+                    --constraint-rm "node.labels.polari.machine==$FROM" \
+                    --constraint-add "node.labels.polari.machine==$TO_KC" \
+                    --detach=false "$SVC" >/dev/null || mv_fail "service update failed"
+                mv_step service-update done "start-first constraint swap converged (old served until new ran)"
+                mv_step readiness running
+                READY=""
+                for i in $(seq 1 90); do
+                    NODE=$(docker service ps "$SVC" --filter desired-state=running --format '{{.Node}}' | head -1)
+                    ON=$(docker node inspect "$NODE" --format '{{index .Spec.Labels "polari.machine"}}' 2>/dev/null || true)
+                    if [ "$ON" = "$TO_KC" ] && curl -skf --max-time 5 "$JWKS" >/dev/null 2>&1; then READY=1; break; fi
+                    sleep 5
+                done
+                [ -n "$READY" ] || mv_fail "relocated keycloak never answered realm/JWKS on $TO_KC"
+                mv_step readiness done "task on $TO_KC; realm + JWKS answer through the proxy (issuer unchanged)"
+                mv_step verify running
+                POST_KIDS=$(curl -sk --max-time 8 "$JWKS" | python3 -c "import json,sys; print(','.join(sorted(k['kid'] for k in json.load(sys.stdin).get('keys',[]))))" 2>/dev/null || true)
+                if [ -n "$PRE_KIDS" ]; then
+                    [ "$POST_KIDS" = "$PRE_KIDS" ] || mv_fail "SIGNING KEYS CHANGED across the move ($PRE_KIDS -> $POST_KIDS) — token continuity broken; did the DB move too?"
+                    TOKOK="signing keys identical (kids unchanged) — existing tokens/sessions stay valid"
+                else
+                    TOKOK="pre-move kids unavailable — post-move kids: ${POST_KIDS:-none}"
+                fi
+                JH=$(api GET /auth/jwks-health | python3 -c "import json,sys; d=json.load(sys.stdin); print('ok' if d.get('ok') or d.get('healthy') else json.dumps(d)[:60].replace(chr(34), chr(39)))" 2>/dev/null || echo unavailable)
+                mv_step verify done "$TOKOK; backend jwks-health: $JH"
+                mv_step retire done "nothing to delete — no data moved (realms/keys live in $DBSVC, untouched)"
+                printf '{"name":"%s","status":"verified"}' "$MOVE" | api POST /api/topology/move-operations/finish >/dev/null || true
+                docker service ps "$SVC" --format '{{.Name}}\t{{.Node}}\t{{.CurrentState}}' | head -3
+                log_success "keycloak relocated $FROM -> $TO_KC (blue-green; MoveOperation $MOVE)"
+                exit 0 ;;
             *) die "unknown service '$WHATSVC' (backend|file-store|keydb)" ;;
         esac
         api() { # method path [json-stdin]
