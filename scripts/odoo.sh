@@ -6,6 +6,7 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/log.sh"
+source "$SCRIPT_DIR/lib/odoo-sso.sh"
 
 show_help() {
     pol_box "pol odoo — ERP: business sims + real business ops"
@@ -20,6 +21,9 @@ ${BOLD}COMMANDS${NC}   (all take ${CYAN}--env dev|staging|prod${NC}, default sta
                    demo data) and set a fresh admin password (printed ONCE)
   ${CYAN}backup <sim|ops>${NC} pg_dump receipt -> .generated/backups/ (the ONLY
                    sanctioned way to touch ops data before od-6 guardrails)
+  ${CYAN}sso-setup${NC}        od-2: ensure KC client 'odoo' (realm Polari) +
+                   install auth_oidc + provider row in every odoo_% DB
+                   — idempotent, needs pol-keycloak running
   ${CYAN}urls${NC}             where to log in
 
 ${BOLD}NOTES${NC}
@@ -145,6 +149,10 @@ case "$COMMAND" in
         BAKSZ=$(du -k "$BAK" | awk '{print $1}')
         [ "$BAKSZ" -gt 0 ] || { rm -f "$BAK"; die "dump file is empty"; }
         log_success "receipt: $BAK (${BAKSZ}K) — gitignored; NEVER commit dumps (public repos)" ;;
+    sso-setup)
+        ensure_env_file
+        DOM="$(base_domain)"; DOM="${DOM:-${LOCAL_IP}.nip.io}"
+        odoo_sso_setup "$DOM" ;;
     urls)
         DOM="$(base_domain)"; DOM="${DOM:-${LOCAL_IP}.nip.io}"
         echo "  https://odoo.$DOM/web/login?db=odoo_sim   (simulations)"
