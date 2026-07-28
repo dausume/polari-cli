@@ -28,6 +28,13 @@ ${BOLD}COMMANDS${NC}   (all take ${CYAN}--env dev|staging|prod${NC}, default sta
                    (odoo_scn_* only) [--modules m1,m2] [--admin-pass p]
   ${CYAN}scenario-drop <db>${NC} od-5: pg_dump receipt, then DROP the
                    scenario DB (odoo_scn_* only — never sim/ops)
+  ${CYAN}backup-cron <install|remove|status>${NC} od-6: nightly pg_dump
+                   receipts for sim+ops (03:17, keep last 14) on THIS
+                   host's crontab
+  ${CYAN}restore-drill <sim|ops>${NC} od-6: restore the LATEST receipt
+                   into a throwaway DB, verify table+row counts, drop
+                   — backups you have not restored are hopes, not
+                   backups
   ${CYAN}urls${NC}             where to log in
 
 ${BOLD}NOTES${NC}
@@ -196,6 +203,49 @@ case "$COMMAND" in
         [ "$BAKSZ" -gt 0 ] || { rm -f "$BAK"; die "empty dump — NOT dropping"; }
         odoo_exec odoo-postgres 'psql -U "$POSTGRES_USER" -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='"'"''"$DB"''"'"'" -c "DROP DATABASE '"$DB"'"' >/dev/null
         log_success "dropped $DB; final receipt: $BAK (${BAKSZ}K)" ;;
+    backup-cron)
+        SUB="${1:-status}"
+        MARK="# polari-odoo-backup (pol odoo backup-cron)"
+        case "$SUB" in
+            install)
+                LINE="17 3 * * * POL_SUITE_ROOT=$POL_SUITE_ROOT $(command -v pol || echo pol) odoo backup sim >/dev/null 2>&1; $(command -v pol || echo pol) odoo backup ops >/dev/null 2>&1; ls -1t $POL_SUITE_ROOT/.generated/backups/odoo-sim-*.sql 2>/dev/null | tail -n +15 | xargs -r rm --; ls -1t $POL_SUITE_ROOT/.generated/backups/odoo-ops-*.sql 2>/dev/null | tail -n +15 | xargs -r rm -- $MARK"
+                ( crontab -l 2>/dev/null | grep -vF "$MARK" || true; echo "$LINE" ) | crontab -
+                log_success "nightly backup cron installed (03:17, keep last 14 per db) — THIS host only; run on the odoo host (econ-core) too" ;;
+            remove)
+                ( crontab -l 2>/dev/null | grep -vF "$MARK" || true ) | crontab -
+                log_success "backup cron removed" ;;
+            status)
+                if crontab -l 2>/dev/null | grep -qF "$MARK"; then
+                    crontab -l | grep -F "$MARK"
+                else
+                    log_warn "no odoo backup cron on this host — 'pol odoo backup-cron install'"
+                fi ;;
+            *) die "backup-cron install|remove|status" ;;
+        esac ;;
+    restore-drill)
+        DB=$(db_name_for "${1:-}")
+        ensure_env_file
+        BAK=$(ls -1t "$POL_SUITE_ROOT/.generated/backups/odoo-${1}-"*.sql 2>/dev/null | head -1)
+        [ -n "$BAK" ] || die "no backup receipt for $DB in .generated/backups/ — 'pol odoo backup ${1}' first (a drill needs something to drill)"
+        DRILL="odoo_scn_restore_drill"
+        log_info "Drill: restoring $(basename "$BAK") into $DRILL"
+        odoo_exec odoo-postgres 'psql -U "$POSTGRES_USER" -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='"'"''"$DRILL"''"'"'" -c "DROP DATABASE IF EXISTS '"$DRILL"'" -c "CREATE DATABASE '"$DRILL"'"' >/dev/null
+        $(compose_cmd) exec -T odoo-postgres psql -q -U odoo -d "$DRILL" -f /dev/stdin < "$BAK" >/dev/null 2>&1 || true
+        DUMP_TABLES=$(grep -c '^CREATE TABLE' "$BAK")
+        GOT_TABLES=$(odoo_exec odoo-postgres 'psql -U "$POSTGRES_USER" -d '"$DRILL"' -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='"'"'public'"'"' AND table_type='"'"'BASE TABLE'"'"'"' | tr -d '[:space:]')
+        DUMP_USERS=$(awk '/^COPY public.res_users /{f=1;next} f&&/^\\\.$/{exit} f{n++} END{print n+0}' "$BAK")
+        GOT_USERS=$(odoo_exec odoo-postgres 'psql -U "$POSTGRES_USER" -d '"$DRILL"' -tAc "SELECT count(*) FROM res_users"' | tr -d '[:space:]')
+        DUMP_MODELS=$(awk '/^COPY public.ir_model /{f=1;next} f&&/^\\\.$/{exit} f{n++} END{print n+0}' "$BAK")
+        GOT_MODELS=$(odoo_exec odoo-postgres 'psql -U "$POSTGRES_USER" -d '"$DRILL"' -tAc "SELECT count(*) FROM ir_model"' | tr -d '[:space:]')
+        echo "  tables:   dump=$DUMP_TABLES restored=$GOT_TABLES"
+        echo "  res_users: dump=$DUMP_USERS restored=$GOT_USERS"
+        echo "  ir_model:  dump=$DUMP_MODELS restored=$GOT_MODELS"
+        odoo_exec odoo-postgres 'psql -U "$POSTGRES_USER" -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='"'"''"$DRILL"''"'"'" -c "DROP DATABASE '"$DRILL"'"' >/dev/null
+        if [ "$DUMP_TABLES" = "$GOT_TABLES" ] && [ "$DUMP_USERS" = "$GOT_USERS" ] && [ "$DUMP_MODELS" = "$GOT_MODELS" ] && [ "$GOT_TABLES" -gt 50 ]; then
+            log_success "RESTORE DRILL PASSED for $DB ($(basename "$BAK")): $GOT_TABLES tables, row-exact on res_users + ir_model; drill DB dropped"
+        else
+            die "RESTORE DRILL FAILED for $DB — counts diverge (see above); the backup may be unusable"
+        fi ;;
     urls)
         DOM="$(base_domain)"; DOM="${DOM:-${LOCAL_IP}.nip.io}"
         echo "  https://odoo.$DOM/web/login?db=odoo_sim   (simulations)"
