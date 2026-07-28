@@ -24,6 +24,10 @@ ${BOLD}COMMANDS${NC}   (all take ${CYAN}--env dev|staging|prod${NC}, default sta
   ${CYAN}sso-setup${NC}        od-2: ensure KC client 'odoo' (realm Polari) +
                    install auth_oidc + provider row in every odoo_% DB
                    — idempotent, needs pol-keycloak running
+  ${CYAN}scenario-init <db>${NC} od-5: create a THROWAWAY scenario DB
+                   (odoo_scn_* only) [--modules m1,m2] [--admin-pass p]
+  ${CYAN}scenario-drop <db>${NC} od-5: pg_dump receipt, then DROP the
+                   scenario DB (odoo_scn_* only — never sim/ops)
   ${CYAN}urls${NC}             where to log in
 
 ${BOLD}NOTES${NC}
@@ -153,6 +157,45 @@ case "$COMMAND" in
         ensure_env_file
         DOM="$(base_domain)"; DOM="${DOM:-${LOCAL_IP}.nip.io}"
         odoo_sso_setup "$DOM" ;;
+    scenario-init)
+        DB="${1:-}"; shift || true
+        MODULES="base"; ADMIN_PASS="${POLARI_ODOO_SCENARIO_ADMIN_PASS:-}"
+        while [ $# -gt 0 ]; do case "$1" in
+            --modules) MODULES="$2"; shift 2 ;;
+            --admin-pass) ADMIN_PASS="$2"; shift 2 ;;
+            *) shift ;;
+        esac; done
+        case "$DB" in odoo_scn_*) ;; *)
+            die "scenario DBs are odoo_scn_* ONLY (got '$DB') — the throwaway discipline protects odoo_sim/odoo_ops" ;;
+        esac
+        ensure_env_file
+        if odoo_exec odoo-postgres 'psql -U "$POSTGRES_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='"'"''"$DB"''"'"'"' 2>/dev/null | grep -q 1; then
+            log_info "$DB already exists — leaving it (scenario engine is idempotent)"
+        else
+            log_info "Creating $DB with modules: $MODULES (takes a few minutes)"
+            odoo_exec odoo 'odoo --no-http --stop-after-init -d '"$DB"' -i '"$MODULES"' --without-demo=all --db_host "$HOST" --db_port "$PORT" --db_user "$USER" --db_password "$PASSWORD"'
+        fi
+        if [ -n "$ADMIN_PASS" ]; then
+            printf 'u = env["res.users"].search([("login","=","admin")]); u.write({"password": "%s"}); env.cr.commit()\n' "$ADMIN_PASS" | \
+                odoo_exec odoo 'odoo shell --no-http -d '"$DB"' --db_host "$HOST" --db_port "$PORT" --db_user "$USER" --db_password "$PASSWORD"' >/dev/null
+            log_success "$DB ready; admin password set (match it to the backend's ODOO_SIM_RPC_PASSWORD so the scenario engine can drive)"
+        else
+            log_success "$DB ready"
+            log_warn "admin password is the fresh-install default — pass --admin-pass (or POLARI_ODOO_SCENARIO_ADMIN_PASS) matching the backend's ODOO_SIM_RPC_PASSWORD"
+        fi ;;
+    scenario-drop)
+        DB="${1:-}"
+        case "$DB" in odoo_scn_*) ;; *)
+            die "scenario-drop refuses '$DB' — odoo_scn_* ONLY (sim/ops are never dropped from here)" ;;
+        esac
+        ensure_env_file
+        BAKDIR="$POL_SUITE_ROOT/.generated/backups"; mkdir -p "$BAKDIR"
+        BAK="$BAKDIR/${DB}-final-$(date +%Y%m%d-%H%M%S).sql"
+        odoo_exec odoo-postgres 'pg_dump -U "$POSTGRES_USER" '"$DB" > "$BAK" || { rm -f "$BAK"; die "pg_dump failed for $DB — NOT dropping"; }
+        BAKSZ=$(du -k "$BAK" | awk '{print $1}')
+        [ "$BAKSZ" -gt 0 ] || { rm -f "$BAK"; die "empty dump — NOT dropping"; }
+        odoo_exec odoo-postgres 'psql -U "$POSTGRES_USER" -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='"'"''"$DB"''"'"'" -c "DROP DATABASE '"$DB"'"' >/dev/null
+        log_success "dropped $DB; final receipt: $BAK (${BAKSZ}K)" ;;
     urls)
         DOM="$(base_domain)"; DOM="${DOM:-${LOCAL_IP}.nip.io}"
         echo "  https://odoo.$DOM/web/login?db=odoo_sim   (simulations)"
