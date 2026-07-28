@@ -93,7 +93,7 @@ case "$COMMAND" in
         # not by hostname (POLARI_LOCAL_NODE matches the topology's
         # machine row for this host).
         SELF_ID=$(docker info -f '{{.Swarm.NodeID}}' 2>/dev/null)
-        [ -n "$SELF_ID" ] && docker node update --label-add "polari.machine=${POLARI_LOCAL_NODE:-staging-a}" "$SELF_ID" >/dev/null 2>&1 || true ;;
+        [ -n "$SELF_ID" ] && docker node update --label-add "polari.machine=${POLARI_LOCAL_NODE:-pol-core}" "$SELF_ID" >/dev/null 2>&1 || true ;;
     join)
         NODE=${1:?usage: pol swarm join <node>   (see pol deploy nodes)}
         require_swarm
@@ -440,7 +440,7 @@ for c in json.load(sys.stdin) or []:
         NODES_FILE="$POL_SUITE_ROOT/pol-build/manifests/nodes.yml"
         ALIAS=$(python3 -c "import sys,yaml; print((yaml.safe_load(open(sys.argv[1]))['nodes'].get(sys.argv[2]) or {}).get('ssh',''))" "$NODES_FILE" "$TO" 2>/dev/null || true)
         SALIAS=$(python3 -c "import sys,yaml; print((yaml.safe_load(open(sys.argv[1]))['nodes'].get(sys.argv[2]) or {}).get('ssh',''))" "$NODES_FILE" "$FROM" 2>/dev/null || true)
-        # '' alias = this machine (staging-a convention in nodes.yml)
+        # '' alias = this machine (pol-core convention in nodes.yml)
         run_on_target() { if [ -n "$ALIAS" ]; then ssh "$ALIAS" "$@"; else bash -c "$*"; fi; }
         run_on_source() { if [ -n "$SALIAS" ]; then ssh "$SALIAS" "$@"; else bash -c "$*"; fi; }
         MOVE=$(printf '{"kind":"%s","subject":"%s","fromMachine":"%s","toMachine":"%s","triggeredBy":"pol swarm relocate"}' "$KIND" "$SUBJECT" "$FROM" "$TO" | api POST /api/topology/move-operations | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['move']['name'] if d.get('ok') else '')")

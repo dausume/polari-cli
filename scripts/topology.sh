@@ -14,8 +14,8 @@ source "$SCRIPT_DIR/lib/log.sh"
 NODES_FILE="$POL_SUITE_ROOT/pol-build/manifests/nodes.yml"
 PACKAGES_DIR="$POL_SUITE_ROOT/topologies"
 #: The machine name the local (non-ssh) host reports as. The core
-#: seeds itself as 'staging-a'; override for a differently-named core.
-LOCAL_NODE="${POLARI_LOCAL_NODE:-staging-a}"
+#: seeds itself as 'pol-core' (the research core; renamed from staging-a 2026-07-27).
+LOCAL_NODE="${POLARI_LOCAL_NODE:-pol-core}"
 
 show_help() {
     pol_box "pol topology — topology as core-instance data"
