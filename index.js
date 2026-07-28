@@ -73,6 +73,7 @@ const commands = {
   apps:     { script: 'apps.sh',     desc: 'Polari-Apps: use-case module configs — plan/export/deploy JSON packages', aliases: ['app'], docker: true },
   allocate: { script: 'topology.sh', injectArgs: ['allocate'], desc: 'Place a module on an instance / an instance on a machine (targeted deploy)', docker: true },
   cert:     { script: 'cert.sh',     desc: 'Certs per env tier; prod: self-signed OR Let\'s Encrypt + auto-renew', aliases: ['certs', 'ca'] },
+  odoo:     { script: 'odoo.sh',     desc: 'Odoo ERP: business sims + real-ops backbone (up/init-db/backup)', aliases: ['erp'], docker: true },
   remote:   { script: 'remote.sh',   desc: 'Remote staging access over WireGuard (init/apply/up/down/status)', aliases: ['wg'] },
 };
 
