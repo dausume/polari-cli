@@ -17,6 +17,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/log.sh"
 source "$SCRIPT_DIR/lib/state.sh"
+source "$SCRIPT_DIR/lib/core-api.sh"
 
 show_help() {
     pol_box "pol swarm — swarm orchestration (isle-mesh stand-in)"
@@ -63,6 +64,14 @@ role_compose_cmd() {
 render_stack() {
     local role=$1
     local cmd; cmd=$(role_compose_cmd "$role") || die "unknown role '$role' (engines|suite|node)"
+    # mod-env-3: module enablement is topology ROWS, not a
+    # hand-maintained env string. For the node/suite roles the
+    # POLARI_MODULES baked into the stack is DERIVED from the core's
+    # ModuleAssignment rows; a pre-set env var still wins but is
+    # loudly named an override.
+    case "$role" in
+        node|suite) resolve_polari_modules "${POLARI_MODULES_INSTANCE:-prf-a}" ;;
+    esac
     # The compose bundles must exist — they do (they're the repo's root
     # files, themselves generated from pol-services/; see pol build help).
     export LOCAL_IP="${LOCAL_IP:-$(hostname -I | awk '{print $1}')}"

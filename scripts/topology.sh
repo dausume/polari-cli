@@ -39,6 +39,10 @@ ${BOLD}WRITE (rows only — deploys stay human-invoked)${NC}
                        move/enable a module (rewrites ModuleAssignment,
                        re-resolves dependency edges)
   ${CYAN}resolve${NC} [name]       recompute edge providers from assignments
+  ${CYAN}modules-env${NC} [instance]  the POLARI_MODULES an instance's rows
+                       derive (requires-closure included; default prf-a).
+                       Swarm/staging deploys read THIS — a hand-set
+                       POLARI_MODULES is a warned override
 
 ${BOLD}BUILD + RUN (top-3)${NC}
   ${CYAN}render${NC} [name]        topology rows -> pol-build/manifests/topology-<name>/
@@ -60,31 +64,11 @@ need_pyyaml() {
 }
 
 # be_call METHOD PATH  — body on stdin for POST; response on stdout.
+# Rides the shared core-api transport (POLARI_CORE_URL, else the
+# compose prf-backend OR swarm polari-node_backend container).
+source "$SCRIPT_DIR/lib/core-api.sh"
 be_call() {
-    local method=$1 path=$2
-    if [ -n "${POLARI_CORE_URL:-}" ]; then
-        if [ "$method" = "POST" ]; then
-            curl -sk -X POST -H 'Content-Type: application/json' --data-binary @- "$POLARI_CORE_URL$path"
-        else
-            curl -sk "$POLARI_CORE_URL$path"
-        fi
-    else
-        docker ps --format '{{.Names}}' | grep -qx prf-backend \
-            || die "no prf-backend container and POLARI_CORE_URL unset — start the suite (pol suite up) or point POLARI_CORE_URL at the core"
-        docker exec -i prf-backend python3 -c "
-import sys, urllib.request
-method, path = sys.argv[1], sys.argv[2]
-data = sys.stdin.buffer.read() if method == 'POST' else None
-req = urllib.request.Request('http://localhost:3000' + path,
-                             data=data, method=method,
-                             headers={'Content-Type': 'application/json'})
-try:
-    with urllib.request.urlopen(req, timeout=60) as r:
-        sys.stdout.write(r.read().decode())
-except urllib.error.HTTPError as e:
-    sys.stdout.write(e.read().decode())
-" "$method" "$path"
-    fi
+    core_api "$@" || die "no local backend container (compose prf-backend or swarm polari-node_backend) and POLARI_CORE_URL unset — start the node/suite or point POLARI_CORE_URL at the core"
 }
 
 # pretty PYTHON_SNIPPET — feeds be_call output through a formatter.
@@ -268,6 +252,19 @@ if d['disabled']: print('  disabled:', ', '.join(d['disabled']))
 for c in d['resolve']['changed']:
     print(f\"  edge {c['edge']}: {c['from']['provider'] or '(none)'} -> {c['to']['provider'] or '(none)'} [{c['to']['status']}]\")
 print('  rows updated — deploying the change stays yours:', d['suggestedCommand'])" ;;
+    modules-env)
+        INST=${1:-prf-a}
+        be_call GET "/api/topology/modules-env/$INST" | pretty "
+if not d.get('ok'):
+    print('  REFUSED:', d.get('refusal'))
+    print('  knob:', d.get('suggestion'))
+    raise SystemExit(1)
+print(f\"  {d['instance']} @ {d['topology']} — {d['count']} modules\")
+print('  assigned:', ', '.join(d['assigned']))
+for mod, why in sorted((d.get('addedByRequires') or {}).items()):
+    print(f\"  + {mod} (required by {', '.join(why)})\")
+print()
+print('  POLARI_MODULES=' + d['env'])" ;;
     resolve)
         NAME=$(resolve_name "$1"); [ -n "$NAME" ] || die "no active topology"
         echo '{}' | be_call POST "/api/topology/resolve?name=$NAME" | pretty "
