@@ -71,6 +71,7 @@ const commands = {
   registry: { script: 'registry.sh', desc: 'Service-kind accountability + interconnect map', aliases: ['reg', 'services'] },
   topology: { script: 'topology.sh', desc: 'Topology as core-instance data: pull/push/diff/report/assign', aliases: ['top', 'topo'] },
   apps:     { script: 'apps.sh',     desc: 'Polari-Apps: use-case module configs — plan/export/deploy JSON packages', aliases: ['app'], docker: true },
+  shell:    { script: 'shell.sh',    desc: 'App Store native shells: build/dist/publish artifacts + mint enrollment deep links', aliases: ['appshell'] },
   allocate: { script: 'topology.sh', injectArgs: ['allocate'], desc: 'Place a module on an instance / an instance on a machine (targeted deploy)', docker: true },
   cert:     { script: 'cert.sh',     desc: 'Certs per env tier; prod: self-signed OR Let\'s Encrypt + auto-renew', aliases: ['certs', 'ca'] },
   odoo:     { script: 'odoo.sh',     desc: 'Odoo ERP: business sims + real-ops backbone (up/init-db/backup)', aliases: ['erp'], docker: true },
