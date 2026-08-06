@@ -95,6 +95,14 @@ print(f\"apps covered: {sum(1 for a in d['apps'] if a['installable'])}/{len(d['a
             desktop-linux-x64)
                 FILE=$(ls "$SHELL_REPO"/build/dist/*.deb 2>/dev/null | tail -1)
                 KEY="polari-instance-shell/desktop-linux-x64/$(basename "$FILE")" ;;
+            android)
+                FILE="$SHELL_REPO/android/build/outputs/apk/phone/debug/android-phone-debug.apk"
+                KEY="polari-instance-shell/android/polari-shell_${VERSION}_phone.apk" ;;
+            android-vr)
+                # Quest 2 / Vive: same APK family; renders through
+                # Wolvic (required) — sideload with adb install.
+                FILE="$SHELL_REPO/android/build/outputs/apk/vr/debug/android-vr-debug.apk"
+                KEY="polari-instance-shell/android-vr/polari-shell_${VERSION}_vr.apk" ;;
             *) die "unknown platform '$PLATFORM'" ;;
         esac
         [ -f "$FILE" ] || die "no artifact at $FILE — run pol shell build/dist first"
