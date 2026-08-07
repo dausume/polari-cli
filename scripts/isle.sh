@@ -30,6 +30,8 @@ show_help() {
   ${CYAN}mock${NC}            seed the built-in MOCK isle network — every row
                   flagged; the page shows the banner at the top
   ${CYAN}matrix${NC}          the protocol matrix (the proxies ARE the policy)
+  ${CYAN}retire <device>${NC} drop a device row + its attributed rows (left the
+                  mesh, or was ingested under a wrong name)
 
 Not yet implemented (arrive with their mac phase): app packaging
 (mac-4), placement apply (mac-5), .isle url ops (mac-10).
@@ -81,11 +83,19 @@ fetch_remote() {
     ssh -o BatchMode=yes "$1" "sudo -n cat '$2' 2>/dev/null || cat '$2' 2>/dev/null" 2>/dev/null
 }
 
+# machine_name_for_local — the polari machine name of THIS host:
+# the swarm node's polari.machine label when set, else hostname.
+machine_name_for_local() {
+    local label
+    label=$(docker node inspect "$(hostname)" --format '{{index .Spec.Labels "polari.machine"}}' 2>/dev/null) || true
+    echo "${label:-$(hostname)}"
+}
+
 sync_host() {
     local host=$1 rsh
     if [ "$host" = "local" ] || [ "$host" = "$(hostname)" ]; then
         rsh=""
-        host=$(hostname)
+        host=$(machine_name_for_local)
     else
         rsh="ssh -o BatchMode=yes -o ConnectTimeout=8 $host"
         $rsh true 2>/dev/null || { log_warn "$host unreachable over SSH — skipped"; return 0; }
@@ -152,6 +162,12 @@ case "$COMMAND" in
         HOSTS=${*:-"isle-core local"}
         for h in $HOSTS; do sync_host "$h"; done
         log_success "sync done — see /display/isle-mesh or 'pol isle status'"
+        ;;
+    retire)
+        DEV=${2:?usage: pol isle retire <device>}
+        printf '{"device": "%s", "retire": true}' "$DEV" \
+            | core_api POST /api/islemesh/ingest/device | python3 -m json.tool \
+            || die "no core reachable"
         ;;
     *)
         log_warn "'pol isle $COMMAND' — not implemented yet (arrives with its mac phase; see MESH_APP_CONVERGENCE_PLAN.md)."
