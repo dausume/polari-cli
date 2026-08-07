@@ -43,12 +43,16 @@ Reference implementation: isle-core:~/Isle-Mesh (its own 'isle' CLI).
 # machine. REAL data: the mock_network key is never written here.
 gather_device() {
     local host=$1 rsh=$2
-    local links agent
+    local links agent router
     links=$($rsh ip -br link 2>/dev/null | awk '$1!~/^(lo|veth|br-|docker|virbr)/ {print $1" "$2}') || true
-    agent=$($rsh docker ps --format '{{.Names}}' 2>/dev/null | grep -cx isle-agent || true)
-    LINKS="$links" python3 - "$host" "${agent:-0}" <<'EOF'
+    # the agent container is isle-vlan-agent (isle-agent = older name)
+    agent=$($rsh docker ps --format '{{.Names}}' 2>/dev/null | grep -cE '^isle(-vlan)?-agent$' || true)
+    # router VM: detectable where passwordless sudo is granted;
+    # 'unknown' (not false) where it is not — never fake a fact.
+    router=$($rsh sudo -n virsh list --state-running 2>/dev/null | grep -c isle-router || echo unknown)
+    LINKS="$links" python3 - "$host" "${agent:-0}" "${router:-unknown}" <<'EOF'
 import json, os, sys
-host, agent = sys.argv[1], sys.argv[2].strip()
+host, agent, router = sys.argv[1], sys.argv[2].strip(), sys.argv[3].strip()
 uplinks = []
 for line in os.environ.get('LINKS', '').splitlines():
     parts = line.split()
@@ -63,17 +67,18 @@ for line in os.environ.get('LINKS', '').splitlines():
         continue
     uplinks.append({'interface': iface, 'kind': kind,
                     'link_up': state == 'UP'})
-print(json.dumps({
-    'device': host,
-    'facts': {
-        'machine_name': host,
-        'agent_present': agent not in ('', '0'),
-        'notes': 'pol isle sync: interfaces are CANDIDATE uplinks '
-                 '(kind guessed from name; isle membership not yet '
-                 'confirmed)',
-    },
-    'uplinks': uplinks,
-}))
+facts = {
+    'machine_name': host,
+    'agent_present': agent not in ('', '0'),
+    'notes': 'pol isle sync: interfaces are CANDIDATE uplinks '
+             '(kind guessed from name; isle membership not yet '
+             'confirmed)',
+}
+if router not in ('unknown', ''):
+    facts['hosts_router'] = router != '0'
+    facts['router_running'] = router != '0'
+print(json.dumps({'device': host, 'facts': facts,
+                  'uplinks': uplinks}))
 EOF
 }
 
@@ -117,15 +122,21 @@ print(json.dumps({"device": sys.argv[1],
     else
         log_warn "$host: no readable agent registry.json (agent not set up, or needs sudo) — skipped"
     fi
-    local confs
-    confs=$($rsh "sudo -n ls /etc/isle-mesh/agent/configs 2>/dev/null || ls /etc/isle-mesh/agent/configs 2>/dev/null" 2>/dev/null | grep '\.conf$' || true)
+    # fragment dir moved: the vlan-agent renders to nginx/configs
+    # (observable path per its own logs); plain configs/ = older
+    # layout. First dir with .conf files wins.
+    local confdir confs=""
+    for confdir in /etc/isle-mesh/agent/nginx/configs /etc/isle-mesh/agent/configs; do
+        confs=$($rsh "sudo -n ls $confdir 2>/dev/null || ls $confdir 2>/dev/null" 2>/dev/null | grep '\.conf$' || true)
+        [ -n "$confs" ] && break
+    done
     if [ -n "$confs" ]; then
-        log_info "sync $host: nginx fragments ($(echo "$confs" | wc -l))"
+        log_info "sync $host: nginx fragments ($(echo "$confs" | wc -l) from $confdir)"
         local tmp; tmp=$(mktemp)
         printf '{"device": "%s", "fragments": {' "$host" > "$tmp"
         local first=1 c body
         for c in $confs; do
-            body=$(fetch_remote "$host" "/etc/isle-mesh/agent/configs/$c") || continue
+            body=$(fetch_remote "$host" "$confdir/$c") || continue
             [ -n "$body" ] || continue
             [ $first -eq 1 ] || printf ',' >> "$tmp"
             first=0
