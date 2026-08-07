@@ -27,6 +27,7 @@ REPOS=(
   "polari-rf-node/polari-platform-angular"
   "polari-rf-node"
   "polari-cli"
+  "polari-app-shell"
   "political-scorecard-node/political-scorecard-backend"
   "political-scorecard-node/political-scorecard-frontend"
   "political-scorecard-node"
