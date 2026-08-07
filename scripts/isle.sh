@@ -49,7 +49,16 @@ gather_device() {
     agent=$($rsh docker ps --format '{{.Names}}' 2>/dev/null | grep -cE '^isle(-vlan)?-agent$' || true)
     # router VM: detectable where passwordless sudo is granted;
     # 'unknown' (not false) where it is not — never fake a fact.
-    router=$($rsh sudo -n virsh list --state-running 2>/dev/null | grep -c isle-router || echo unknown)
+    # NB grep -c prints 0 AND exits 1 — the exact 0\nunknown trap
+    # isle's own join.sh fixed (their commit 8130095); test the
+    # virsh call separately.
+    local vout
+    vout=$($rsh sudo -n virsh list --state-running 2>/dev/null) || vout=""
+    if [ -z "$vout" ]; then
+        router=unknown
+    else
+        router=$(printf '%s' "$vout" | grep -c isle-router || true)
+    fi
     LINKS="$links" python3 - "$host" "${agent:-0}" "${router:-unknown}" <<'EOF'
 import json, os, sys
 host, agent, router = sys.argv[1], sys.argv[2].strip(), sys.argv[3].strip()
