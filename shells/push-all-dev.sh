@@ -2,11 +2,17 @@
 # push-all-dev.sh — push every repo's dev branch, innermost-first,
 # with the safety checks a submodule forest needs.
 #
-#   ./push-all-dev.sh          dry run: report what WOULD push
-#   ./push-all-dev.sh --push   actually push, aborting on first
-#                              failure (order keeps pointers valid:
-#                              a superproject never pushes before
-#                              the submodules its pointers name)
+#   ./push-all-dev.sh              dry run: report what WOULD push
+#   ./push-all-dev.sh --push      actually push, aborting on first
+#                                 failure (order keeps pointers valid:
+#                                 a superproject never pushes before
+#                                 the submodules its pointers name)
+#   ./push-all-dev.sh --with-isle  ALSO push the Isle-Mesh repo on
+#                                 isle-core over SSH (dev). Combine
+#                                 with --push to actually push it;
+#                                 alone it dry-runs the isle side too.
+#
+# Env: ISLE_HOST (default isle-core), ISLE_REPO (default ~/Isle-Mesh).
 #
 # Checks per repo, before anything pushes:
 #   - repo is ON dev with a CLEAN tree (no silent leftovers)
@@ -35,7 +41,15 @@ REPOS=(
 )
 
 DO_PUSH=0
-[ "${1:-}" = "--push" ] && DO_PUSH=1
+WITH_ISLE=0
+for arg in "$@"; do
+  case "$arg" in
+    --push) DO_PUSH=1 ;;
+    --with-isle) WITH_ISLE=1 ;;
+  esac
+done
+ISLE_HOST="${ISLE_HOST:-isle-core}"
+ISLE_REPO="${ISLE_REPO:-Isle-Mesh}"   # relative to the SSH login home
 
 bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
 ok()    { printf '  \033[92m%s\033[0m\n' "$*"; }
@@ -106,6 +120,39 @@ if [ $errors -gt 0 ]; then
 they are"
   exit 1
 fi
+
+# ---- optional: the Isle-Mesh repo on isle-core, over SSH ----
+if [ $WITH_ISLE -eq 1 ]; then
+  bold "Isle-Mesh @ $ISLE_HOST:~/$ISLE_REPO (dev)"
+  isle_state=$(ssh "$ISLE_HOST" "cd \"$ISLE_REPO\" 2>/dev/null && \
+    printf '%s|%s|%s' \
+      \"\$(git branch --show-current)\" \
+      \"\$(git status --porcelain | wc -l | tr -d ' ')\" \
+      \"\$(git rev-list --count origin/dev..dev 2>/dev/null || echo new)\"" \
+    2>/dev/null)
+  ibranch="${isle_state%%|*}"; irest="${isle_state#*|}"
+  idirty="${irest%%|*}"; iahead="${irest#*|}"
+  if [ -z "$isle_state" ]; then
+    fail "could not reach $ISLE_HOST or ~/$ISLE_REPO"
+    exit 1
+  elif [ "$ibranch" != "dev" ]; then
+    fail "isle-core NOT on dev (on '$ibranch') — fix there first"
+    exit 1
+  elif [ "$idirty" != "0" ]; then
+    fail "isle-core tree not clean ($idirty entries) — commit there first"
+    exit 1
+  fi
+  ok "on dev, clean, $iahead ahead of origin/dev (new = branch not yet on origin)"
+  if [ $DO_PUSH -eq 1 ]; then
+    if ssh "$ISLE_HOST" "cd \"$ISLE_REPO\" && git push -u origin dev"; then
+      ok "pushed (isle-core)"
+    else
+      fail "isle-core push FAILED"
+      exit 1
+    fi
+  fi
+fi
+
 [ $DO_PUSH -eq 0 ] \
   && bold "dry run clean — rerun with --push to publish"
 exit 0
