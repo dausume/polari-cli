@@ -58,6 +58,43 @@ fail()  { printf '  \033[91m%s\033[0m\n' "$*"; }
 
 errors=0
 
+# ---- artifact guard ----------------------------------------------
+# No build artifacts in git. They are large, they change on every
+# rebuild, and git keeps every version forever — one 28MB router image
+# cost ~170MB of history before anyone noticed. Worse, a built VM image
+# or deb can carry secrets (host keys, shadow, TLS keys). Catch them
+# here, BEFORE they reach a public origin, where removing them means
+# rewriting shared history.
+#
+# Each artifact type is supposed to have a fetch-or-build path instead
+# (see Isle-Mesh's get-router-image.sh for the pattern).
+ARTIFACT_MAX_BYTES="${ARTIFACT_MAX_BYTES:-1048576}"   # 1 MB
+ARTIFACT_RE='\.(qcow2|img|img\.gz|iso|ipk|deb|apk|rpm|jar|war|tar|tar\.gz|tgz|zip|so|dylib|bin)$'
+# gradle-wrapper.jar is the sanctioned exception: it must be committed
+# for the wrapper to bootstrap at all.
+ARTIFACT_ALLOW_RE='gradle/wrapper/gradle-wrapper\.jar$'
+
+# Prints offending "size path" lines; empty output = clean.
+find_artifacts() {
+  git -C "$1" ls-tree -r -l HEAD 2>/dev/null \
+    | awk -v max="$ARTIFACT_MAX_BYTES" '$4 ~ /^[0-9]+$/ && $4 > max {print $4, $5}' \
+    | grep -E "$ARTIFACT_RE" \
+    | grep -vE "$ARTIFACT_ALLOW_RE" || true
+}
+
+check_artifacts() {
+  local path="$1" found
+  found=$(find_artifacts "$path")
+  [ -z "$found" ] && return 0
+  fail "build artifacts tracked in git (>$((ARTIFACT_MAX_BYTES / 1024))KB) — refusing to push:"
+  printf '%s\n' "$found" | while read -r size file; do
+    fail "    $((size / 1024))KB  $file"
+  done
+  fail "    untrack them (git rm --cached) + .gitignore, and give each"
+  fail "    a fetch-or-build path. Override for this run: ARTIFACT_MAX_BYTES=huge"
+  return 1
+}
+
 check_repo() {
   local rel="$1" path="$SUITE/$1"
   local branch dirty ahead
@@ -76,6 +113,10 @@ check_repo() {
   ahead=$(git -C "$path" rev-list --count origin/dev..dev \
           2>/dev/null || echo '?')
   ok "on dev, clean, $ahead commit(s) ahead of origin/dev"
+  if ! check_artifacts "$path"; then
+    errors=$((errors + 1))
+    return 1
+  fi
   # pointer coherence: every submodule pointer must be contained
   # in that submodule's dev. (Process substitution, not a pipe —
   # a piped while runs in a subshell and its failure exit would
@@ -143,6 +184,19 @@ if [ $WITH_ISLE -eq 1 ]; then
     exit 1
   fi
   ok "on dev, clean, $iahead ahead of origin/dev (new = branch not yet on origin)"
+  # same artifact guard, run on the isle side
+  isle_artifacts=$(ssh "$ISLE_HOST" "cd \"$ISLE_REPO\" && \
+    git ls-tree -r -l HEAD 2>/dev/null \
+    | awk -v max=$ARTIFACT_MAX_BYTES '\$4 ~ /^[0-9]+\$/ && \$4 > max {print \$4, \$5}' \
+    | grep -E '$ARTIFACT_RE' | grep -vE '$ARTIFACT_ALLOW_RE'" 2>/dev/null || true)
+  if [ -n "$isle_artifacts" ]; then
+    fail "build artifacts tracked in Isle-Mesh — refusing to push:"
+    printf '%s\n' "$isle_artifacts" | while read -r size file; do
+      fail "    $((size / 1024))KB  $file"
+    done
+    exit 1
+  fi
+  ok "no tracked build artifacts"
   if [ $DO_PUSH -eq 1 ]; then
     if ssh "$ISLE_HOST" "cd \"$ISLE_REPO\" && git push -u origin dev"; then
       ok "pushed (isle-core)"
