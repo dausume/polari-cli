@@ -70,6 +70,10 @@ case "$ROLE" in
         fi
         # ICE must advertise the HOST LAN IP, not the container (mtg-0)
         export LIVEKIT_NODE_IP="${LIVEKIT_NODE_IP:-$(hostname -I | awk '{print $1}')}"
+        # polari-link is external-by-declaration but only the twin builder
+        # creates it — ensure it here so livekit stands alone honestly
+        docker network inspect polari-link >/dev/null 2>&1 \
+            || docker network create polari-link >/dev/null
         CMD="docker compose -p pol-livekit -f docker-compose.livekit.yml"
         case "$ACTION" in
             up)    $CMD up -d "$@"; record_build compose livekit staging; log_success "pol-livekit up (node-ip $LIVEKIT_NODE_IP; media 50000-50049/udp direct)" ;;
