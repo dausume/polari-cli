@@ -68,8 +68,12 @@ case "$ROLE" in
             chmod 600 livekit/keys.env
             log_success "generated livekit/keys.env (gitignored — rotate by deleting it)"
         fi
-        # ICE must advertise the HOST LAN IP, not the container (mtg-0)
-        export LIVEKIT_NODE_IP="${LIVEKIT_NODE_IP:-$(hostname -I | awk '{print $1}')}"
+        # ICE must advertise the HOST LAN IP, not the container (mtg-0).
+        # NOT `hostname -I` — docker bridges list first there (172.20.0.1
+        # was advertised on the first live up; caught by the log line).
+        # The default-route source address is the honest LAN answer.
+        export LIVEKIT_NODE_IP="${LIVEKIT_NODE_IP:-$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+')}"
+        [[ -n "$LIVEKIT_NODE_IP" ]] || die "cannot derive the LAN IP (no default route?) — export LIVEKIT_NODE_IP"
         # polari-link is external-by-declaration but only the twin builder
         # creates it — ensure it here so livekit stands alone honestly
         docker network inspect polari-link >/dev/null 2>&1 \
