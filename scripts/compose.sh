@@ -21,6 +21,7 @@ ${BOLD}ROLES${NC}
   ${CYAN}suite${NC}     combined pol-* infra + prf + psc   (suite root compose trio)
   ${CYAN}node${NC}      standalone PRF node                (rf-node compose family)
   ${CYAN}engines${NC}   msci-engines worker, independent   (docker-compose.msci-engines.yml)
+  ${CYAN}livekit${NC}   pol-livekit media server           (docker-compose.livekit.yml)
   ${CYAN}dask${NC}      dask scheduler + workers           (docker-compose.dask.yml)
   ${CYAN}twin${NC}      instance-B twin                    (via twin-polari-build.sh)
   ${CYAN}remote-worker${NC} engines/dask worker for ANOTHER machine (remote-worker.yml)
@@ -53,6 +54,29 @@ case "$ROLE" in
             ps)    $CMD ps "$@" ;;
             logs)  $CMD logs -f "$@" ;;
             *)     die "pol compose engines: up|down|build|ps|logs" ;;
+        esac ;;
+    livekit)
+        # mtg-1: self-hosted LiveKit media server (LIVEKIT_COLLABORATION_
+        # PLAN.md v2). Deliberate placement on a host with the bandwidth;
+        # never part of the default up. Media = direct /udp publish;
+        # signalling TLS terminates at prf-proxy (livekit.prf.<ip>.nip.io).
+        ACTION=$1; shift || true
+        cd "$POL_RF_NODE"
+        # first up: generate the API key/secret (gitignored — public repos)
+        if [[ ! -f livekit/keys.env ]]; then
+            echo "LIVEKIT_KEYS=LK$(openssl rand -hex 6): $(openssl rand -hex 24)" > livekit/keys.env
+            chmod 600 livekit/keys.env
+            log_success "generated livekit/keys.env (gitignored — rotate by deleting it)"
+        fi
+        # ICE must advertise the HOST LAN IP, not the container (mtg-0)
+        export LIVEKIT_NODE_IP="${LIVEKIT_NODE_IP:-$(hostname -I | awk '{print $1}')}"
+        CMD="docker compose -p pol-livekit -f docker-compose.livekit.yml"
+        case "$ACTION" in
+            up)    $CMD up -d "$@"; record_build compose livekit staging; log_success "pol-livekit up (node-ip $LIVEKIT_NODE_IP; media 50000-50049/udp direct)" ;;
+            down)  $CMD down "$@" ;;
+            ps)    $CMD ps "$@" ;;
+            logs)  $CMD logs -f "$@" ;;
+            *)     die "pol compose livekit: up|down|ps|logs" ;;
         esac ;;
     dask)
         ACTION=$1; shift || true
