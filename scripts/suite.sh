@@ -50,7 +50,7 @@ compose_cmd() {
 }
 
 ensure_staging_setup() {
-    export LOCAL_IP="${LOCAL_IP:-$(hostname -I | awk '{print $1}')}"
+    export LOCAL_IP="${LOCAL_IP:-$(lan_ip)}"
     # Re-run setup when there's no env-file yet, or when the operator EXPLICITLY
     # asks for a different base domain via POLARI_STAGING_DOMAIN this run.
     # IMPORTANT: if POLARI_STAGING_DOMAIN is unset, "want" must default to
@@ -73,18 +73,18 @@ case "$COMMAND" in
     up)
         [ "$ENV_MODE" = "staging" ] && ensure_staging_setup
         [ "$ENV_MODE" = "dev" ] && [ ! -f .env ] && { log_info "No suite .env — running security setup"; bash setup-polari-security.sh dev --env-only --skip-subs; }
-        export LOCAL_IP="${LOCAL_IP:-$(hostname -I | awk '{print $1}')}"
+        export LOCAL_IP="${LOCAL_IP:-$(lan_ip)}"
         $(compose_cmd) up -d "$@"
         record_build compose suite "$ENV_MODE"
         log_success "suite up ($ENV_MODE). 'pol suite ps' to check health; 'pol start/rebuild/stop' now shorthand this."
         [ "$ENV_MODE" = "staging" ] && remote_access_hint || true ;;
     down)  export LOCAL_IP="${LOCAL_IP:-127.0.0.1}"; $(compose_cmd) down "$@" ;;
-    build) export LOCAL_IP="${LOCAL_IP:-$(hostname -I | awk '{print $1}')}"; $(compose_cmd) build "$@" ;;
+    build) export LOCAL_IP="${LOCAL_IP:-$(lan_ip)}"; $(compose_cmd) build "$@" ;;
     ps)    export LOCAL_IP="${LOCAL_IP:-127.0.0.1}"; $(compose_cmd) ps "$@" ;;
     logs)  export LOCAL_IP="${LOCAL_IP:-127.0.0.1}"; $(compose_cmd) logs -f "$@" ;;
     urls)
         DOM="$(grep -E '^BASE_DOMAIN=' "$POL_SUITE_ROOT/.generated/.env.staging" 2>/dev/null | cut -d= -f2)"
-        DOM="${DOM:-${LOCAL_IP:-$(hostname -I | awk '{print $1}')}.nip.io}"
+        DOM="${DOM:-${LOCAL_IP:-$(lan_ip)}.nip.io}"
         echo "  https://$DOM               (hub)"
         echo "  https://prf.$DOM      https://api.prf.$DOM"
         echo "  https://psc.$DOM      https://api.psc.$DOM"

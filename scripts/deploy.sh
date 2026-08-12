@@ -76,7 +76,7 @@ EOF
         SSH=$(node_field "$NODE" ssh)
         DIR=$(node_field "$NODE" repo_dir)
         URL=$(node_field "$NODE" repo_url)
-        CORE_IP="${LOCAL_IP:-$(hostname -I | awk '{print $1}')}"
+        CORE_IP="${LOCAL_IP:-$(lan_ip)}"
 
         case "$ROLE" in
             engines)

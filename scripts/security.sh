@@ -64,7 +64,7 @@ case "$COMMAND" in
     setup)      exec bash "$POL_SUITE_ROOT/setup-polari-security.sh" "${1:-dev}" "${@:2}" ;;
     node-setup)
         MODE="${1:-staging}"
-        export LOCAL_IP="${LOCAL_IP:-$(hostname -I | awk '{print $1}')}"
+        export LOCAL_IP="${LOCAL_IP:-$(lan_ip)}"
         log_info "LOCAL_IP=$LOCAL_IP"
         case "$MODE" in
             staging) exec bash "$POL_RF_NODE/staging-setup.sh" ;;

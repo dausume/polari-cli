@@ -8,6 +8,7 @@
 # Provides: RED GREEN YELLOW BLUE CYAN BOLD DIM NC
 #           log_info log_success log_warn log_error die
 #           pol_box "Title"        (boxed section header)
+#           lan_ip                 (this host's LAN address)
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
@@ -23,6 +24,25 @@ pol_box() {
     echo -e "${BOLD}╔══════════════════════════════════════════════════════════╗${NC}"
     printf  "${BOLD}║  %-56s║${NC}\n" "$title"
     echo -e "${BOLD}╚══════════════════════════════════════════════════════════╝${NC}"
+}
+
+# THE host's LAN address — the address other machines can reach.
+#
+# ⚠ NOT `hostname -I | awk '{print $1}'`: that lists every interface and
+# DOCKER BRIDGES CAN COME FIRST. Caught live 2026-08-12 — creating one
+# compose network reordered it, and the next `pol swarm deploy node`
+# stamped 172.20.0.1 into every ${LOCAL_IP} knob (MSCI_ENGINES_URL and
+# the meeting server's URLs), i.e. addresses no other machine can dial.
+# The default-route source address is the honest answer, and it is what
+# staging-setup.sh's detect_ip has always used; hostname -I stays only
+# as the last-resort fallback.
+lan_ip() {
+    local ip=''
+    command -v ip >/dev/null 2>&1 && \
+        ip=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[\d.]+' | head -1)
+    [ -z "$ip" ] && command -v hostname >/dev/null 2>&1 && \
+        ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    echo "$ip"
 }
 
 # Suite root: exported by the pol dispatcher; fall back for direct runs.

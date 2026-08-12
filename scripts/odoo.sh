@@ -100,7 +100,7 @@ base_domain() {
 }
 
 cd "$POL_SUITE_ROOT"
-export LOCAL_IP="${LOCAL_IP:-$(hostname -I | awk '{print $1}')}"
+export LOCAL_IP="${LOCAL_IP:-$(lan_ip)}"
 case "$COMMAND" in
     up)
         ensure_credentials

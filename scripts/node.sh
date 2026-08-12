@@ -50,7 +50,7 @@ compose_cmd() {
 }
 
 ensure_setup() {
-    export LOCAL_IP="${LOCAL_IP:-$(hostname -I | awk '{print $1}')}"
+    export LOCAL_IP="${LOCAL_IP:-$(lan_ip)}"
     # env files are gitignored + generated: heal a fresh clone.
     if [ ! -f "$POL_RF_NODE/prf-mariadb/mariadb.env" ] || \
        { [ "$ENV_MODE" = "staging" ] && [ ! -f "$POL_RF_NODE/.generated/.env.staging" ]; }; then
@@ -61,11 +61,11 @@ ensure_setup() {
 
 cd "$POL_RF_NODE"
 case "$COMMAND" in
-    up)    ensure_setup; export LOCAL_IP="${LOCAL_IP:-$(hostname -I | awk '{print $1}')}"; $(compose_cmd) up -d "$@";
+    up)    ensure_setup; export LOCAL_IP="${LOCAL_IP:-$(lan_ip)}"; $(compose_cmd) up -d "$@";
            record_build compose node "$ENV_MODE"
            log_success "node up ($ENV_MODE) — 'pol start/rebuild/stop' now shorthand this" ;;
     down)  export LOCAL_IP="${LOCAL_IP:-127.0.0.1}"; $(compose_cmd) down "$@" ;;
-    build) export LOCAL_IP="${LOCAL_IP:-$(hostname -I | awk '{print $1}')}"; $(compose_cmd) build "$@" ;;
+    build) export LOCAL_IP="${LOCAL_IP:-$(lan_ip)}"; $(compose_cmd) build "$@" ;;
     ps)    export LOCAL_IP="${LOCAL_IP:-127.0.0.1}"; $(compose_cmd) ps "$@" ;;
     logs)  export LOCAL_IP="${LOCAL_IP:-127.0.0.1}"; $(compose_cmd) logs -f "$@" ;;
     help|-h|--help|"") show_help ;;

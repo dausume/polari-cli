@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/log.sh"
 
 SHELL_REPO="$POL_SUITE_ROOT/polari-app-shell"
-API_BASE="${POLARI_CORE_URL:-https://api.prf.$(hostname -I | awk '{print $1}').nip.io}"
+API_BASE="${POLARI_CORE_URL:-https://api.prf.$(lan_ip).nip.io}"
 KC_ENV="$POL_SUITE_ROOT/polari-rf-node/prf-keycloak/prf-keycloak-admin.env"
 
 usage() {

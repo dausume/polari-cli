@@ -97,7 +97,7 @@ do_init() {
     # *.nip.io staging URLs (which resolve to the LAN IP) keep working remotely
     # with the existing OIDC/hostname config — no staging reconfiguration.
     # Forwarding stays OFF, so the host only serves its OWN LAN IP: still confined.
-    [ -z "$LAN_IP" ] && LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    [ -z "$LAN_IP" ] && LAN_IP="$(lan_ip)"
     local ALLOWED="${SRV_IP}/32"
     [ -n "$LAN_IP" ] && [ "$LAN_IP" != "$SRV_IP" ] && ALLOWED="${SRV_IP}/32, ${LAN_IP}/32"
     mkdir -p "$OUT"; chmod 700 "$OUT"

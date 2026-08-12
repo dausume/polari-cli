@@ -77,7 +77,7 @@ cmd_env() {
     local cur_env
     cur_env=$(grep -A1 "^current-setup:" "$POL_RF_NODE/setup.yml" 2>/dev/null | grep "env:" | awk '{print $2}')
     echo "  rf-node setup.yml current-setup.env : ${cur_env:-<unreadable>}"
-    echo "  LOCAL_IP (env)                      : ${LOCAL_IP:-<unset — autodetects to $(hostname -I | awk '{print $1}')>}"
+    echo "  LOCAL_IP (env)                      : ${LOCAL_IP:-<unset — autodetects to $(lan_ip)>}"
     echo "  suite .env (compose interpolation)  : $([ -f "$POL_SUITE_ROOT/.env" ] && echo present || echo 'MISSING — pol security setup')"
 }
 

@@ -74,7 +74,7 @@ render_stack() {
     esac
     # The compose bundles must exist — they do (they're the repo's root
     # files, themselves generated from pol-services/; see pol build help).
-    export LOCAL_IP="${LOCAL_IP:-$(hostname -I | awk '{print $1}')}"
+    export LOCAL_IP="${LOCAL_IP:-$(lan_ip)}"
     mkdir -p "$POL_SUITE_ROOT/.generated"
     local out="$POL_SUITE_ROOT/.generated/stack-$role.yml"
     # compose config resolves env_files/interpolation; stackify.py then
@@ -112,7 +112,7 @@ case "$COMMAND" in
         if docker node ls --format '{{.Hostname}} {{json .}}' 2>/dev/null | grep -q "polari.machine=$NODE"; then
             log_success "$NODE appears joined already (docker node ls)"
         fi
-        MANAGER_IP="${LOCAL_IP:-$(hostname -I | awk '{print $1}')}"
+        MANAGER_IP="${LOCAL_IP:-$(lan_ip)}"
         TOKEN=$(docker swarm join-token -q worker)
         REMOTE_HOSTNAME=$(ssh -o ConnectTimeout=8 "$ALIAS" hostname) || die "ssh to $ALIAS failed — pol deploy preflight $NODE"
         if ssh "$ALIAS" "docker info 2>/dev/null | grep -q 'Swarm: active'"; then
