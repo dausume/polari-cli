@@ -22,6 +22,7 @@ ${BOLD}ROLES${NC}
   ${CYAN}node${NC}      standalone PRF node                (rf-node compose family)
   ${CYAN}engines${NC}   msci-engines worker, independent   (docker-compose.msci-engines.yml)
   ${CYAN}livekit${NC}   pol-livekit media server           (docker-compose.livekit.yml)
+  ${CYAN}reticulum${NC} pol-reticulum mesh sidecar         (docker-compose.reticulum.yml)
   ${CYAN}dask${NC}      dask scheduler + workers           (docker-compose.dask.yml)
   ${CYAN}twin${NC}      instance-B twin                    (via twin-polari-build.sh)
   ${CYAN}remote-worker${NC} engines/dask worker for ANOTHER machine (remote-worker.yml)
@@ -85,6 +86,28 @@ case "$ROLE" in
             ps)    $CMD ps "$@" ;;
             logs)  $CMD logs -f "$@" ;;
             *)     die "pol compose livekit: up|down|ps|logs" ;;
+        esac ;;
+    reticulum)
+        # ret-2: pol-reticulum mesh sidecar (RETICULUM_TRANSPORT_PLAN.md).
+        # Fifth walk of the optional-worker pattern; never in the default
+        # up. THE LICENCE BOUNDARY: rns/lxmf (pinned to the last MIT
+        # releases — RETICULUM_LICENCE_GATE.md) exist only inside this
+        # container. No LAN-IP knob needed: no ICE, no advertised
+        # addresses — peers dial the published 4242 directly.
+        ACTION=$1; shift || true
+        cd "$POL_RF_NODE"
+        # polari-link is external-by-declaration — ensure it here so the
+        # sidecar stands alone honestly (the livekit precedent).
+        docker network inspect polari-link >/dev/null 2>&1 \
+            || docker network create polari-link >/dev/null
+        CMD="docker compose -p pol-reticulum -f docker-compose.reticulum.yml"
+        case "$ACTION" in
+            up)    $CMD up -d --build "$@"; record_build compose reticulum staging; log_success "pol-reticulum up (RNS TCP :4242, status :4285 — set RETICULUM_URL=http://<host>:4285 on the backend)" ;;
+            down)  $CMD down "$@" ;;
+            build) $CMD build "$@" ;;
+            ps)    $CMD ps "$@" ;;
+            logs)  $CMD logs -f "$@" ;;
+            *)     die "pol compose reticulum: up|down|build|ps|logs" ;;
         esac ;;
     dask)
         ACTION=$1; shift || true
