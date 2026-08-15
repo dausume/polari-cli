@@ -25,6 +25,12 @@ usage() {
                         the active topology: upserts the definition,
                         writes ModuleAssignment rows, re-resolves.
                         --plan prints the plan and touches NOTHING.
+  ${CYAN}shell <app> [--output <dir>]${NC}
+                        sep-3: make an isle app from ANY Polari app —
+                        creates/reuses the scope=app AppShellDefinition,
+                        fetches the canonical registration, and builds
+                        the launcher .deb (materialized NOW, at install
+                        time — never a shelf of artifacts).
 
 Backend is reached via \$POLARI_CORE_URL when set, else docker exec
 into the local prf-backend. Container deploys stay human-invoked
@@ -60,6 +66,21 @@ except urllib.error.HTTPError as e:
 }
 
 pretty() { python3 -c "import json,sys; d=json.load(sys.stdin); $1"; }
+
+# Service-account bearer for authoring endpoints (same machine path
+# as pol shell publish; a browser user does this from the store page).
+bearer() {
+    local kc_env="$POL_SUITE_ROOT/polari-rf-node/prf-keycloak/prf-keycloak-admin.env"
+    [ -f "$kc_env" ] || die "no $kc_env — run pol security setup / staging-setup first"
+    local secret kc_host api_base
+    api_base="${POLARI_CORE_URL:-https://api.prf.$(lan_ip).nip.io}"
+    secret=$(grep '^KEYCLOAK_POLARI_BACKEND_CLIENT_SECRET' "$kc_env" | cut -d= -f2)
+    kc_host="${api_base/api.prf./auth.prf.}"
+    kc_host="${kc_host/api./auth.}"
+    curl -sk -X POST "$kc_host/realms/Polari/protocol/openid-connect/token" \
+        -d "grant_type=client_credentials&client_id=polari-backend&client_secret=$secret" \
+        | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("access_token") or exit("no token: " + json.dumps(d)))'
+}
 
 CMD=${1:-help}; shift || true
 case "$CMD" in
@@ -120,5 +141,43 @@ print(f\"applied '{d['app']}' to topology '{d['topology']}'\")
 [print(f\"  + {c['module']} -> {c['instance']}\") for c in d['created']]
 [print(f\"  = {s['module']}: {s['reason']}\") for s in d['skipped']]
 print(f\"  next (human-run): {d['suggestedCommand']}\")" ;;
+    shell)
+        # sep-3: the ONE command — app row -> AppShellDefinition
+        # (scope=app) -> canonical registration -> launcher .deb.
+        APP=${1:-}; [ -n "$APP" ] || die "usage: pol apps shell <app> [--output <dir>]"
+        shift || true
+        OUT=""
+        while [ $# -gt 0 ]; do case "$1" in
+            --output) OUT="$2"; shift 2 ;;
+            *) die "unknown arg: $1" ;;
+        esac; done
+        API_BASE="${POLARI_CORE_URL:-https://api.prf.$(lan_ip).nip.io}"
+        BUILDER="$POL_SUITE_ROOT/polari-app-shell/shells/build-launcher-deb.sh"
+        [ -f "$BUILDER" ] || die "no $BUILDER — is polari-app-shell checked out?"
+        TOK=$(bearer)
+        CONV=$(curl -sk -X POST "$API_BASE/api/appstore/shell-from-app" \
+            -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+            -d "{\"appName\": \"$APP\"}")
+        echo "$CONV" | pretty "
+import sys
+if not d.get('ok'): sys.exit(print(d.get('error', d)) or 1)
+print(('created' if d['created'] else 'reusing')
+      + f\" shell row '{d['shell']}' (scope=app, startRoute \"
+      + repr(d['startRoute'] or '/app/' + d['appName']) + ')')"
+        SHELL_NAME=$(echo "$CONV" | pretty "print(d['shell'])")
+        REG=$(mktemp --suffix=.json)
+        trap 'rm -f "$REG"' EXIT
+        curl -sk "$API_BASE/api/appstore/$SHELL_NAME/registration?download=1" -o "$REG"
+        python3 - "$REG" <<'PYEOF' || die "registration fetch failed (not a v1 document)"
+import json, sys
+doc = json.load(open(sys.argv[1]))
+assert doc.get('kind') == 'polari-shell-registration', doc
+PYEOF
+        DEB_OUT="${OUT:-$POL_SUITE_ROOT/polari-app-shell/dist}"
+        STAGE_DIR=$(mktemp -d)
+        POLARI_SHELL_BUILD="$STAGE_DIR" bash "$BUILDER" \
+            --registration "$REG" --kind polari --output "$DEB_OUT"
+        rm -rf "$STAGE_DIR"
+        log_info "the deb materialized NOW (decision 7) — install with the printed apt line" ;;
     help|*) usage ;;
 esac
