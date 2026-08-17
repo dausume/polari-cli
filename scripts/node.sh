@@ -61,7 +61,13 @@ ensure_setup() {
 
 cd "$POL_RF_NODE"
 case "$COMMAND" in
-    up)    ensure_setup; export LOCAL_IP="${LOCAL_IP:-$(lan_ip)}"; $(compose_cmd) up -d "$@";
+    up)    ensure_setup; export LOCAL_IP="${LOCAL_IP:-$(lan_ip)}"
+           # deploy-time security gate: fail closed on placeholder secrets
+           # for prod, warn for the other tiers (pol security help).
+           case "$ENV_MODE" in
+               staging|prod) bash "$SCRIPT_DIR/security.sh" gate "$ENV_MODE" ;;
+           esac
+           $(compose_cmd) up -d "$@";
            record_build compose node "$ENV_MODE"
            log_success "node up ($ENV_MODE) — 'pol start/rebuild/stop' now shorthand this" ;;
     down)  export LOCAL_IP="${LOCAL_IP:-127.0.0.1}"; $(compose_cmd) down "$@" ;;

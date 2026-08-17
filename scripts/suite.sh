@@ -74,6 +74,11 @@ case "$COMMAND" in
         [ "$ENV_MODE" = "staging" ] && ensure_staging_setup
         [ "$ENV_MODE" = "dev" ] && [ ! -f .env ] && { log_info "No suite .env — running security setup"; bash setup-polari-security.sh dev --env-only --skip-subs; }
         export LOCAL_IP="${LOCAL_IP:-$(lan_ip)}"
+        # deploy-time security gate: fail closed on placeholder secrets for
+        # prod, warn for staging (pol security help).
+        case "$ENV_MODE" in
+            staging|prod) bash "$SCRIPT_DIR/security.sh" gate "$ENV_MODE" ;;
+        esac
         $(compose_cmd) up -d "$@"
         record_build compose suite "$ENV_MODE"
         log_success "suite up ($ENV_MODE). 'pol suite ps' to check health; 'pol start/rebuild/stop' now shorthand this."
