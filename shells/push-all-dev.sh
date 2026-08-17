@@ -140,31 +140,13 @@ check_repo() {
 
 bold "== dev push sweep ($([ $DO_PUSH -eq 1 ] \
      && echo PUSHING || echo DRY RUN)) =="
-for rel in "${REPOS[@]}"; do
-  bold "$rel"
-  if ! check_repo "$rel"; then
-    continue
-  fi
-  if [ $DO_PUSH -eq 1 ]; then
-    if git -C "$SUITE/$rel" push origin dev; then
-      ok "pushed"
-    else
-      fail "PUSH FAILED — stopping (inner repos already pushed \
-are safe; rerun after fixing)"
-      exit 1
-    fi
-  fi
-done
 
-if [ $errors -gt 0 ]; then
-  fail "$errors repo(s) not ready — nothing should push until \
-they are"
-  exit 1
-fi
-
-# ---- optional: the Isle-Mesh repo on isle-core, over SSH ----
+# ---- Isle-Mesh FIRST (innermost-first now applies to it too) -----
+# The suite carries an Isle-Mesh submodule pointer, so the isle-core
+# repo must publish BEFORE the suite does — same rule as every other
+# submodule, just pushed over SSH from its home box.
 if [ $WITH_ISLE -eq 1 ]; then
-  bold "Isle-Mesh @ $ISLE_HOST:~/$ISLE_REPO (dev)"
+  bold "Isle-Mesh @ $ISLE_HOST:~/$ISLE_REPO (dev) — pushes before the suite"
   isle_state=$(ssh "$ISLE_HOST" "cd \"$ISLE_REPO\" 2>/dev/null && \
     printf '%s|%s|%s' \
       \"\$(git branch --show-current)\" \
@@ -184,7 +166,6 @@ if [ $WITH_ISLE -eq 1 ]; then
     exit 1
   fi
   ok "on dev, clean, $iahead ahead of origin/dev (new = branch not yet on origin)"
-  # same artifact guard, run on the isle side
   isle_artifacts=$(ssh "$ISLE_HOST" "cd \"$ISLE_REPO\" && \
     git ls-tree -r -l HEAD 2>/dev/null \
     | awk -v max=$ARTIFACT_MAX_BYTES '\$4 ~ /^[0-9]+\$/ && \$4 > max {print \$4, \$5}' \
@@ -200,11 +181,49 @@ if [ $WITH_ISLE -eq 1 ]; then
   if [ $DO_PUSH -eq 1 ]; then
     if ssh "$ISLE_HOST" "cd \"$ISLE_REPO\" && git push -u origin dev"; then
       ok "pushed (isle-core)"
+      git -C "$SUITE/Isle-Mesh" fetch -q origin dev 2>/dev/null || true
     else
       fail "isle-core push FAILED"
       exit 1
     fi
   fi
+fi
+
+for rel in "${REPOS[@]}"; do
+  bold "$rel"
+  if ! check_repo "$rel"; then
+    continue
+  fi
+  # the suite's Isle-Mesh pointer must be PUBLIC before the suite is —
+  # ssh-pushed via --with-isle, so refuse a suite push without it
+  # unless the pointer already lives on the submodule's origin/dev.
+  if [ "$rel" = "." ] && [ -e "$SUITE/Isle-Mesh/.git" ]; then
+    isle_ptr=$(git -C "$SUITE" submodule status Isle-Mesh 2>/dev/null \
+               | awk '{print $1}' | tr -d '+-')
+    if ! git -C "$SUITE/Isle-Mesh" merge-base --is-ancestor \
+         "$isle_ptr" origin/dev 2>/dev/null; then
+      if [ $WITH_ISLE -eq 0 ]; then
+        fail "suite Isle-Mesh pointer ${isle_ptr:0:8} is NOT on its origin/dev — rerun with --with-isle (isle-core pushes first)"
+        errors=$((errors + 1))
+        continue
+      fi
+    fi
+  fi
+  if [ $DO_PUSH -eq 1 ]; then
+    if git -C "$SUITE/$rel" push origin dev; then
+      ok "pushed"
+    else
+      fail "PUSH FAILED — stopping (inner repos already pushed \
+are safe; rerun after fixing)"
+      exit 1
+    fi
+  fi
+done
+
+if [ $errors -gt 0 ]; then
+  fail "$errors repo(s) not ready — nothing should push until \
+they are"
+  exit 1
 fi
 
 [ $DO_PUSH -eq 0 ] \
