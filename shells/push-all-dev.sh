@@ -27,8 +27,12 @@ set -u
 SUITE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # innermost-first: submodules before every superproject that
-# points at them.
+# points at them. Isle-Mesh is a first-class suite submodule with its
+# own GitHub origin — since the 2026-08-17 purge, the suite checkout IS
+# its working copy (--with-isle remains for a box that still keeps a
+# separate ~/Isle-Mesh clone).
 REPOS=(
+  "Isle-Mesh"
   "polari-rf-node/polari-framework"
   "polari-rf-node/polari-platform-angular"
   "polari-rf-node"
@@ -194,16 +198,19 @@ for rel in "${REPOS[@]}"; do
   if ! check_repo "$rel"; then
     continue
   fi
-  # the suite's Isle-Mesh pointer must be PUBLIC before the suite is —
-  # ssh-pushed via --with-isle, so refuse a suite push without it
-  # unless the pointer already lives on the submodule's origin/dev.
+  # the suite's Isle-Mesh pointer must be PUBLIC before the suite is.
+  # Isle-Mesh sits first in REPOS, so by the time "." pushes its
+  # origin/dev already carries the pointer — this check catches a
+  # sweep that skipped it (or a dry run against a stale origin).
   if [ "$rel" = "." ] && [ -e "$SUITE/Isle-Mesh/.git" ]; then
     isle_ptr=$(git -C "$SUITE" submodule status Isle-Mesh 2>/dev/null \
                | awk '{print $1}' | tr -d '+-')
     if ! git -C "$SUITE/Isle-Mesh" merge-base --is-ancestor \
          "$isle_ptr" origin/dev 2>/dev/null; then
-      if [ $WITH_ISLE -eq 0 ]; then
-        fail "suite Isle-Mesh pointer ${isle_ptr:0:8} is NOT on its origin/dev — rerun with --with-isle (isle-core pushes first)"
+      if [ $DO_PUSH -eq 0 ]; then
+        warn "suite Isle-Mesh pointer ${isle_ptr:0:8} not on its origin/dev yet — the sweep pushes Isle-Mesh first, so this resolves during --push"
+      else
+        fail "suite Isle-Mesh pointer ${isle_ptr:0:8} is NOT on its origin/dev — did the Isle-Mesh push fail above?"
         errors=$((errors + 1))
         continue
       fi
