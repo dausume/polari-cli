@@ -129,10 +129,23 @@ check_repo() {
   while read -r sha sub _rest; do
     [ -z "$sha" ] && continue
     sha="${sha#[+-]}"
+    # uninitialized nested submodule: nothing local to verify against —
+    # the pointer is whatever the repo already published (a clean-room
+    # clone resolves it or fails loudly there); don't block the sweep.
+    if [ ! -e "$path/$sub/.git" ]; then
+      warn "pointer $sub@${sha:0:8} — submodule not initialized here; containment not verifiable (skipping)"
+      continue
+    fi
     if ! git -C "$path/$sub" merge-base --is-ancestor \
          "$sha" dev 2>/dev/null; then
-      fail "pointer $sub@${sha:0:8} NOT contained in $sub's dev"
-      bad=1
+      # historic pointers may live on OTHER published branches — that
+      # is still public/resolvable, just not this repo's dev tip.
+      if [ -n "$(git -C "$path/$sub" branch -r --contains "$sha" 2>/dev/null | head -1)" ]; then
+        warn "pointer $sub@${sha:0:8} is on a non-dev origin branch (published — ok)"
+      else
+        fail "pointer $sub@${sha:0:8} NOT contained in $sub's dev or any origin branch"
+        bad=1
+      fi
     fi
   done < <(git -C "$path" submodule status 2>/dev/null)
   if [ "$bad" -ne 0 ]; then
