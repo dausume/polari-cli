@@ -53,6 +53,7 @@ function resolveSuiteRoot() {
 // into compose's two main roles.
 const commands = {
   security: { script: 'security.sh', desc: 'Credential + cert setup (self-generating)', aliases: ['sec'] },
+  purge:    { script: 'purge.sh',    desc: 'Remove ALL polari/isle runtime from this dev box (backups first; code/odoo spared)', docker: true },
   start:    { script: 'lifecycle.sh', injectArgs: ['start'],   desc: 'Bring the last configured build up',  docker: true },
   rebuild:  { script: 'lifecycle.sh', injectArgs: ['rebuild'], desc: 'Rebuild the last configured build from scratch', docker: true },
   stop:     { script: 'lifecycle.sh', injectArgs: ['stop'],    desc: 'Stop the last configured build',      docker: true },
