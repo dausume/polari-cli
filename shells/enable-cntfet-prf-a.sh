@@ -51,6 +51,19 @@ for d in $(curl -sk "$API/api/cntfet/devices" | python3 -c 'import sys,json; pri
   curl -sk -X POST -H 'Content-Type: application/json' -d '{"action":"sample-fields"}' "$API/api/cntfet/devices/$d" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("ok"), d.get("rows", d.get("error","")), "rows")'
 done
 
+echo "== 5b. derive the silicon FETs (sol-gel + thermal oxide) so they compete"
+for d in $(curl -sk "$API/api/sifet/devices" | python3 -c 'import sys,json; print(" ".join(x["name"] for x in json.load(sys.stdin).get("devices",[])))'); do
+  printf "   %-30s derive: " "$d"
+  curl -sk -X POST -H 'Content-Type: application/json' -d '{"action":"derive"}' "$API/api/sifet/devices/$d" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("ok"), d.get("error",""))'
+done
+
+echo "== 5c. fp surfaces: power, taxonomy, logic proof, refinement"
+curl -sk "$API/api/cntfet/device/$DEV/power" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  power: static W", (d.get("fet") or {}).get("static_w"), "| failing limits:", d.get("failing"), d.get("error",""))'
+curl -sk "$API/api/cntfet/device/$DEV/taxonomy" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  taxonomy: suited to", (d.get("optimization") or {}).get("suited_to"), "| partner:", (d.get("complementary") or {}).get("partner", d.get("complementary")), d.get("error",""))'
+curl -sk "$API/api/cntfet/cells/logic" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  cells: allProven", d.get("allProven"), "| cells:", len(d.get("combinational",[])), d.get("error",""))'
+curl -sk "$API/api/sifet/refinement" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  refinement routes:", [(r.get("name"), r.get("openness"), (r.get("simulation") or {}).get("grade")) for r in d.get("routes",[])] if isinstance(d.get("routes"), list) else list(d)[:6])'
+curl -sk "$API/api/cntfet/device/$DEV/compare" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  cross-tech ranking:", [(r["device"], r["score"]) for r in d.get("ranking",[])][:6])'
+
 echo "== 6. fv surfaces on $DEV"
 curl -sk "$API/api/cntfet/device/$DEV/regimes?vg=0.6&vd=0.6" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  regimes:", d.get("verdict") or d.get("error"))'
 curl -sk "$API/api/cntfet/device/$DEV/transport?vg=0.6&vd=0.6" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  transport:", (d.get("regime") or {}).get("name"), "T=", d.get("transmission"), "top:", d.get("topContributor"), d.get("error",""))'
@@ -61,3 +74,4 @@ echo "== pages"
 echo "   https://prf.192.168.0.210.nip.io/display/cntfet"
 echo "   https://prf.192.168.0.210.nip.io/display/cntfet-score-$DEV     (competitive ranking)"
 echo "   https://prf.192.168.0.210.nip.io/display/cntfet-detail-$DEV    (characteristic explorer + 3-D field scenes)"
+echo "   https://prf.192.168.0.210.nip.io/display/cntfet-cells           (logic diagrams + schematics, step-through proofs)"
