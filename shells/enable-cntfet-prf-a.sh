@@ -43,6 +43,21 @@ import sys, json
 d = json.load(sys.stdin)
 print("  compare ok:", d.get("ok"), "| ranking:", [(r["device"], r["score"], r["valid"]) for r in d.get("ranking", [])], "| err:", d.get("error"))' || true
 
+echo "== 5. derive every comparator FET (unproven → real candidates) + sample the field scenes"
+for d in $(curl -sk "$API/api/cntfet/devices" | python3 -c 'import sys,json; print(" ".join(x["name"] for x in json.load(sys.stdin)["devices"]))'); do
+  printf "   %-24s derive: " "$d"
+  curl -sk -X POST -H 'Content-Type: application/json' -d '{"action":"derive"}' "$API/api/cntfet/devices/$d" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("ok"), d.get("error",""))'
+  printf "   %-24s fields: " "$d"
+  curl -sk -X POST -H 'Content-Type: application/json' -d '{"action":"sample-fields"}' "$API/api/cntfet/devices/$d" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("ok"), d.get("rows", d.get("error","")), "rows")'
+done
+
+echo "== 6. fv surfaces on $DEV"
+curl -sk "$API/api/cntfet/device/$DEV/regimes?vg=0.6&vd=0.6" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  regimes:", d.get("verdict") or d.get("error"))'
+curl -sk "$API/api/cntfet/device/$DEV/transport?vg=0.6&vd=0.6" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  transport:", (d.get("regime") or {}).get("name"), "T=", d.get("transmission"), "top:", d.get("topContributor"), d.get("error",""))'
+curl -sk "$API/api/cntfet/device/$DEV/characteristics" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  characteristics:", len(d.get("characteristics",[])), d.get("error",""))'
+curl -sk "$API/api/cntfet/device/$DEV/characteristic/potential-at-instant" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  potential views:", [(v["title"], v["status"]) for v in d.get("views",[])], d.get("error",""))'
+
 echo "== pages"
 echo "   https://prf.192.168.0.210.nip.io/display/cntfet"
-echo "   https://prf.192.168.0.210.nip.io/display/cntfet-score-$DEV"
+echo "   https://prf.192.168.0.210.nip.io/display/cntfet-score-$DEV     (competitive ranking)"
+echo "   https://prf.192.168.0.210.nip.io/display/cntfet-detail-$DEV    (characteristic explorer + 3-D field scenes)"
