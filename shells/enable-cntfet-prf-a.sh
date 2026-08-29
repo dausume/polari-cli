@@ -10,11 +10,23 @@ cd "$(dirname "$0")/../.."          # suite root
 API=https://api.prf.192.168.0.210.nip.io
 DEV=${1:-cnt-aligned-s1}
 
-echo "== 1. assign cntfet -> prf-a (ModuleAssignment rows)"
+echo "== 1. assign cntfet + sifet -> prf-a (ModuleAssignment rows)"
 pol topology assign cntfet prf-a
+pol topology assign sifet prf-a
 pol topology modules-env prf-a
 
 echo "== 2. render + deploy the node stack (derived POLARI_MODULES)"
+# The node compose interpolates these from the PROCESS env at render
+# time (neither the suite .env nor pol state carries them):
+#  - CNTFET_ENGINES_URL: cntfet compute (ngspice/OpenVAF/OpenSTA/kwant)
+#    delegates to the cnt-engines swarm worker; unset = the backend
+#    tries LOCAL binaries first (ngspice exists in the image, OpenVAF
+#    does not) and cell characterization fails half-way.
+#  - POL_STACK_CONSTRAINTS: pin the backend to this machine — its bind
+#    mounts (ca/root_ca.crt) only exist here; without it swarm bounces
+#    the task across nodes ("invalid mount config") until it lands.
+export CNTFET_ENGINES_URL="${CNTFET_ENGINES_URL:-http://192.168.0.210:9700}"
+export POL_STACK_CONSTRAINTS="${POL_STACK_CONSTRAINTS:-backend=node.labels.polari.machine==pol-core}"
 pol swarm deploy node
 
 echo "== 3. wait for the backend (boot ~4 min)"
