@@ -76,6 +76,14 @@ else
   echo "  skipped (set CHARACTERIZE=1 to run; cell-scores / cell-power refuse by name until a run exists)"
 fi
 
+echo "== 5c''. open library (proven-free cells on proven-free devices) + ladder cell rung as data"
+curl -sk "$API/api/cntfet/open-library" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  libraries:", [(l.get("name"), l.get("open_source_ready"), l.get("library_proof_status")) for l in d.get("libraries", d.get("items", []))], "| ready:", d.get("ready"))'
+if [ "${CHARACTERIZE:-0}" = 1 ]; then
+  curl -sk -m 3600 -X POST -H 'Content-Type: application/json' -d '{"action":"characterize","drives":[1]}' "$API/api/cntfet/open-library/polari-open-si-planar-90" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  open-library characterize (Si planar pair):", d.get("ok"), d.get("error") or d.get("refusal") or "", "| cells", len(d.get("cells",[])))'
+fi
+curl -sk -X POST -H 'Content-Type: application/json' -d '{"action":"ladder-update","apply":true}' "$API/api/cntfet/open-library/polari-open-si-planar-90" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  ladder cell rung:", (d.get("rung") or d).get("status") if isinstance(d, dict) else d)'
+curl -sk "$API/api/cntfet/cells/coverage" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  cells x FETs coverage:", [(x["device"], x["covered"], "/", x["cellsTotal"]) for x in d.get("devices",[])][:6])'
+
 echo "== 5c. fp surfaces: power, taxonomy, logic proof, refinement"
 curl -sk "$API/api/cntfet/device/$DEV/power" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  power: static W", (d.get("fet") or {}).get("static_w"), "| failing limits:", d.get("failing"), d.get("error",""))'
 curl -sk "$API/api/cntfet/device/$DEV/taxonomy" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  taxonomy: suited to", (d.get("optimization") or {}).get("suited_to"), "| partner:", (d.get("complementary") or {}).get("partner", d.get("complementary")), d.get("error",""))'
