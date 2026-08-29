@@ -69,6 +69,13 @@ for d in $(curl -sk "$API/api/sifet/devices" | python3 -c 'import sys,json; prin
   curl -sk -X POST -H 'Content-Type: application/json' -d '{"action":"derive"}' "$API/api/sifet/devices/$d" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("ok"), d.get("error",""))'
 done
 
+echo "== 5c'. cell-library characterization on the engines worker (opt-in: CHARACTERIZE=1; ~30 min for 24 cells at drive 1)"
+if [ "${CHARACTERIZE:-0}" = 1 ]; then
+  curl -sk -m 3600 -X POST -H 'Content-Type: application/json' -d '{"action":"characterize-cells","drives":[1]}' "$API/api/cntfet/devices/$DEV" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  characterize:", d.get("ok"), d.get("error") or d.get("refusal") or "", "| cells", len(d.get("cells",[])), "| staGate", (d.get("staGate") or {}).get("accepted"), "| failures", len(d.get("failures",[])))'
+else
+  echo "  skipped (set CHARACTERIZE=1 to run; cell-scores / cell-power refuse by name until a run exists)"
+fi
+
 echo "== 5c. fp surfaces: power, taxonomy, logic proof, refinement"
 curl -sk "$API/api/cntfet/device/$DEV/power" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  power: static W", (d.get("fet") or {}).get("static_w"), "| failing limits:", d.get("failing"), d.get("error",""))'
 curl -sk "$API/api/cntfet/device/$DEV/taxonomy" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  taxonomy: suited to", (d.get("optimization") or {}).get("suited_to"), "| partner:", (d.get("complementary") or {}).get("partner", d.get("complementary")), d.get("error",""))'
