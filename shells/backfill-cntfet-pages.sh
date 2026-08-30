@@ -51,5 +51,85 @@ print(f'backfilled {len(updated)} page(s), unchanged {len(same)}, '
       f'missing on node (seed on next boot) {len(missing)}, diff-mismatch {bad}')
 for n in updated: print('  updated', n)
 for n in missing: print('  missing', n)
+
+# fg-6: sync the fet-2d-* SimSpaceDefinition rows (their definitions
+# changed when the gray-viewport scale bug was fixed) — same
+# PUT-diff-verify pattern as the pages; new fet-3d-* rows seed at boot.
+def live_scenes():
+    data = json.loads(curl(f'{API}/SimSpaceDefinition'))
+    return {r['name']: r for w in data for b in w.get('SimSpaceDefinition', [])
+            for r in b.get('data', [])}
+
+try:
+    from cntfet.cnt_parts_svg import SEED_FET_2D_SCENES
+    from sifet.si_pages_seed import SI_DEVICE_NAMES as _sin
+    scene_seeds = SEED_FET_2D_SCENES(names + list(_sin))
+except ImportError as exc:
+    scene_seeds = []
+    print(f'scene seeds unavailable ({exc}) — skipping scene sync')
+sc_live = live_scenes()
+sc_updated, sc_same, sc_missing = [], [], []
+for s in scene_seeds:
+    row = sc_live.get(s['name'])
+    if row is None:
+        sc_missing.append(s['name']); continue
+    if json.loads(row.get('definition') or '{}') == json.loads(s['definition']):
+        sc_same.append(s['name']); continue
+    pid = row.get('id') or row.get('polariId')
+    curl('-X', 'PUT', f'{API}/SimSpaceDefinition', '--form-string', f'polariId={pid}',
+         '--form-string', 'updateData=' + json.dumps(
+             {'definition': s['definition'],
+              'viewport_json': s['viewport_json'],
+              'description': s['description']}))
+    sc_updated.append(s['name'])
+print(f'scenes: backfilled {len(sc_updated)}, unchanged {len(sc_same)}, '
+      f'missing (seed on next boot) {len(sc_missing)}')
+
+# fg-2: the per-device pages the generic fet / fet-detail ones
+# replace — ALWAYS listed, deleted only with CONFIRM_DELETE_LEGACY=yes
+# (plan decision 2), and only after the generic pages are live.
+import os
+from cntfet.cnt_compare import legacy_page_names
+try:
+    from sifet.si_pages_seed import SI_DEVICE_NAMES
+except ImportError:
+    SI_DEVICE_NAMES = []
+legacy = [n for n in legacy_page_names(names + list(SI_DEVICE_NAMES))
+          if n in after]
+# fg-6 scene rename: the old cnt-device-3d-* rows the fet-3d-* ones
+# replace — same list-always / delete-only-confirmed treatment.
+legacy_scenes = sorted(n for n in live_scenes()
+                       if n.startswith('cnt-device-3d-'))
+print(f'legacy 3-D scene rows (renamed to fet-3d-*): '
+      f'{len(legacy_scenes)}')
+for n in legacy_scenes: print('  legacy-scene', n)
+if legacy_scenes and os.environ.get('CONFIRM_DELETE_LEGACY') == 'yes':
+    sl = live_scenes()
+    for n in legacy_scenes:
+        pid = sl[n].get('id') or sl[n].get('polariId')
+        curl('-X', 'DELETE', f'{API}/SimSpaceDefinition',
+             '--form-string', 'targetInstance=' + json.dumps({'id': pid}))
+    left = [n for n in legacy_scenes if n in live_scenes()]
+    print(f'deleted {len(legacy_scenes) - len(left)} legacy scene(s); '
+          f'still live: {left or "none"}')
+generic_live = all(n in after for n in ('fet', 'fet-detail'))
+print(f'legacy per-device pages live: {len(legacy)} '
+      f'(generic pages live: {generic_live})')
+for n in legacy: print('  legacy', n)
+if legacy and os.environ.get('CONFIRM_DELETE_LEGACY') == 'yes':
+    if not generic_live:
+        print('  REFUSING to delete: the generic fet/fet-detail rows '
+              'are not live yet (roll the image first)')
+        sys.exit(1)
+    for n in legacy:
+        pid = after[n].get('id') or after[n].get('polariId')
+        curl('-X', 'DELETE', f'{API}/DisplayDefinition',
+             '--form-string', 'targetInstance=' + json.dumps({'id': pid}))
+    remaining = [n for n in legacy if n in live_rows()]
+    print(f'deleted {len(legacy) - len(remaining)} legacy page(s); '
+          f'still live: {remaining or "none"}')
+elif legacy:
+    print('  (kept — re-run with CONFIRM_DELETE_LEGACY=yes after '
+          'verifying the generic pages in the browser)')
 sys.exit(1 if bad else 0)
 EOF
