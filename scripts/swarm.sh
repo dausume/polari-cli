@@ -40,6 +40,9 @@ ${BOLD}STACKS${NC}   (roles: engines | suite | node — see notes)
 
 ${BOLD}NOTES${NC}
   engines  safe alongside the compose stacks (own port) — the proving role
+  cnt-engines  the microchip (cntfet) engines worker (:9700, dist-1) —
+           build + ship first: docker compose -f docker-compose.cnt-engines.yml
+           build && docker save prf-cnt-engines:staging | ssh <node> docker load
   suite    CONFLICTS with a running compose suite (ports 80/443) — stop
            the compose stack first (pol suite down)
   secrets  v1 inlines generated env values via 'docker compose config';
@@ -55,6 +58,7 @@ require_swarm() {
 role_compose_cmd() {
     case "$1" in
         engines) echo "docker compose -f $POL_RF_NODE/docker-compose.msci-engines.yml" ;;
+        cnt-engines) echo "docker compose -f $POL_RF_NODE/docker-compose.cnt-engines.yml" ;;
         node)    echo "docker compose -f $POL_RF_NODE/docker-compose.staging-nip.yml" ;;
         suite)   echo "docker compose -f $POL_SUITE_ROOT/docker-compose.staging-nip.yml --env-file $POL_SUITE_ROOT/.generated/.env.staging" ;;
         *) return 1 ;;
@@ -63,7 +67,7 @@ role_compose_cmd() {
 
 render_stack() {
     local role=$1
-    local cmd; cmd=$(role_compose_cmd "$role") || die "unknown role '$role' (engines|suite|node)"
+    local cmd; cmd=$(role_compose_cmd "$role") || die "unknown role '$role' (engines|cnt-engines|suite|node)"
     # mod-env-3: module enablement is topology ROWS, not a
     # hand-maintained env string. For the node/suite roles the
     # POLARI_MODULES baked into the stack is DERIVED from the core's
@@ -151,11 +155,11 @@ print(urllib.request.urlopen(req, timeout=15).read().decode())" \
         require_swarm
         docker swarm join-token worker; docker swarm join-token manager ;;
     render)
-        render_stack "${1:?role required (engines|suite|node)}" ;;
+        render_stack "${1:?role required (engines|cnt-engines|suite|node)}" ;;
     deploy)
-        ROLE=${1:?role required (engines|suite|node)}
+        ROLE=${1:?role required (engines|cnt-engines|suite|node)}
         require_swarm
-        if [ "$ROLE" != "engines" ] && docker ps --format '{{.Names}}' | grep -qE '^(pol-proxy|prf-proxy)$'; then
+        if [ "$ROLE" != "engines" ] && [ "$ROLE" != "cnt-engines" ] && docker ps --format '{{.Names}}' | grep -qE '^(pol-proxy|prf-proxy)$'; then
             die "a compose $ROLE stack is running — its published ports conflict. Stop it first (pol suite down / pol node down), then re-deploy."
         fi
         render_stack "$ROLE"

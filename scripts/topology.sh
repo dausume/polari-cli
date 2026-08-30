@@ -473,11 +473,15 @@ for c in json.load(sys.stdin) or []:
                     [ -n "$MOVE" ] && printf '{"name":"%s","status":"verified"}' "$MOVE" | be_call POST /api/topology/move-operations/finish >/dev/null || true
                     docker service ps "$SVC" --format '{{.Name}}\t{{.Node}}\t{{.CurrentState}}' | head -3
                     log_success "graceful relocation $FROM -> $WHERE complete (MoveOperation ${MOVE:-unreceipted})"
-                elif [ "$GNAME" = "engines-stack" ]; then
+                elif [ "$GNAME" = "engines-stack" ] || [ "$GNAME" = "cnt-engines-stack" ]; then
                     # swarm distributes CONFIG, not images — sync the
                     # locally-built image to the target node first
                     ALIAS=$(python3 -c "import sys,yaml; print((yaml.safe_load(open(sys.argv[1]))['nodes'].get(sys.argv[2]) or {}).get('ssh',''))" "$NODES_FILE" "$WHERE" 2>/dev/null || true)
-                    IMG="prf-msci-engines:staging"
+                    if [ "$GNAME" = "cnt-engines-stack" ]; then
+                        IMG="prf-cnt-engines:staging"; ROLE="cnt-engines"; STACK="polari-cnt-engines"
+                    else
+                        IMG="prf-msci-engines:staging"; ROLE="engines"; STACK="polari-engines"
+                    fi
                     if [ -n "$ALIAS" ]; then
                         if ! ssh "$ALIAS" "docker image inspect $IMG" >/dev/null 2>&1; then
                             log_info "syncing $IMG to $WHERE (docker save | ssh docker load — one-time)"
@@ -493,9 +497,9 @@ for s in (doc or {}).get('stacks', []):
         svc = s['source'].replace('docker-compose.', '').replace('.yml', '')
         out.append(svc + '=' + s['placement'].replace(' ', ''))
 print(' '.join(out))" "$STACKS")
-                    log_info "deploying engines stack with constraints: $CONSTRAINTS"
-                    POL_STACK_CONSTRAINTS="$CONSTRAINTS" pol swarm deploy engines || die "targeted deploy failed"
-                    docker stack ps polari-engines --format '{{.Name}}\t{{.Node}}\t{{.CurrentState}}' | head -5
+                    log_info "deploying $ROLE stack with constraints: $CONSTRAINTS"
+                    POL_STACK_CONSTRAINTS="$CONSTRAINTS" pol swarm deploy "$ROLE" || die "targeted deploy failed"
+                    docker stack ps "$STACK" --format '{{.Name}}\t{{.Node}}\t{{.CurrentState}}' | head -5
                 elif [ -n "$GREMOTE" ]; then
                     log_warn "'$WHAT' is a compose group on a remote machine — drive it with: pol deploy run $WHERE --role <r> (push branches first; nodes pull GitHub)"
                 else

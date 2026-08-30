@@ -34,6 +34,7 @@ ${BOLD}INDEPENDENT SERVICE DEPLOYS${NC}
     pol compose node up backend          just the PRF backend
     pol compose suite build psc-backend  rebuild one image
     pol compose engines up               the engines worker alone
+    pol compose cnt-engines up           the microchip engines worker alone (:9700)
   (compose starts declared dependencies automatically.)
 
 ${BOLD}SHORTCUTS${NC}  'pol node …' ≡ 'pol compose node …',  'pol suite …' ≡ 'pol compose suite …'
@@ -55,6 +56,21 @@ case "$ROLE" in
             ps)    $CMD ps "$@" ;;
             logs)  $CMD logs -f "$@" ;;
             *)     die "pol compose engines: up|down|build|ps|logs" ;;
+        esac ;;
+    cnt-engines)
+        # dist-1: the microchip (cntfet) engines worker — ngspice-46 +
+        # OpenVAF + OpenSTA + kwant behind :9700. Vendor inputs staged
+        # by cnt-engines/fetch-vendor.sh (gitignored).
+        ACTION=$1; shift || true
+        cd "$POL_RF_NODE"
+        CMD="docker compose -p cnt-engines -f docker-compose.cnt-engines.yml"
+        case "$ACTION" in
+            up)    ./cnt-engines/fetch-vendor.sh; $CMD up -d "$@"; record_build compose cnt-engines staging; log_success "cnt-engines worker up (independent deploy; :9700)" ;;
+            down)  $CMD down "$@" ;;
+            build) ./cnt-engines/fetch-vendor.sh; $CMD build "$@" ;;
+            ps)    $CMD ps "$@" ;;
+            logs)  $CMD logs -f "$@" ;;
+            *)     die "pol compose cnt-engines: up|down|build|ps|logs" ;;
         esac ;;
     livekit)
         # mtg-1: self-hosted LiveKit media server (LIVEKIT_COLLABORATION_
