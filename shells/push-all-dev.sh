@@ -4,6 +4,9 @@
 #
 #   ./push-all-dev.sh              dry run: report what WOULD push
 #   ./push-all-dev.sh --push      actually push, aborting on first
+#   --skip-modules                 skip the polari-module-* subtree re-publish
+#                                 (after polari-framework pushes, stale module
+#                                 subtrees are split + pushed to their repos)
 #                                 failure (order keeps pointers valid:
 #                                 a superproject never pushes before
 #                                 the submodules its pointers name)
@@ -46,10 +49,12 @@ REPOS=(
 
 DO_PUSH=0
 WITH_ISLE=0
+SKIP_MODULES=0
 for arg in "$@"; do
   case "$arg" in
     --push) DO_PUSH=1 ;;
     --with-isle) WITH_ISLE=1 ;;
+    --skip-modules) SKIP_MODULES=1 ;;
   esac
 done
 ISLE_HOST="${ISLE_HOST:-isle-core}"
@@ -79,6 +84,64 @@ ARTIFACT_RE='\.(qcow2|img|img\.gz|iso|ipk|deb|apk|rpm|jar|war|tar|tar\.gz|tgz|zi
 ARTIFACT_ALLOW_RE='gradle/wrapper/gradle-wrapper\.jar$'
 
 # Prints offending "size path" lines; empty output = clean.
+# ── module subtrees ───────────────────────────────────────────────────
+# Every modules/<m> with a repo in polari-modules.json is ALSO its own
+# public project (polari-module-<m>); the in-tree copy is authoritative.
+# After polari-framework pushes, compare each module's subtree (tree
+# hash of HEAD:modules/<m>) with the module repo's main and re-publish
+# only the stale ones (subtree split + push). Dry run just reports.
+# Skip with --skip-modules.
+publish_module_subtrees() {
+  local fw="$SUITE/polari-rf-node/polari-framework"
+  local reg="$fw/modules/polari-modules.json"
+  [ -f "$reg" ] || { warn "no module registry — skipping subtrees"; return 0; }
+  local stale=() fresh=0 unreachable=() failed=()
+  while IFS=$'\t' read -r mod path repo; do
+    [ -n "$repo" ] || continue
+    [ -d "$fw/$path" ] || continue
+    local local_tree remote_tree
+    local_tree=$(git -C "$fw" rev-parse "HEAD:$path" 2>/dev/null) || continue
+    if git -C "$fw" fetch -q "$repo" main 2>/dev/null; then
+      remote_tree=$(git -C "$fw" rev-parse FETCH_HEAD^{tree} 2>/dev/null)
+    else
+      remote_tree=""; unreachable+=("$mod")
+    fi
+    if [ "$local_tree" = "$remote_tree" ]; then
+      fresh=$((fresh + 1)); continue
+    fi
+    stale+=("$mod")
+    if [ $DO_PUSH -eq 1 ]; then
+      local br="_split-$mod"
+      git -C "$fw" branch -D "$br" >/dev/null 2>&1 || true
+      if git -C "$fw" subtree split --prefix="$path" -b "$br" >/dev/null 2>&1 \
+         && git -C "$fw" push -q "$repo" "$br:main"; then
+        ok "module $mod -> ${repo##*/} (re-published)"
+      else
+        fail "module $mod: subtree publish FAILED ($repo)"; failed+=("$mod")
+      fi
+      git -C "$fw" branch -D "$br" >/dev/null 2>&1 || true
+    fi
+  done < <(python3 - "$reg" <<'PYEOF'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+for name, e in sorted(doc.get('modules', {}).items()):
+    print(f"{name}\t{e.get('path') or 'modules/' + name}\t{e.get('repo') or ''}")
+PYEOF
+)
+  if [ $DO_PUSH -eq 1 ]; then
+    ok "module subtrees: $fresh up to date, ${#stale[@]} re-published, ${#failed[@]} failed"
+    [ ${#failed[@]} -eq 0 ] || return 1
+  else
+    if [ ${#stale[@]} -eq 0 ]; then
+      ok "module subtrees: all $fresh up to date with their polari-module-* repos"
+    else
+      warn "module subtrees STALE (re-published on --push): ${stale[*]}"
+    fi
+  fi
+  [ ${#unreachable[@]} -eq 0 ] || warn "module repos unreachable/empty: ${unreachable[*]}"
+  return 0
+}
+
 find_artifacts() {
   git -C "$1" ls-tree -r -l HEAD 2>/dev/null \
     | awk -v max="$ARTIFACT_MAX_BYTES" '$4 ~ /^[0-9]+$/ && $4 > max {print $4, $5}' \
@@ -229,9 +292,15 @@ for rel in "${REPOS[@]}"; do
       fi
     fi
   fi
+  if [ $DO_PUSH -eq 0 ] && [ "$rel" = "polari-rf-node/polari-framework" ] && [ $SKIP_MODULES -eq 0 ]; then
+    publish_module_subtrees
+  fi
   if [ $DO_PUSH -eq 1 ]; then
     if git -C "$SUITE/$rel" push origin dev; then
       ok "pushed"
+      if [ "$rel" = "polari-rf-node/polari-framework" ] && [ $SKIP_MODULES -eq 0 ]; then
+        publish_module_subtrees || { fail "module subtree publish failed — stopping"; exit 1; }
+      fi
     else
       fail "PUSH FAILED — stopping (inner repos already pushed \
 are safe; rerun after fixing)"
