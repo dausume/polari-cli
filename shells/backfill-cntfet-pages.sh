@@ -18,6 +18,11 @@ seeds = list(SEED_CNTFET_PAGE_DISPLAYS)
 names = [d['name'] for d in SEED_CNT_DEVICES]
 seeds += score_pages(names) + detail_pages(names)
 try:
+    from cntfet.cnt_cell_pages import SEED_CELL_PAGES
+    seeds += list(SEED_CELL_PAGES)
+except ImportError:
+    pass
+try:
     from sifet.si_pages_seed import SEED_SI_PAGE_DISPLAYS, SEED_SI_SCORE_PAGES
     seeds += list(SEED_SI_PAGE_DISPLAYS) + list(SEED_SI_SCORE_PAGES)
 except ImportError:
