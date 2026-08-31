@@ -62,8 +62,12 @@ def live_scenes():
 
 try:
     from cntfet.cnt_parts_svg import SEED_FET_2D_SCENES
+    from cntfet.cnt_scene import SEED_CNT_DEVICE_SCENES
     from sifet.si_pages_seed import SI_DEVICE_NAMES as _sin
-    scene_seeds = SEED_FET_2D_SCENES(names + list(_sin))
+    from sifet.si_scene import SEED_SI_DEVICE_SCENES
+    scene_seeds = (SEED_FET_2D_SCENES(names + list(_sin))
+                   + SEED_CNT_DEVICE_SCENES(names)
+                   + SEED_SI_DEVICE_SCENES(list(_sin)))
 except ImportError as exc:
     scene_seeds = []
     print(f'scene seeds unavailable ({exc}) — skipping scene sync')
@@ -80,10 +84,63 @@ for s in scene_seeds:
          '--form-string', 'updateData=' + json.dumps(
              {'definition': s['definition'],
               'viewport_json': s['viewport_json'],
+              'camera_json': s.get('camera_json', ''),
               'description': s['description']}))
     sc_updated.append(s['name'])
 print(f'scenes: backfilled {len(sc_updated)}, unchanged {len(sc_same)}, '
       f'missing (seed on next boot) {len(sc_missing)}')
+
+# fg-6b: sync the fet-part-* MathShapeDefinition rows (the CSG shell
+# triplets became single annular_sector primitives) + list orphans.
+def live_shapes():
+    data = json.loads(curl(f'{API}/MathShapeDefinition'))
+    return {r['name']: r for w in data
+            for b in w.get('MathShapeDefinition', [])
+            for r in b.get('data', [])}
+
+try:
+    from cntfet.cnt_scene import part_shape_seeds
+    from sifet.si_scene import part_shape_seeds_si
+    shape_seeds = ([sh for n2 in names for sh in part_shape_seeds(n2)]
+                   + [sh for n2 in list(_sin)
+                      for sh in part_shape_seeds_si(n2)])
+except ImportError as exc:
+    shape_seeds = []
+    print(f'shape seeds unavailable ({exc}) — skipping shape sync')
+if shape_seeds:
+    sh_live = live_shapes()
+    sh_up, sh_same, sh_miss = [], [], []
+    KEYS = ('family', 'primitive_kind', 'parameters_json', 'csg_json',
+            'bounds_json', 'notes')
+    for s in shape_seeds:
+        row = sh_live.get(s['name'])
+        if row is None:
+            sh_miss.append(s['name']); continue
+        if all(str(row.get(k) or '') == str(s.get(k) or '')
+               for k in KEYS):
+            sh_same.append(s['name']); continue
+        pid = row.get('id') or row.get('polariId')
+        curl('-X', 'PUT', f'{API}/MathShapeDefinition',
+             '--form-string', f'polariId={pid}',
+             '--form-string',
+             'updateData=' + json.dumps({k: s.get(k, '') for k in KEYS}))
+        sh_up.append(s['name'])
+    orphans = sorted(n for n in sh_live
+                     if n.startswith('fet-part-')
+                     and (n.endswith('-outer') or n.endswith('-inner')))
+    print(f'shapes: backfilled {len(sh_up)}, unchanged {len(sh_same)}, '
+          f'missing (seed on next boot) {len(sh_miss)}; '
+          f'orphaned shell components: {len(orphans)}')
+    if orphans and os.environ.get('CONFIRM_DELETE_LEGACY') == 'yes':
+        import os as _os  # noqa: F401 (os imported below too)
+        for n in orphans:
+            pid = sh_live[n].get('id') or sh_live[n].get('polariId')
+            curl('-X', 'DELETE', f'{API}/MathShapeDefinition',
+                 '--form-string',
+                 'targetInstance=' + json.dumps({'id': pid}))
+        print(f'deleted {len(orphans)} orphaned shell component(s)')
+    elif orphans:
+        for n in orphans: print('  orphan-shape', n)
 
 # fg-2: the per-device pages the generic fet / fet-detail ones
 # replace — ALWAYS listed, deleted only with CONFIRM_DELETE_LEGACY=yes
