@@ -77,7 +77,13 @@ for s in scene_seeds:
     row = sc_live.get(s['name'])
     if row is None:
         sc_missing.append(s['name']); continue
-    if json.loads(row.get('definition') or '{}') == json.loads(s['definition']):
+    same = (json.loads(row.get('definition') or '{}')
+            == json.loads(s['definition'])
+            and json.loads(row.get('viewport_json') or '{}')
+            == json.loads(s.get('viewport_json') or '{}')
+            and json.loads(row.get('camera_json') or '{}')
+            == json.loads(s.get('camera_json') or '{}'))
+    if same:
         sc_same.append(s['name']); continue
     pid = row.get('id') or row.get('polariId')
     curl('-X', 'PUT', f'{API}/SimSpaceDefinition', '--form-string', f'polariId={pid}',
