@@ -23,6 +23,11 @@ try:
 except ImportError:
     pass
 try:
+    from cntfet.cnt_block_pages import SEED_BLOCK_PAGES
+    seeds += list(SEED_BLOCK_PAGES)
+except ImportError:
+    pass
+try:
     from sifet.si_pages_seed import SEED_SI_PAGE_DISPLAYS, SEED_SI_SCORE_PAGES
     seeds += list(SEED_SI_PAGE_DISPLAYS) + list(SEED_SI_SCORE_PAGES)
 except ImportError:
