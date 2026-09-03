@@ -37,6 +37,14 @@ show_help() {
   ${CYAN}matrix${NC}                       per-isle kind / Blind vs Sees-traffic / .vpn names
   ${CYAN}qr <conf-file>${NC}               QR of a conf the ISLE exported (refuses a placeholder)
   ${CYAN}demo${NC}                         run the two-isle mock acceptance flow on the core
+  ${CYAN}join${NC} --device D --requester NAME --base-url URL --fingerprint FP key=value ...
+                               (vpn-3) file a JOIN REQUEST: a PeerAgreement (never
+                               auto-admitted) + a proposal that waits for consent.
+                               kind=peer (default; needs network_name, peer_name,
+                               public_key) or kind=link (remote_device, remote_network,
+                               remote_gateway_public_key, remote_cidrs)
+  ${CYAN}agreements${NC} [--status S]      the VPN agreements with their proposals; knobs =
+                               POST /api/peers/agreements/<id>/approve|deny|revoke
 
 ${BOLD}EXAMPLES${NC}
   pol vpn propose peer --device isle-a network_name=arch-demo peer_name=phone \\
@@ -53,33 +61,36 @@ need_core() {
 }
 
 # fmt_table LISTKEY col1,col2,...  — JSON on stdin -> aligned table.
-fmt_table() {
-    python3 - "$1" "$2" <<'PY'
+# (the script rides -c, NOT a heredoc: a heredoc would replace the
+# stdin the JSON arrives on — the first live run of every list verb
+# died on exactly that)
+FMT_PY='
 import json, sys
-key, cols = sys.argv[1], sys.argv[2].split(',')
+key, cols = sys.argv[1], sys.argv[2].split(",")
 d = json.load(sys.stdin)
-if not d.get('ok', True) and d.get('error'):
-    print('ERROR:', d['error']); sys.exit(1)
-if d.get('banner'):
-    print('!! ' + d['banner'])
+if not d.get("ok", True) and d.get("error"):
+    print("ERROR:", d["error"]); sys.exit(1)
+if d.get("banner"):
+    print("!! " + d["banner"])
 rows = d.get(key, [])
 if isinstance(rows, dict):
     rows = list(rows.values())
 if not rows:
-    print('(no rows)'); sys.exit(0)
+    print("(no rows)"); sys.exit(0)
 def cell(v):
-    if isinstance(v, bool): return 'yes' if v else 'no'
-    if isinstance(v, list): return ', '.join(map(str, v)) or '-'
+    if isinstance(v, bool): return "yes" if v else "no"
+    if isinstance(v, list): return ", ".join(map(str, v)) or "-"
     if isinstance(v, dict): return json.dumps(v)
-    return str(v) if v not in (None, '') else '-'
-table = [[cell(r.get(c, '')) for c in cols] for r in rows]
-widths = [max(len(c), *(len(t[i]) for t in table)) for i, c in enumerate(cols)]
-widths = [min(w, 60) for w in widths]
-fmt = '  '.join('%%-%ds' % w for w in widths)
+    return str(v) if v not in (None, "") else "-"
+table = [[cell(r.get(c, "")) for c in cols] for r in rows]
+widths = [min(60, max(len(c), *(len(t[i]) for t in table))) for i, c in enumerate(cols)]
+fmt = "  ".join("%%-%ds" % w for w in widths)
 print(fmt % tuple(cols))
 for t in table:
     print(fmt % tuple(x[:60] for x in t))
-PY
+'
+fmt_table() {
+    python3 -c "$FMT_PY" "$1" "$2"
 }
 
 parse_filters() {  # sets DEVICE NETWORK STATUS from --device/--network/--status
@@ -213,6 +224,40 @@ do_qr() {
     fi
 }
 
+do_join() {
+    need_core
+    local DEVICE="" REQ="" URL="" FP="" pairs=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --device) DEVICE="$2"; shift 2 ;;
+            --requester) REQ="$2"; shift 2 ;;
+            --base-url) URL="$2"; shift 2 ;;
+            --fingerprint) FP="$2"; shift 2 ;;
+            *=*) pairs+=("$1"); shift ;;
+            *) die "unexpected argument '$1'" ;;
+        esac
+    done
+    [ -n "$DEVICE" ] && [ -n "$REQ" ] && [ -n "$URL" ] && [ -n "$FP" ] || die "usage: pol vpn join --device D --requester NAME --base-url URL --fingerprint FP [kind=peer|link] key=value ..."
+    local body
+    body=$(python3 - "$DEVICE" "$REQ" "$URL" "$FP" "${pairs[@]}" <<'PY'
+import json, sys
+device, req, url, fp, pairs = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]
+d = {'device': device, 'kind': 'peer', 'requester_name': req, 'requester_base_url': url, 'fingerprint': fp}
+for p in pairs:
+    k, _, v = p.partition('=')
+    d[k] = [x for x in v.split(',') if x] if (',' in v and k.endswith('cidrs')) else v
+print(json.dumps(d))
+PY
+)
+    printf '%s' "$body" | core_api POST /api/vpn/join-request | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+if not d.get("ok"):
+    print("REFUSED:", d.get("error")); sys.exit(1)
+print(d.get("message", ""))
+print("agreement:", d.get("agreement_id"), "| proposal:", d.get("proposal"), "| status:", d.get("proposal_status", d.get("status")))'
+}
+
 do_demo() {
     need_core
     printf '{}' | core_api POST /api/vpn/demo | python3 -c '
@@ -242,6 +287,8 @@ case "$COMMAND" in
     matrix)        need_core; core_api GET /api/vpn/matrix | fmt_table matrix isle,app_kind,title,label,vpn_rung,networks,peers,vpn_names,links_active ;;
     qr)            do_qr "$@" ;;
     demo)          do_demo ;;
+    join)          do_join "$@" ;;
+    agreements)    need_core; parse_filters "$@"; core_api GET "$(query /api/vpn/agreements)" | fmt_table agreements agreement_id,requester_name,requested_role,status,scope,approved_by,proposals ;;
     help|-h|--help|"") show_help ;;
     *) log_error "Unknown vpn command: $COMMAND"; show_help; exit 1 ;;
 esac

@@ -293,20 +293,22 @@ print(f"registered: {mod} kind={fresh['kind']} path={fresh['path']} "
 PYEOF
         ;;
     deps)
-        docker ps --format '{{.Names}}' | grep -qx prf-backend || die "prf-backend not running — pol suite up / pol node up first"
-        log_info "Running module dependency selftest in prf-backend"
-        docker exec prf-backend python3 -m moduleService.selftest_module_dependencies ;;
+        BE=$(core_backend_container) || die "no local backend container (compose prf-backend or swarm polari-node_backend) — pol suite up / pol node up / pol swarm deploy node first"
+        log_info "Running module dependency selftest in $BE"
+        docker exec "$BE" python3 -m moduleService.selftest_module_dependencies ;;
     selftest)
         MOD=$1
         [ -n "$MOD" ] || die "usage: pol modules selftest <module> (see pol modules list)"
-        docker ps --format '{{.Names}}' | grep -qx prf-backend || die "prf-backend not running — pol suite up / pol node up first"
+        # vpn-1: the backend may be the compose container OR the swarm
+        # task (dev = swarm since 2026-08-26) — core-api.sh knows both.
+        BE=$(core_backend_container) || die "no local backend container (compose prf-backend or swarm polari-node_backend) — pol suite up / pol node up / pol swarm deploy node first"
         FOUND=0
         # mp-1: modules live in either import root; PYTHONPATH in the
         # image resolves modules/<m> under its plain name.
-        for st in $(docker exec prf-backend sh -c "ls $MOD/selftest_*.py 2>/dev/null || ls modules/$MOD/selftest_*.py 2>/dev/null" | sed 's#^modules/##; s/\.py$//' | tr / .); do
+        for st in $(docker exec "$BE" sh -c "ls $MOD/selftest_*.py 2>/dev/null || ls modules/$MOD/selftest_*.py 2>/dev/null" | sed 's#^modules/##; s/\.py$//' | tr / .); do
             FOUND=1
-            log_info "docker exec prf-backend python3 -m $st"
-            docker exec prf-backend python3 -m "$st"
+            log_info "docker exec $BE python3 -m $st"
+            docker exec "$BE" python3 -m "$st"
         done
         [ "$FOUND" = "1" ] || die "no selftests found for module '$MOD' (pol modules list)" ;;
     enable|disable)

@@ -11,6 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."          # suite root
 API=https://api.prf.192.168.0.210.nip.io
+DEMO_FAIL=0
 
 if [ "${VERIFY_ONLY:-0}" != 1 ]; then
   echo "== 1. assign vpn + islemesh -> prf-a (ModuleAssignment rows; the running"
@@ -63,7 +64,7 @@ d = json.load(sys.stdin)
 for s in d.get("steps", []):
     print("   ", "PASS" if s["pass"] else "FAIL", s["step"], ("— " + s["detail"]) if (s.get("detail") and not s["pass"]) else "")
 print("  all_pass:", d.get("all_pass"))
-sys.exit(0 if d.get("all_pass") else 1)'
+sys.exit(0 if d.get("all_pass") else 1)' || DEMO_FAIL=1
 
 echo "== 6. matrix + exposure options + isle-mesh .vpn column"
 curl -sk "$API/api/vpn/matrix" | python3 -c '
@@ -88,6 +89,24 @@ for cls in VpnNetwork VpnPeer VpnAccessRule VpnFederationLink AppVpnExposure Vpn
   printf "   %-20s key-material hits: %s\n" "$cls" "$n"
 done
 
+echo "== 8. vpn-3 trust bridge: join request -> PeerAgreement -> approve -> inbox -> apply -> revoke -> tear-down proposal"
+PUB=$(python3 -c 'import base64,os;print(base64.b64encode(os.urandom(32)).decode())')
+JR=$(curl -sk -X POST -H 'Content-Type: application/json' -d "{\"device\":\"isle-a\",\"kind\":\"peer\",\"network_name\":\"arch-demo\",\"peer_name\":\"runbook-$$\",\"public_key\":\"$PUB\",\"requester_name\":\"runbook-$$\",\"requester_base_url\":\"http://runbook:3000\",\"fingerprint\":\"fp-$$\",\"mock_network\":true}" "$API/api/vpn/join-request")
+AID=$(printf '%s' "$JR" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("agreement_id",""))')
+PID=$(printf '%s' "$JR" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("proposal",""))')
+printf '%s' "$JR" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  join-request ok:", d.get("ok"), "| proposal status:", d.get("proposal_status"), "| agreement:", d.get("agreement_id"))'
+curl -sk -X POST -H 'Content-Type: application/json' -d '{"approvedBy":"runbook"}' "$API/api/peers/agreements/$AID/approve" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  approve:", d.get("success"), d.get("data",{}).get("status"))'
+curl -sk "$API/api/vpn/proposals/$PID" | python3 -c 'import sys,json; d=json.load(sys.stdin); p=d.get("proposal",{}); print("  after approve: proposal", p.get("name"), "status", p.get("status"), "(expect proposed) | note:", p.get("note","")[:60])'
+curl -sk -X POST -H 'Content-Type: application/json' -d "{\"device\":\"isle-a\",\"mock_network\":true,\"app\":{\"name\":\"isle-vpn\",\"kind\":\"vpn-link-gateway\"},\"networks\":[{\"network_name\":\"arch-demo\",\"mode\":\"mesh\",\"cidr\":\"10.60.1.0/24\",\"listen_port\":51820}],\"peers\":[],\"proposals\":[{\"id\":\"$PID\",\"status\":\"applied\",\"applied_by\":\"operator@runbook\"}]}" "$API/api/islemesh/ingest/vpn" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  isle push applied:", d.get("proposals_applied"), d.get("proposal_errors"))'
+curl -sk -X POST -H 'Content-Type: application/json' -d '{}' "$API/api/peers/agreements/$AID/revoke" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  revoke:", d.get("success"), d.get("data",{}).get("status"))'
+curl -sk "$API/api/vpn/proposals?device=isle-a" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+rev=[p for p in d.get('proposals',[]) if p['kind']=='revoke' and p['payload'].get('agreement_id')=='$AID']
+print('  revoke proposals filed for the agreement:', [(p['name'], p['status'], p['payload'].get('name')) for p in rev], '(expect one, proposed, runbook-$$)')"
+curl -sk "$API/api/vpn/agreements" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("  vpn agreements:", d.get("count"), "|", [(a["requester_name"], a["requested_role"], a["status"]) for a in d.get("agreements",[])][-3:])'
+
 echo "== pages"
 echo "   https://prf.192.168.0.210.nip.io/display/vpn"
 echo "   https://prf.192.168.0.210.nip.io/display/isle-mesh   (.vpn column in the protocol matrix)"
+[ "$DEMO_FAIL" = 0 ] || { echo "!! the demo (step 5) had a failing step — see above"; exit 1; }
