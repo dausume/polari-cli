@@ -8,6 +8,7 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/log.sh"
+source "$SCRIPT_DIR/lib/core-api.sh"
 
 FW="$POL_RF_NODE/polari-framework"
 
@@ -36,6 +37,16 @@ ${BOLD}COMMANDS${NC}
               kept) + push to the module's own repo; prints every
               git command it runs. --repo fills the register field
               the first time.
+  ${CYAN}export <module> [--api <base>] [--classes A,B] [--all-rows]${NC}
+              mo-3: POST /modules/export on the running backend —
+              writes the module's USER-AUTHORED rows (is_prior false;
+              seeds stay in code) to modules/<m>/initialData/<Class>.json
+              through the module's export_hook.py privacy strip
+              (person / place / day fields never leave). Prints the
+              files, counts and what was stripped. The files then ride
+              'pol modules publish <m>' / push-all-dev.sh to the
+              module's repo. --api targets another core (else
+              POLARI_CORE_URL or the local backend container).
   ${CYAN}register <name> [--vendor <git-url>] [--kind k] [--path p]
               [--repo url] [--desc text]${NC}
               upsert a register entry. --vendor = third-party module
@@ -197,6 +208,50 @@ PYEOF
         log_info "RUN: git -C $FW branch -D $SPLIT_BRANCH"
         git -C "$FW" branch -D "$SPLIT_BRANCH"
         log_success "published modules/$MOD -> $REPO (main). Re-run after in-tree changes to re-push the subtree." ;;
+    export)
+        MOD=${1:?usage: pol modules export <module> [--api <base>] [--classes A,B] [--all-rows]}; shift
+        API_ARG="" CLASSES_ARG="" ONLY_NON_PRIOR=true
+        while [ $# -gt 0 ]; do case "$1" in
+            --api) API_ARG=$2; shift 2 ;;
+            --classes) CLASSES_ARG=$2; shift 2 ;;
+            --all-rows) ONLY_NON_PRIOR=false; shift ;;
+            *) die "unknown export option: $1" ;;
+        esac; done
+        BODY=$(python3 -c "
+import json, sys
+mod, classes, only = sys.argv[1:4]
+body = {'moduleId': mod, 'onlyNonPrior': only == 'true'}
+if classes:
+    body['classes'] = [c.strip() for c in classes.split(',') if c.strip()]
+print(json.dumps(body))" "$MOD" "$CLASSES_ARG" "$ONLY_NON_PRIOR")
+        pol_box "export $MOD -> modules/$MOD/initialData/ (user-authored rows, privacy-stripped)"
+        if [ -n "$API_ARG" ]; then
+            RESP=$(echo "$BODY" | POLARI_CORE_URL="$API_ARG" core_api POST /modules/export) || die "no backend at $API_ARG"
+        else
+            RESP=$(echo "$BODY" | core_api POST /modules/export) || die "no local backend container (compose prf-backend or swarm polari-node_backend) and POLARI_CORE_URL unset — start the node/suite, set POLARI_CORE_URL, or pass --api <base>"
+        fi
+        echo "$RESP" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception as e:
+    sys.exit(f'unreadable response: {e}')
+if not d.get('success'):
+    sys.exit(f\"export refused: {d.get('error', d)}\")
+print(f\"  {d.get('message', '')}\")
+print(f\"  hook: {'modules/' + d.get('package', '?') + '/export_hook.py' if d.get('hook') else 'NONE (class list only — no privacy strip)'}\")
+for cls, n in sorted((d.get('classes') or {}).items()):
+    print(f'  {cls:28} {n:5} row(s)')
+for p in d.get('files') or []:
+    print(f'  wrote   {p}')
+for p in d.get('removed') or []:
+    print(f'  removed {p} (no user rows left)')
+for cls, names in sorted((d.get('dropped') or {}).items()):
+    print(f'  DROPPED {cls}: {len(names)} row(s) still carried a private value: {names[:5]}')
+for cls, why in d.get('skipped') or []:
+    print(f'  skipped {cls}: {why}')
+print('  next: pol modules publish ' + sys.argv[1] + ' (or polari-cli/shells/push-all-dev.sh) carries the files to the module repo')
+" "$MOD" || exit 1 ;;
     register)
         MOD=${1:?usage: pol modules register <name> [--vendor <git-url>] [--kind k] [--path p] [--repo url] [--desc text]}; shift
         KIND="" PATH_ARG="" REPO_ARG="" DESC=""
