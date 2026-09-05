@@ -78,6 +78,7 @@ const commands = {
   cert:     { script: 'cert.sh',     desc: 'Certs per env tier; prod: self-signed OR Let\'s Encrypt + auto-renew', aliases: ['certs', 'ca'] },
   odoo:     { script: 'odoo.sh',     desc: 'Odoo ERP: business sims + real-ops backbone (up/init-db/backup)', aliases: ['erp'], docker: true },
   remote:   { script: 'remote.sh',   desc: 'Remote staging access over WireGuard (init/apply/up/down/status)', aliases: ['wg'] },
+  vpn:      { script: 'vpn.sh',      desc: 'Isle VPN (isle-vpn: Isle Link / Isle Bridge) — mirror, proposals, conf render, qr, demo', aliases: ['islevpn'] },
 };
 
 // Bare verbs that people will guess; they need a namespace. Guard them with
