@@ -323,6 +323,19 @@ PYEOF
         fi
         if [ "$SUB" = selftest ]; then (cd "$FW" && PYTHONPATH=.:modules python3 -m moduleService.selftest_manifests)
         else (cd "$FW" && PYTHONPATH=.:modules python3 -m moduleService.manifests "$SUB" "$@"); fi ;;
+    testplan)
+        # tcov-1/2: test coverage by app — the module→app hierarchy, the
+        # standard-computer budget, benchmarks under cgroup limits, and the
+        # plan (which apps to test, which modules need nodes / a large host).
+        # Host-side: plan|apps|nodes|json are static (manifests + seeds);
+        # benchmark boots a one-off container on this host's docker.
+        SUB="${1:-plan}"; shift || true
+        case "$SUB" in
+            plan|apps|nodes|json) (cd "$FW" && PYTHONPATH=.:modules python3 -m testing.custom.app_hierarchy "$SUB") ;;
+            benchmark) [ -n "${1:-}" ] || die "pol modules testplan benchmark <app>|--all [--budget ram_mb:vcpus]"; (cd "$FW" && PYTHONPATH=.:modules python3 -m testing.custom.app_benchmark "$@") ;;
+            selftest) (cd "$FW" && PYTHONPATH=.:modules python3 -m testing.coverage_selftest) ;;
+            *) die "pol modules testplan plan|apps|nodes|json|benchmark <app>|--all|selftest" ;;
+        esac ;;
     enable|disable)
         die "module enable/disable lives on the TOPOLOGY now: ModuleAssignment rows on the core instance. Use 'pol topology assign <module> <instance>' (or drag the module chip in the Topology tab). In-process activation is still registration-in-code (polariServer)." ;;
     help|-h|--help|"") show_help ;;
