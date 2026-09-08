@@ -66,10 +66,10 @@ case "$COMMAND" in
         for d in "$FW"/*/ "$FW"/modules/*/; do
             n=$(basename "$d")
             [ "$n" = "modules" ] && continue
-            if ls "$d"selftest_*.py >/dev/null 2>&1; then
+            if ls "$d"*_selftest.py "$d"selftest_*.py >/dev/null 2>&1; then
                 loc=""
                 case "$d" in */modules/*) loc=" [modules/]" ;; esac
-                cnt=$(ls "$d"selftest_*.py | wc -l)
+                cnt=$(ls "$d"*_selftest.py "$d"selftest_*.py 2>/dev/null | wc -l)
                 printf "    %-24s %s selftest suite(s)%s\n" "$n" "$cnt" "$loc"
             fi
         done
@@ -305,12 +305,24 @@ PYEOF
         FOUND=0
         # mp-1: modules live in either import root; PYTHONPATH in the
         # image resolves modules/<m> under its plain name.
-        for st in $(docker exec "$BE" sh -c "ls $MOD/selftest_*.py 2>/dev/null || ls modules/$MOD/selftest_*.py 2>/dev/null" | sed 's#^modules/##; s/\.py$//' | tr / .); do
+        for st in $(docker exec "$BE" sh -c "ls $MOD/*_selftest.py $MOD/selftest_*.py 2>/dev/null || ls modules/$MOD/*_selftest.py modules/$MOD/selftest_*.py 2>/dev/null" | sed 's#^modules/##; s/\.py$//' | tr / .); do
             FOUND=1
             log_info "docker exec $BE python3 -m $st"
             docker exec "$BE" python3 -m "$st"
         done
         [ "$FOUND" = "1" ] || die "no selftests found for module '$MOD' (pol modules list)" ;;
+    conform|manifests)
+        # sap-1: the Standardized Polari App manifest (polari-app.json),
+        # host-side + static (nothing boots): conform = report, generate =
+        # derive from the core tables + AST, readme = first README.md,
+        # selftest = the machine-checked contract. `pol modules conform
+        # [<m>...]` is the short form of `pol modules manifests conform`.
+        SUB=conform
+        if [ "$COMMAND" = manifests ]; then
+            case "${1:-}" in conform|generate|list|readme|selftest) SUB="$1"; shift ;; "") SUB=conform ;; *) die "pol modules manifests conform|generate|list|readme|selftest [<module>...]" ;; esac
+        fi
+        if [ "$SUB" = selftest ]; then (cd "$FW" && PYTHONPATH=.:modules python3 -m moduleService.selftest_manifests)
+        else (cd "$FW" && PYTHONPATH=.:modules python3 -m moduleService.manifests "$SUB" "$@"); fi ;;
     enable|disable)
         die "module enable/disable lives on the TOPOLOGY now: ModuleAssignment rows on the core instance. Use 'pol topology assign <module> <instance>' (or drag the module chip in the Topology tab). In-process activation is still registration-in-code (polariServer)." ;;
     help|-h|--help|"") show_help ;;
