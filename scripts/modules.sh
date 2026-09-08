@@ -336,6 +336,11 @@ PYEOF
             selftest) (cd "$FW" && PYTHONPATH=.:modules python3 -m testing.coverage_selftest) ;;
             *) die "pol modules testplan plan|apps|nodes|json|benchmark <app>|--all|selftest" ;;
         esac ;;
+    new|add-object)
+        # sap-2c scaffold for humans (design §7): one class per file under objects/.
+        #   pol modules new <id> [--title T] [--kind polari-app|library|isle-app|hardware-app] [--description D]
+        #   pol modules add-object <module> <ClassName> [--under taxonomy/path] [--base Class] [--fields "a:str,b:float=0.0"]
+        (cd "$FW" && PYTHONPATH=.:modules python3 -m moduleService.scaffold "$COMMAND" "$@") ;;
     enable|disable)
         die "module enable/disable lives on the TOPOLOGY now: ModuleAssignment rows on the core instance. Use 'pol topology assign <module> <instance>' (or drag the module chip in the Topology tab). In-process activation is still registration-in-code (polariServer)." ;;
     help|-h|--help|"") show_help ;;
