@@ -79,6 +79,7 @@ const commands = {
   odoo:     { script: 'odoo.sh',     desc: 'Odoo ERP: business sims + real-ops backbone (up/init-db/backup)', aliases: ['erp'], docker: true },
   remote:   { script: 'remote.sh',   desc: 'Remote staging access over WireGuard (init/apply/up/down/status)', aliases: ['wg'] },
   hwmap:    { script: 'hwmap.sh',    desc: 'Hardware map: scan this device (usb/pci/iommu/serial/nics/kvm), push, and ask what can be mapped to a KVM', aliases: ['hw'] },
+  project:  { script: 'project.sh',  desc: 'ONE module/app as its own project: init/lint/test/up/build/deploy/update/remove (the Polari Developer loop)', aliases: ['proj'] },
   jenkins:  { script: 'jenkins.sh',  desc: 'Host-tier build + publish controller (polari-jenkins/): up/down/status/logs/secrets', aliases: ['ci'] },
   vpn:      { script: 'vpn.sh',      desc: 'Isle VPN (isle-vpn: Isle Link / Isle Bridge) — mirror, proposals, conf render, qr, demo', aliases: ['islevpn'] },
 };
@@ -179,7 +180,7 @@ try {
   execSync(`bash ${JSON.stringify(scriptPath)} ${allArgs.map((a) => JSON.stringify(a)).join(' ')}`, {
     stdio: 'inherit',
     cwd: suiteRoot,
-    env: { ...process.env, POL_SUITE_ROOT: suiteRoot, POL_CLI_DIR: CLI_DIR },
+    env: { ...process.env, POL_SUITE_ROOT: suiteRoot, POL_CLI_DIR: CLI_DIR, POL_CWD: process.cwd() },
   });
 } catch (error) {
   process.exit(error.status || 1); // the script printed its own error
