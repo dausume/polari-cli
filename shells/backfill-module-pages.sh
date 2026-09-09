@@ -22,32 +22,32 @@ from polariApiServer.module_pages_seed import SEED_MODULE_PAGE_DISPLAYS
 seeds = list(SEED_MODULE_PAGE_DISPLAYS)
 skipped = []
 try:
-    from computers.computers_pages_seed import SEED_COMPUTERS_PAGE_DISPLAYS
+    from computers.computers_page import SEED_COMPUTERS_PAGE_DISPLAYS
     seeds += list(SEED_COMPUTERS_PAGE_DISPLAYS)
 except ImportError as exc:
     skipped.append(f'computers ({exc})')
 try:
-    from climate.climate_pages import (SEED_CLIMATE_PAGE_DISPLAYS,
+    from climate.climate_page import (SEED_CLIMATE_PAGE_DISPLAYS,
                                        SEED_CLIMATE_ERA_DISPLAYS)
     seeds += list(SEED_CLIMATE_PAGE_DISPLAYS) + list(SEED_CLIMATE_ERA_DISPLAYS)
 except ImportError as exc:
     skipped.append(f'climate ({exc})')
 try:
-    from cntfet.cnt_pages_seed import SEED_CNTFET_PAGE_DISPLAYS
+    from cntfet.cnt_page import SEED_CNTFET_PAGE_DISPLAYS
     from cntfet.cnt_basis import SEED_CNT_DEVICES
-    from cntfet.cnt_compare import score_pages, detail_pages
+    from cntfet.custom.cnt_compare import score_pages, detail_pages
     seeds += list(SEED_CNTFET_PAGE_DISPLAYS)
     names = [d['name'] for d in SEED_CNT_DEVICES]
     seeds += score_pages(names) + detail_pages(names)
 except ImportError as exc:
     skipped.append(f'cntfet ({exc})')
 try:
-    from cntfet.cnt_blocks import SEED_BLOCK_PAGES
+    from cntfet.cnt_blocks_page import SEED_BLOCK_PAGES
     seeds += list(SEED_BLOCK_PAGES)
 except ImportError as exc:
     skipped.append(f'cntfet blocks ({exc})')
 try:
-    from sifet.si_pages_seed import SEED_SI_PAGE_DISPLAYS, SEED_SI_SCORE_PAGES
+    from sifet.si_page import SEED_SI_PAGE_DISPLAYS, SEED_SI_SCORE_PAGES
     seeds += list(SEED_SI_PAGE_DISPLAYS) + list(SEED_SI_SCORE_PAGES)
 except ImportError as exc:
     skipped.append(f'sifet ({exc})')
@@ -62,7 +62,7 @@ try:
 except ImportError as exc:
     skipped.append(f'islemesh ({exc})')
 try:
-    from cntfet.cnt_open_library import SEED_OPEN_LIBRARY_PAGES
+    from cntfet.cnt_open_library_page import SEED_OPEN_LIBRARY_PAGES
     seeds += list(SEED_OPEN_LIBRARY_PAGES)
 except ImportError as exc:
     skipped.append(f'cntfet open-library ({exc})')
@@ -77,7 +77,7 @@ def live_rows():
     return {r['name']: r for w in data for b in w.get('DisplayDefinition', [])
             for r in b.get('data', [])}
 
-# fg-2 generic `fet-detail` page: its emitter (cntfet.cnt_compare
+# fg-2 generic `fet-detail` page: its emitter (cntfet.custom.cnt_compare
 # fet_detail seed) lives on dev-fg-1, not necessarily on the checked-out
 # branch, and its links panel is an api-json-panel over the /api/fet
 # alias (404 until that branch's image rolls). When no seed for it is

@@ -9,8 +9,8 @@ API="${1:-${POLARI_API:-https://api.prf.192.168.0.210.nip.io}}"
 FW="$(cd "$(dirname "$0")/../../polari-rf-node/polari-framework" && pwd)"
 cd "$FW/modules"
 echo "== snapshot from $API → modules/{cntfet,sifet}/initialData/"
-PYTHONPATH=..:../polariApiServer python3 -m cntfet.cnt_snapshot "$API"
+PYTHONPATH=..:../polariApiServer python3 -m cntfet.custom.cnt_snapshot "$API"
 echo "== selftest"
-PYTHONPATH=..:../polariApiServer python3 -m cntfet.selftest_snapshot | tail -3
+PYTHONPATH=..:../polariApiServer python3 -m cntfet.snapshot_selftest | tail -3
 echo "== git status (polari-framework)"
 git -C "$FW" status --short modules/cntfet/initialData modules/sifet/initialData

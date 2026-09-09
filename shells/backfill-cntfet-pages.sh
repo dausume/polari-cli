@@ -11,24 +11,24 @@ cd "$FW/modules"
 PYTHONPATH=..:../polariApiServer python3 - "$API" <<'EOF'
 import json, subprocess, sys
 API = sys.argv[1]
-from cntfet.cnt_pages_seed import SEED_CNTFET_PAGE_DISPLAYS
+from cntfet.cnt_page import SEED_CNTFET_PAGE_DISPLAYS
 from cntfet.cnt_basis import SEED_CNT_DEVICES
-from cntfet.cnt_compare import score_pages, detail_pages
+from cntfet.custom.cnt_compare import score_pages, detail_pages
 seeds = list(SEED_CNTFET_PAGE_DISPLAYS)
 names = [d['name'] for d in SEED_CNT_DEVICES]
 seeds += score_pages(names) + detail_pages(names)
 try:
-    from cntfet.cnt_cell_pages import SEED_CELL_PAGES
+    from cntfet.cnt_cell_page import SEED_CELL_PAGES
     seeds += list(SEED_CELL_PAGES)
 except ImportError:
     pass
 try:
-    from cntfet.cnt_block_pages import SEED_BLOCK_PAGES
+    from cntfet.cnt_block_page import SEED_BLOCK_PAGES
     seeds += list(SEED_BLOCK_PAGES)
 except ImportError:
     pass
 try:
-    from sifet.si_pages_seed import SEED_SI_PAGE_DISPLAYS, SEED_SI_SCORE_PAGES
+    from sifet.si_page import SEED_SI_PAGE_DISPLAYS, SEED_SI_SCORE_PAGES
     seeds += list(SEED_SI_PAGE_DISPLAYS) + list(SEED_SI_SCORE_PAGES)
 except ImportError:
     pass
@@ -71,10 +71,10 @@ def live_scenes():
             for r in b.get('data', [])}
 
 try:
-    from cntfet.cnt_parts_svg import SEED_FET_2D_SCENES
-    from cntfet.cnt_scene import SEED_CNT_DEVICE_SCENES
-    from sifet.si_pages_seed import SI_DEVICE_NAMES as _sin
-    from sifet.si_scene import SEED_SI_DEVICE_SCENES
+    from cntfet.custom.cnt_parts_svg import SEED_FET_2D_SCENES
+    from cntfet.cnt_scene_seed import SEED_CNT_DEVICE_SCENES
+    from sifet.si_page import SI_DEVICE_NAMES as _sin
+    from sifet.custom.si_scene import SEED_SI_DEVICE_SCENES
     scene_seeds = (SEED_FET_2D_SCENES(names + list(_sin))
                    + SEED_CNT_DEVICE_SCENES(names)
                    + SEED_SI_DEVICE_SCENES(list(_sin)))
@@ -115,8 +115,8 @@ def live_shapes():
             for r in b.get('data', [])}
 
 try:
-    from cntfet.cnt_scene import part_shape_seeds
-    from sifet.si_scene import part_shape_seeds_si
+    from cntfet.cnt_scene_seed import part_shape_seeds
+    from sifet.custom.si_scene import part_shape_seeds_si
     shape_seeds = ([sh for n2 in names for sh in part_shape_seeds(n2)]
                    + [sh for n2 in list(_sin)
                       for sh in part_shape_seeds_si(n2)])
@@ -162,9 +162,9 @@ if shape_seeds:
 # replace — ALWAYS listed, deleted only with CONFIRM_DELETE_LEGACY=yes
 # (plan decision 2), and only after the generic pages are live.
 import os
-from cntfet.cnt_compare import legacy_page_names
+from cntfet.custom.cnt_compare import legacy_page_names
 try:
-    from sifet.si_pages_seed import SI_DEVICE_NAMES
+    from sifet.si_page import SI_DEVICE_NAMES
 except ImportError:
     SI_DEVICE_NAMES = []
 legacy = [n for n in legacy_page_names(names + list(SI_DEVICE_NAMES))
