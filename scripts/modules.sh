@@ -60,6 +60,27 @@ the service registry's variations field is where it will hang."
 
 COMMAND=$1; shift || true
 case "$COMMAND" in
+    health)
+        # reg-1: the unified module health check (the registrar). pol modules health [--api URL] [<module>] [--verify]
+        API="${POLARI_API:-http://127.0.0.1:3300}"; MOD=""; VERIFY=0
+        while [ $# -gt 0 ]; do case "$1" in --api) API="$2"; shift 2 ;; --verify) VERIFY=1; shift ;; *) MOD="$1"; shift ;; esac; done
+        if [ -n "$MOD" ]; then
+            [ "$VERIFY" = 1 ] && curl -s -X POST "$API/api/modules/health/$MOD/verify" >/dev/null
+            curl -s "$API/api/modules/health/$MOD" | python3 -c "
+import json,sys; d=json.load(sys.stdin)
+if d.get('error') and not d.get('state'): sys.exit(print('%s: %s (deploy/admit it first)' % (sys.argv[1], d['error'])) or 1)
+print('%s: %s  (%s, %s)' % (d.get('module'), d.get('state'), d.get('source'), d.get('phase')))
+for piece, c in (d.get('confirmed') or {}).items(): print('  %-10s %s/%s' % (piece, c.get('count','?'), c.get('of','?')), ('MISSING: ' + ', '.join(map(str, d['missing'][piece][:5]))) if piece in (d.get('missing') or {}) else '')
+print('  selftest  ', (d.get('selftest') or {}).get('status'))
+if d.get('error'): print('  error     ', d['error'])" "$MOD"
+        else
+            curl -s "$API/api/modules/health?brief=1" | python3 -c "
+import json,sys; d=json.load(sys.stdin)
+print('health: %s   %s' % ('OK' if d.get('ok') else 'UNHEALTHY', ' '.join('%s=%s' % kv for kv in sorted((d.get('counts') or {}).items()))))
+for m, r in sorted((d.get('modules') or {}).items()):
+    flag = '!' if r['state'] in ('degraded', 'failed', 'blocked', 'invalid') else ' '
+    print('  %s %-26s %-10s %s' % (flag, m, r['state'], (r.get('error') or '')[:90]))"
+        fi ;;
     list)
         pol_box "PRF module packages"
         echo "  feature modules (selftest-bearing; both import roots — mp-1):"

@@ -33,7 +33,7 @@ CTR="pol-project-$ID"
 REF=""; KIND="polari-app"; OFFLINE=0
 while [ $# -gt 0 ]; do case "$1" in --api) API="$2"; shift 2 ;; --ref) REF="$2"; shift 2 ;; --kind) KIND="$2"; shift 2 ;; --offline) OFFLINE=1; shift ;; *) POS="${POS:-} $1"; shift ;; esac; done
 # POLARI_TOOLS_DIR (developers of the tools themselves): mount a host polari-framework's moduleService over the image's
-TOOLS_MOUNT=(); [ -n "${POLARI_TOOLS_DIR:-}" ] && TOOLS_MOUNT=(-v "$POLARI_TOOLS_DIR/moduleService:/app/moduleService:ro" -v "$POLARI_TOOLS_DIR/polariApiServer:/app/polariApiServer:ro")
+TOOLS_MOUNT=(); [ -n "${POLARI_TOOLS_DIR:-}" ] && TOOLS_MOUNT=(); for d in moduleService polariApiServer polariDataTyping; do TOOLS_MOUNT+=(-v "$POLARI_TOOLS_DIR/$d:/app/$d:ro"); done
 in_image(){ # run a python module inside the backend image with the project mounted AS modules/<id>
     docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e PYTHONPATH=/app:/app/modules "${TOOLS_MOUNT[@]}" -v "$DIR:/app/modules/$ID" -w /app "$@" ; }
 requires(){ python3 -c "import json; m=json.load(open('$DIR/polari-app.json')); print(','.join(m.get('requires',{}).get('modules',[])))" 2>/dev/null || true; }
@@ -77,7 +77,10 @@ J
     up)
         MODS="$ID"; R="$(requires)"; [ -n "$R" ] && MODS="$MODS,$R"
         docker rm -f "$CTR" >/dev/null 2>&1 || true
-        docker run -d --name "$CTR" -u "$(id -u):$(id -g)" -e HOME=/tmp -e DATABASE_PATH=/tmp/$ID.db -e POLARI_LAZY_BOOT=off -e POLARI_MESH_AUTOCONFIG=false \
+        # every POLARI_* variable in the caller's environment reaches the instance (knobs, traces)
+        PASS_ENV=(); while IFS= read -r kv; do PASS_ENV+=(-e "$kv"); done < <(env | grep -E '^POLARI_' | grep -vE '^POLARI_(API|IMAGE|TOOLS_DIR|MODULES)=' || true)
+        MODS="$ID"; [ -n "${POLARI_MODULES:-}" ] && MODS="$POLARI_MODULES,$ID"   # extra modules for this local instance
+        docker run -d --name "$CTR" -u "$(id -u):$(id -g)" -e HOME=/tmp -e DATABASE_PATH=/tmp/$ID.db -e POLARI_LAZY_BOOT=off -e POLARI_MESH_AUTOCONFIG=false "${PASS_ENV[@]}" \
             -e "POLARI_MODULES=$MODS" "${TOOLS_MOUNT[@]}" -v "$DIR:/app/modules/$ID" -w /app -p "127.0.0.1:$PORT:3000" --entrypoint python3 "$IMAGE" initLocalhostPolariServer.py >/dev/null
         log_info "booting $CTR (modules: $MODS) …"; for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' "$LOCAL_API/api/health")" = 200 ] && break; sleep 3; done
         curl -s -o /dev/null -w '%{http_code}' "$LOCAL_API/api/health" | grep -q 200 && log_success "up: $LOCAL_API  (module $ID mounted; pol project deploy admits it)" || { docker logs "$CTR" 2>&1 | tail -5; die "did not come up"; } ;;
@@ -86,6 +89,7 @@ J
     status)
         printf 'project %s  image %s  api %s\n' "$ID" "$IMAGE" "$API"
         docker ps --format '{{.Names}} {{.Status}}' | grep "^$CTR" || echo "local instance: not running"
+        curl_api "$API/api/modules/health/$ID" | python3 -c "import json,sys; d=json.load(sys.stdin); print('registrar:', d.get('state'), '—', d.get('error') or 'all declared pieces live' if d.get('state')=='online' else d.get('error') or '')" 2>/dev/null || true
         curl_api "$API/modules/$ID" | python3 -c "import json,sys; d=json.load(sys.stdin); print('on instance:', {k: d.get(k) for k in ('module','downloaded','enabled','active','status','error') if k in d} or d)" 2>/dev/null || echo "instance $API not answering" ;;
     build)
         mkdir -p "$DIR/dist"; FLAVOR=$([ "$OFFLINE" = 1 ] && echo offline || echo online)
