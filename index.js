@@ -78,6 +78,7 @@ const commands = {
   cert:     { script: 'cert.sh',     desc: 'Certs per env tier; prod: self-signed OR Let\'s Encrypt + auto-renew', aliases: ['certs', 'ca'] },
   odoo:     { script: 'odoo.sh',     desc: 'Odoo ERP: business sims + real-ops backbone (up/init-db/backup)', aliases: ['erp'], docker: true },
   remote:   { script: 'remote.sh',   desc: 'Remote staging access over WireGuard (init/apply/up/down/status)', aliases: ['wg'] },
+  hwmap:    { script: 'hwmap.sh',    desc: 'Hardware map: scan this device (usb/pci/iommu/serial/nics/kvm), push, and ask what can be mapped to a KVM', aliases: ['hw'] },
   jenkins:  { script: 'jenkins.sh',  desc: 'Host-tier build + publish controller (polari-jenkins/): up/down/status/logs/secrets', aliases: ['ci'] },
   vpn:      { script: 'vpn.sh',      desc: 'Isle VPN (isle-vpn: Isle Link / Isle Bridge) — mirror, proposals, conf render, qr, demo', aliases: ['islevpn'] },
 };
