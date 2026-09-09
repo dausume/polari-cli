@@ -33,7 +33,12 @@ CTR="pol-project-$ID"
 REF=""; KIND="polari-app"; OFFLINE=0
 while [ $# -gt 0 ]; do case "$1" in --api) API="$2"; shift 2 ;; --ref) REF="$2"; shift 2 ;; --kind) KIND="$2"; shift 2 ;; --offline) OFFLINE=1; shift ;; *) POS="${POS:-} $1"; shift ;; esac; done
 # POLARI_TOOLS_DIR (developers of the tools themselves): mount a host polari-framework's moduleService over the image's
-TOOLS_MOUNT=(); [ -n "${POLARI_TOOLS_DIR:-}" ] && TOOLS_MOUNT=(); for d in moduleService polariApiServer polariDataTyping; do TOOLS_MOUNT+=(-v "$POLARI_TOOLS_DIR/$d:/app/$d:ro"); done
+TOOLS_MOUNT=()
+if [ -n "${POLARI_TOOLS_DIR:-}" ]; then
+    for d in moduleService polariApiServer polariDataTyping initLocalhostPolariServer.py; do TOOLS_MOUNT+=(-v "$POLARI_TOOLS_DIR/$d:/app/$d:ro"); done
+    # ...and every host module dir individually (never the modules/ dir itself — the project mounts inside it)
+    for d in "$POLARI_TOOLS_DIR"/modules/*/; do n=$(basename "$d"); [ "$n" = "${ID:-}" ] || [ "$n" = "__pycache__" ] || TOOLS_MOUNT+=(-v "$d:/app/modules/$n:ro"); done
+fi
 in_image(){ # run a python module inside the backend image with the project mounted AS modules/<id>
     docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e PYTHONPATH=/app:/app/modules "${TOOLS_MOUNT[@]}" -v "$DIR:/app/modules/$ID" -w /app "$@" ; }
 requires(){ python3 -c "import json; m=json.load(open('$DIR/polari-app.json')); print(','.join(m.get('requires',{}).get('modules',[])))" 2>/dev/null || true; }

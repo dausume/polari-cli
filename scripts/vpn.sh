@@ -128,6 +128,33 @@ for i in d.get("isles", []):
     print("  %-10s %-20s %-12s networks=%s peers=%s last=%s" % (i["device"], i["app_kind"], i["label"], i["networks"], i["peers"], i.get("last_pushed", "")[:19]))'
 }
 
+do_placements() {
+    need_core
+    core_api GET /api/vpn/placements | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+for place, rule in d.get("rules", {}).items(): print("%-18s %s" % (place, rule))
+print()
+print("%-20s %-18s %-9s %-13s %-8s %s" % ("kind", "placement", "tier", "extends", "label", "levels"))
+for k in d.get("kinds", []):
+    lab = "SEES" if k["sees_traffic"] else ("BLIND" if k["blind"] else "")
+    print("%-20s %-18s %-9s %-13s %-8s %s" % (k["kind"], k["placement"], k["requires_tier"], k["extends"] or "-", lab, ",".join(json.loads(k["levels_json"]))))'
+}
+
+do_topology() {
+    need_core
+    lvl="${1:-isle}"
+    core_api GET "/api/vpn/topology/$lvl" | python3 -c '
+import json, sys, textwrap
+d = json.load(sys.stdin)
+if not d.get("ok"): sys.exit(print(d.get("error")) or 1)
+print("%s (%s)" % (d["level"], d["rung"])); print(textwrap.fill(d["definition"], 96))
+if d.get("floor"): print("floor:", d["floor"])
+print("live:", d.get("live"))
+print(); print("%-20s %-18s %-13s %s" % ("kind", "placement", "label", "role at this level"))
+for p in d.get("placements", []): print("%-20s %-18s %-13s %s" % (p["kind"], p["placement"], p["label"], p["role"]))'
+}
+
 do_kinds() {
     need_core
     core_api GET /api/vpn/kinds | python3 -c '
@@ -274,6 +301,8 @@ COMMAND="${1:-help}"; shift || true
 case "$COMMAND" in
     status)        do_status ;;
     kinds)         do_kinds ;;
+    placements)    do_placements ;;
+    topology)      do_topology "$@" ;;
     networks)      do_list networks VpnNetwork network_name,device_name,kind,label,mode,cidr,listen_port,forward_allowed,masquerade,peer_count,status,is_mock "$@" ;;
     peers)         do_list peers VpnPeer peer_name,network_name,device_name,kind,label,public_key,address,endpoint,allowed_ips,status,last_handshake,remote_device "$@" ;;
     links)         do_list links VpnFederationLink name,remote_device,remote_network,gateway_peer,remote_cidrs,agreement_id,relay_kind,status "$@" ;;
