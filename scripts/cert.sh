@@ -32,6 +32,11 @@ ${BOLD}COMMANDS${NC}
                       guided walkthrough → browser-trusted cert via
                       certbot DNS-01 (all open source). Needs:
                       LE_DOMAIN, LE_EMAIL, DO_API_TOKEN (prompted).
+                      LE_CHALLENGE=http = HTTP-01 via the prod proxy's
+                      webroot instead (any registrar, no API token).
+                      Issued certs are staged into .generated/certs/edge
+                      (what docker-compose.prod.yml mounts) + the proxy
+                      reloaded; renew.sh keeps doing both.
   ${CYAN}renew${NC}               renew leaf certs now (LE + internal)
   ${CYAN}auto-renew${NC} install|status|remove
                       open-source auto-renewal: a cron entry running
