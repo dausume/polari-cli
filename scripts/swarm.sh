@@ -61,13 +61,15 @@ role_compose_cmd() {
         cnt-engines) echo "docker compose -f $POL_RF_NODE/docker-compose.cnt-engines.yml" ;;
         node)    echo "docker compose -f $POL_RF_NODE/docker-compose.staging-nip.yml" ;;
         suite)   echo "docker compose -f $POL_SUITE_ROOT/docker-compose.staging-nip.yml --env-file $POL_SUITE_ROOT/.generated/.env.staging" ;;
+        # prd-4: the LEAN production profile (pol prod writes .env.lean + the configs it needs)
+        lean)    echo "docker compose -f $POL_SUITE_ROOT/docker-compose.lean.yml --env-file $POL_SUITE_ROOT/.generated/.env.lean" ;;
         *) return 1 ;;
     esac
 }
 
 render_stack() {
     local role=$1
-    local cmd; cmd=$(role_compose_cmd "$role") || die "unknown role '$role' (engines|cnt-engines|suite|node)"
+    local cmd; cmd=$(role_compose_cmd "$role") || die "unknown role '$role' (engines|cnt-engines|suite|node|lean)"
     # mod-env-3: module enablement is topology ROWS, not a
     # hand-maintained env string. For the node/suite roles the
     # POLARI_MODULES baked into the stack is DERIVED from the core's
@@ -164,7 +166,7 @@ print(urllib.request.urlopen(req, timeout=15).read().decode())" \
         fi
         render_stack "$ROLE"
         docker stack deploy -c "$POL_SUITE_ROOT/.generated/stack-$ROLE.yml" "polari-$ROLE"
-        record_build swarm "$ROLE" staging
+        record_build swarm "$ROLE" "$([ "$ROLE" = lean ] && echo production || echo staging)"
         log_success "stack polari-$ROLE deployed — pol swarm ps $ROLE (pol start/rebuild/stop now shorthand this)" ;;
     relocate)
         # gm-5 + gm-3 (GRACEFUL_MOBILITY_PLAN): move a STATEFUL swarm
