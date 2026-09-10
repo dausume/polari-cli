@@ -34,6 +34,11 @@ ${BOLD}HOW IT STAYS SECURE${NC}
                 swarm-server  docker + the suite checkout + pol, then `pol prod apply --yes` THERE
                 isle-member   fetch this isle's bootstrap from its core and run it (sudo; --host to host apps)
                 isle-core     ship the polari-complete deb, install it, run `isle core-install` (interactive)
+  ${CYAN}status${NC} <node>   what runs there: swarm node + tasks placed on it, or the isle (router, agent,
+              polari.isle answering, open doors, hardware guests) — read-only, over ssh
+  ${CYAN}uninstall${NC} <node> --route swarm-worker|swarm-server|isle-member|isle-core [--yes] [--dry-run]
+              the reverse of install: leave the swarm / pol prod down / the isle's own full
+              wipe (`isle uninstall --everything`, ISLE_CONFIRM_DELETE=yes only with --yes)
   ${CYAN}tier${NC} <node> [--check | reach|member|hardware]
               --check: what the machine qualifies for (docker, virt flags, /dev/kvm, libvirt, IOMMU);
               a tier: label the swarm node (polari.tier) + the topology machine row; hardware
@@ -120,10 +125,10 @@ EOF
         fi ;;
     install)
         NODE=${1:?node required (pol deploy nodes)}; shift || true
-        ROUTE=""; PROFILE="lean"; DOMAIN=""; DRY=false; HOST_FLAG=""
+        ROUTE=""; PROFILE="lean"; DOMAIN=""; DRY=false; HOST_FLAG=""; YES=false
         while [ $# -gt 0 ]; do case "$1" in
             --route) ROUTE="$2"; shift 2 ;; --profile) PROFILE="$2"; shift 2 ;; --domain) DOMAIN="$2"; shift 2 ;;
-            --host) HOST_FLAG="--host"; shift ;; --dry-run) DRY=true; shift ;; *) shift ;;
+            --host) HOST_FLAG="--host"; shift ;; --yes) YES=true; shift ;; --dry-run) DRY=true; shift ;; *) shift ;;
         esac; done
         SSH=$(node_field "$NODE" ssh); DIR=$(node_field "$NODE" repo_dir); URL=$(node_field "$NODE" repo_url)
         [ -n "$SSH" ] || die "$NODE is this machine — run the route's own command here (pol prod guide / isle core-install)"
@@ -155,7 +160,9 @@ EOF
                 DEB=$(ls "$POL_SUITE_ROOT"/.generated/debs/polari-complete_*.deb 2>/dev/null | sort -V | tail -1)
                 [ -n "$DEB" ] || die "no polari-complete deb staged in .generated/debs — pol prod debs build"
                 $DRY || scp -q "$DEB" "$SSH:/tmp/$(basename "$DEB")"
-                STEPS=("sudo apt-get install -y /tmp/$(basename "$DEB")" "sudo isle core-install")
+                # --yes = unattended (defers the security walkthrough: isle security setup later)
+                CI="sudo isle core-install"; $YES && CI="sudo isle core-install --skip-security"
+                STEPS=("sudo apt-get install -y /tmp/$(basename "$DEB")" "$CI")
                 AFTER="" ;;
             *) die "--route swarm-worker|swarm-server|isle-member|isle-core" ;;
         esac
@@ -165,6 +172,52 @@ EOF
         done
         if [ -n "$AFTER" ]; then if $DRY; then echo "  [dry-run] $AFTER"; else eval "$AFTER"; fi; fi
         $DRY && log_info "dry-run complete — rerun without --dry-run to execute" || log_success "install ($ROUTE) done on $NODE" ;;
+    status)
+        NODE=${1:?node required}; SSH=$(node_field "$NODE" ssh)
+        pol_box "status: $NODE"
+        # the swarm's view (from this manager)
+        NID=$(for id in $(docker node ls -q 2>/dev/null); do docker node inspect --format '{{.ID}} {{.Spec.Labels}}' "$id" | grep -q "polari.machine:$NODE" && echo "$id"; done | head -1)
+        if [ -n "$NID" ]; then
+            docker node inspect --format '  swarm        {{.Spec.Role}} {{.Status.State}} {{.Spec.Availability}} labels={{.Spec.Labels}}' "$NID"
+            T=$(docker node ps "$NID" --filter desired-state=running --format '{{.Name}} {{.CurrentState}}' 2>/dev/null | sed 's/^/                 /'); echo "  tasks        $([ -n "$T" ] && echo || echo none)$T"
+        else echo "  swarm        not a member of this swarm"; fi
+        [ -n "$SSH" ] || { echo "  (this machine)"; exit 0; }
+        ssh -o ConnectTimeout=8 "$SSH" 'set +e
+echo "  host         $(hostname) up $(uptime -p 2>/dev/null | sed s/^up\ //) · $(free -h | awk "/^Mem/{print \$7}") free · docker $(docker --version 2>/dev/null | grep -oE "[0-9]+\.[0-9]+" | head -1)"
+if command -v isle >/dev/null 2>&1; then
+  echo "  isle cli     $(dpkg-query -W -f=\${Version} polari-complete 2>/dev/null || echo present)"
+  S=$(isle status 2>/dev/null | sed "s/\x1b\[[0-9;]*m//g")
+  echo "  router       $(echo "$S" | grep -m1 -E "Router is reachable|Router.*not" | sed "s/^ *//")"
+  echo "  agent        $(docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -E "^isle-(vlan|remote)-agent" || echo "not running")"
+  echo "  polari.isle  HTTP $(curl -sk --max-time 6 -o /dev/null -w "%{http_code}" https://polari.isle/ 2>/dev/null) · $(docker ps --format "{{.Names}}" | grep -c "^prf-isle") prf-isle containers"
+  echo "  doors        $(isle url exposures 2>/dev/null | sed "s/\x1b\[[0-9;]*m//g" | tail -1 | sed "s/^ *//")"
+  command -v virsh >/dev/null 2>&1 && echo "  guests       $(virsh list --all 2>/dev/null | tail -n +3 | awk "NF{print \$2\"(\"\$3\")\"}" | tr "\n" " ")"
+else
+  echo "  isle cli     none (swarm-only machine)"
+fi
+echo "  containers   $(docker ps --format "{{.Names}}" 2>/dev/null | wc -l) running"' ;;
+    uninstall)
+        NODE=${1:?node required}; shift || true
+        ROUTE=""; YES=false; DRY=false
+        while [ $# -gt 0 ]; do case "$1" in --route) ROUTE="$2"; shift 2 ;; --yes) YES=true; shift ;; --dry-run) DRY=true; shift ;; *) shift ;; esac; done
+        SSH=$(node_field "$NODE" ssh)
+        case "$ROUTE" in
+            swarm-worker)
+                NID=$(for id in $(docker node ls -q 2>/dev/null); do docker node inspect --format '{{.ID}} {{.Spec.Labels}}' "$id" | grep -q "polari.machine:$NODE" && echo "$id"; done | head -1)
+                [ -n "$NID" ] || die "$NODE is not in this swarm"
+                STEPS=("docker swarm leave"); PRE="docker node update --availability drain $NID"; POST="sleep 5; docker node rm --force $NID" ;;
+            swarm-server) DIR=$(node_field "$NODE" repo_dir); STEPS=("cd $DIR && pol prod down"); PRE=""; POST="" ;;
+            isle-member|isle-core)
+                $YES || die "the isle's full wipe is irreversible on that device (backup → destroy --purge → apt purge) — add --yes to confirm (dry-run shows the steps)"
+                STEPS=("sudo ISLE_CONFIRM_DELETE=yes isle uninstall --everything --force"); PRE=""; POST="" ;;
+            *) die "--route swarm-worker|swarm-server|isle-member|isle-core" ;;
+        esac
+        pol_box "uninstall: $NODE route=$ROUTE"
+        if $DRY; then [ -n "$PRE" ] && echo "  [dry-run] $PRE"; for s in "${STEPS[@]}"; do echo "  [dry-run] ssh -t $SSH '$s'"; done; [ -n "$POST" ] && echo "  [dry-run] $POST"; log_info "dry-run complete"; exit 0; fi
+        [ -n "$PRE" ] && eval "$PRE"
+        for s in "${STEPS[@]}"; do log_info "ssh $SSH: $s"; ssh -t -o ConnectTimeout=8 "$SSH" "$s" || log_warn "step returned non-zero on $NODE: $s"; done
+        [ -n "$POST" ] && eval "$POST"
+        log_success "uninstall ($ROUTE) done on $NODE — pol deploy status $NODE" ;;
     tier)
         NODE=${1:?node required}; shift || true
         WANT=""; CHECK=false
