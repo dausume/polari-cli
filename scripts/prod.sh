@@ -414,6 +414,7 @@ do_apply() {
     [ "$POL_PROD_ROUTE" = swarm ] || die "route is '$POL_PROD_ROUTE' — pol prod applies the swarm (server) route"
     if [ "${1:-}" != "--yes" ] && [ "$HAS_TUI" = 1 ]; then do_plan; tui_yesno "Apply?" "Proceed with the plan above?" || return 0; fi
     pol_box "pol prod — apply ($(profile) profile)"
+    save_answers   # what applied is what later verbs (status/cert/down) act on
     do_check || log_warn "preflight reported problems — continuing (fix and re-run apply; every step is idempotent)"
     if [ "$(profile)" = full ]; then security_setup; write_configs_full; else write_configs; fi
     stage_cert; stage_debs; build_or_pull_images; render_stack; deploy_stack
@@ -452,7 +453,8 @@ case "$COMMAND" in
     debs)    load_answers; case "${1:-}" in build) POL_PROD_DEBS=build ;; copy) POL_PROD_DEBS="copy:${2:?dir}" ;; esac; stage_debs ;;
     render)  if [ "$(profile)" = full ]; then write_configs_full; else write_configs; fi; stage_cert; render_stack ;;
     deploy)  render_stack; deploy_stack ;;
-    down)    docker stack rm "$(stack_name)"; log_success "stack $(stack_name) removed (data volumes kept)" ;;
+    down)    # remove the answered profile's stack — and any other pol prod stack still up (never leave one behind)
+             for st in polari-lean polari-prod; do docker stack ls --format '{{.Name}}' | grep -qx "$st" && { docker stack rm "$st"; log_success "stack $st removed (data volumes kept)"; }; done; true ;;
     bootstrap)
         # a fresh VM (D6): docker, swarm, then the guide
         command -v docker >/dev/null 2>&1 || { log_info "installing docker (get.docker.com)"; curl -fsSL https://get.docker.com | sh; sudo usermod -aG docker "$USER" || true; }
