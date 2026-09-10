@@ -43,6 +43,7 @@ ${BOLD}HOW IT STAYS SECURE${NC}
               install a permission group on the machine (one password prompt, once):
                 remote  ssh + swarm + AI-assisted setup — exactly the commands pol deploy sends
                 app     the app-setup route — what the store's doors run for a person
+  ${CYAN}audit${NC} <node> [--json]   the os-security audit on that machine (every ring, pass/fail, verdict), over ssh
   ${CYAN}tier${NC} <node> [--check | reach|member|hardware] [--install]
               --check: what the machine qualifies for (docker, virt flags, /dev/kvm, libvirt, IOMMU);
               a tier: label the swarm node (polari.tier) + the topology machine row; hardware
@@ -241,6 +242,16 @@ echo "  containers   $(docker ps --format "{{.Names}}" 2>/dev/null | wc -l) runn
             echo "    (the files are already at /tmp on $NODE; afterwards pol deploy needs no password on it)"
             [ -t 0 ] && ssh -t "$SSH" "sudo bash /tmp/install-groups.sh $GROUP $GUSER" && log_success "polari-$GROUP installed on $NODE"
         fi ;;
+    audit)
+        NODE=${1:?node required}; shift || true
+        SSH=$(node_field "$NODE" ssh); DIR=$(node_field "$NODE" repo_dir)
+        if [ -z "$SSH" ]; then bash "$SCRIPT_DIR/../../os-security/audit.sh" "$@"; exit $?; fi
+        pol_box "audit: $NODE"
+        # the target may not have the checkout: ship audit.sh itself, it is self-contained
+        scp -q "$SCRIPT_DIR/../../os-security/audit.sh" "$SSH:/tmp/os-security-audit.sh" || die "scp failed"
+        ssh -o ConnectTimeout=8 "$SSH" "bash /tmp/os-security-audit.sh $*"; RC=$?
+        [ $RC = 0 ] && log_success "$NODE: hardened" || log_warn "$NODE: not yet hardened (verdict above) — os-security/README.md"
+        exit $RC ;;
     tier)
         NODE=${1:?node required}; shift || true
         WANT=""; CHECK=false; INSTALL=false

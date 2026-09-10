@@ -220,6 +220,19 @@ rotate() {
 
 COMMAND=$1; shift || true
 case "$COMMAND" in
+    os)
+        # sec: the DAC + MAC controls (os-security/): render for a scenario + the apps up, apply, audit, escape-test
+        OSD="$POL_SUITE_ROOT/os-security"; V="${1:-help}"; shift || true
+        SCN="${OS_SEC_SCENARIO:-}"; REST=()
+        while [ $# -gt 0 ]; do case "$1" in --scenario) SCN="$2"; shift 2 ;; *) REST+=("$1"); shift ;; esac; done
+        [ -n "$SCN" ] || SCN=$( { docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^isle-(vlan|remote)-agent$' && echo isle; } || { docker stack ls --format '{{.Name}}' 2>/dev/null | grep -qx polari-prod && echo swarm-full; } || { docker stack ls --format '{{.Name}}' 2>/dev/null | grep -qx polari-lean && echo swarm-lean; } || echo dev )
+        case "$V" in
+            render)      python3 "$OSD/render.py" --scenario "$SCN" "${REST[@]:---apps-from-manifests}" ;;
+            apply)       [ "$(id -u)" = 0 ] && bash "$OSD/apply.sh" --scenario "$SCN" "${REST[@]}" || sudo bash "$OSD/apply.sh" --scenario "$SCN" "${REST[@]}" ;;
+            audit)       bash "$OSD/audit.sh" --scenario "$SCN" "${REST[@]}" ;;
+            escape-test) [ "$(id -u)" = 0 ] && bash "$OSD/escape-test.sh" --scenario "$SCN" "${REST[@]}" || sudo bash "$OSD/escape-test.sh" --scenario "$SCN" "${REST[@]}" ;;
+            *) echo "pol security os render|apply [--complain|--enforce|--dry-run]|audit [--json]|escape-test [--profile P]   [--scenario isle|swarm-lean|swarm-full|dev]  (scenario auto-detected: $SCN)" ;;
+        esac ;;
     setup)      exec bash "$POL_SUITE_ROOT/setup-polari-security.sh" "${1:-dev}" "${@:2}" ;;
     node-setup)
         MODE="${1:-staging}"

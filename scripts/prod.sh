@@ -426,6 +426,10 @@ do_apply() {
     do_check || log_warn "preflight reported problems — continuing (fix and re-run apply; every step is idempotent)"
     if [ "$(profile)" = full ]; then security_setup; write_configs_full; else write_configs; fi
     stage_cert; stage_debs; build_or_pull_images; render_stack; deploy_stack
+    # the DAC + MAC controls for this profile (os-security): render always; apply only when asked (root, changes the host)
+    local scn; scn=$([ "$(profile)" = full ] && echo swarm-full || echo swarm-lean)
+    python3 "$SUITE/os-security/render.py" --scenario "$scn" --apps-from-manifests >/dev/null 2>&1 && log_info "os-security rendered for $scn (POL_PROD_HARDEN=on applies it; pol security os audit scores it)"
+    if [ "${POL_PROD_HARDEN:-off}" = on ]; then bash "$SCRIPT_DIR/security.sh" os apply --scenario "$scn" || log_warn "os-security apply reported problems"; fi
     if [ "$POL_PROD_CERT_MODE" = letsencrypt ] && ! edge_cert_is_public; then
         log_info "waiting for the proxy before the HTTP challenge…"; sleep 8; issue_cert
     fi

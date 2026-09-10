@@ -105,10 +105,15 @@ template_render() {
         die "template $tpl still has static upstream{} blocks — they stop nginx from booting on a swarm (a service name only resolves once its task runs). Use: set \$up_x http://host:port; proxy_pass \$up_x;"
     fi
     mkdir -p "$POL_SUITE_ROOT/.generated"
+    # HSTS only once the edge certificate is publicly trusted (a self-signed edge with HSTS would lock browsers out)
+    local hsts="# HSTS off: edge certificate not publicly trusted yet (pol prod cert)"
+    if [ -s "$POL_SUITE_ROOT/.generated/certs/edge/fullchain.pem" ] && openssl x509 -in "$POL_SUITE_ROOT/.generated/certs/edge/fullchain.pem" -noout -issuer 2>/dev/null | grep -qiE "let's encrypt|ISRG|R1[0-9]|E[0-9]|ZeroSSL|DigiCert|Sectigo|GlobalSign|Google Trust"; then
+        hsts='add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;'
+    fi
     case "$env" in
-        staging) local ip="${LOCAL_IP:-$(lan_ip)}"; sed "s/\${LOCAL_IP}/$ip/g" "$tpl" > "$out"; log_success "rendered $out (LOCAL_IP=$ip, topology $topology)" ;;
+        staging) local ip="${LOCAL_IP:-$(lan_ip)}"; sed -e "s/\${LOCAL_IP}/$ip/g" -e "s|\${HSTS_HEADER}|$hsts|" "$tpl" > "$out"; log_success "rendered $out (LOCAL_IP=$ip, topology $topology)" ;;
         prod|lean) [ -n "$domain" ] || domain="${PROD_DOMAIN:-${POL_PROD_DOMAIN:-}}"; [ -n "$domain" ] || die "--domain <public domain> (or PROD_DOMAIN) required for $env"
-                   sed "s/\${PROD_DOMAIN}/$domain/g" "$tpl" > "$out"; log_success "rendered $out (domain $domain, topology $topology)" ;;
+                   sed -e "s/\${PROD_DOMAIN}/$domain/g" -e "s|\${HSTS_HEADER}|$hsts|" "$tpl" > "$out"; log_success "rendered $out (domain $domain, topology $topology, ${hsts:0:9})" ;;
     esac
     [ "$topology" = swarm ] && log_info "swarm: the stack pins the proxy to the manager with host-mode 80/443 (pol prod); every other service is reached over the overlay by name"
 }
