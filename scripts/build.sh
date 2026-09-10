@@ -101,7 +101,8 @@ case "$COMMAND" in
     promote)
         # Only the suite manifest promotes today; rf-node root files are
         # still hand-canonical until its re-authoring lands.
-        MAPPING="docker-compose.yml docker-compose.staging-nip.yml docker-compose.prod.yml"
+        # prod (and lean) are authored directly since 2026-09-09 — never promoted over
+        MAPPING="docker-compose.yml docker-compose.staging-nip.yml"
         PROMOTED=0
         for f in $MAPPING; do
             GEN="$POL_SUITE_ROOT/jinja-build/$f"

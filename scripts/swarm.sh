@@ -63,13 +63,15 @@ role_compose_cmd() {
         suite)   echo "docker compose -f $POL_SUITE_ROOT/docker-compose.staging-nip.yml --env-file $POL_SUITE_ROOT/.generated/.env.staging" ;;
         # prd-4: the LEAN production profile (pol prod writes .env.lean + the configs it needs)
         lean)    echo "docker compose -f $POL_SUITE_ROOT/docker-compose.lean.yml --env-file $POL_SUITE_ROOT/.generated/.env.lean" ;;
+        # the FULL production profile (Keycloak, scorecard, file store; odoo only with POL_PROD_ODOO=on)
+        prod)    echo "docker compose -f $POL_SUITE_ROOT/docker-compose.prod.yml --env-file $POL_SUITE_ROOT/.generated/.env.prod" ;;
         *) return 1 ;;
     esac
 }
 
 render_stack() {
     local role=$1
-    local cmd; cmd=$(role_compose_cmd "$role") || die "unknown role '$role' (engines|cnt-engines|suite|node|lean)"
+    local cmd; cmd=$(role_compose_cmd "$role") || die "unknown role '$role' (engines|cnt-engines|suite|node|lean|prod)"
     # mod-env-3: module enablement is topology ROWS, not a
     # hand-maintained env string. For the node/suite roles the
     # POLARI_MODULES baked into the stack is DERIVED from the core's
@@ -89,6 +91,7 @@ render_stack() {
     # topology's stacks.yml via pol topology apply / pol allocate.
     local cargs=()
     for c in ${POL_STACK_CONSTRAINTS:-}; do cargs+=(--constraint "$c"); done
+    [ "$role" = prod ] && [ "${POL_PROD_ODOO:-off}" = on ] && cargs+=(--with-profile odoo)
     $cmd config 2>/dev/null | python3 "$POL_SUITE_ROOT/pol-build/tools/stackify.py" "${cargs[@]}" > "$out"
     [ -s "$out" ] || die "stack render produced nothing — is the $role compose bundle present? (pol build list / pol build render)"
     log_success "stack rendered: $out"
@@ -166,7 +169,7 @@ print(urllib.request.urlopen(req, timeout=15).read().decode())" \
         fi
         render_stack "$ROLE"
         docker stack deploy -c "$POL_SUITE_ROOT/.generated/stack-$ROLE.yml" "polari-$ROLE"
-        record_build swarm "$ROLE" "$([ "$ROLE" = lean ] && echo production || echo staging)"
+        record_build swarm "$ROLE" "$([ "$ROLE" = lean ] || [ "$ROLE" = prod ] && echo production || echo staging)"
         log_success "stack polari-$ROLE deployed — pol swarm ps $ROLE (pol start/rebuild/stop now shorthand this)" ;;
     relocate)
         # gm-5 + gm-3 (GRACEFUL_MOBILITY_PLAN): move a STATEFUL swarm
