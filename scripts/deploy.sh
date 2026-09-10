@@ -39,7 +39,11 @@ ${BOLD}HOW IT STAYS SECURE${NC}
   ${CYAN}uninstall${NC} <node> --route swarm-worker|swarm-server|isle-member|isle-core [--yes] [--dry-run]
               the reverse of install: leave the swarm / pol prod down / the isle's own full
               wipe (`isle uninstall --everything`, ISLE_CONFIRM_DELETE=yes only with --yes)
-  ${CYAN}tier${NC} <node> [--check | reach|member|hardware]
+  ${CYAN}grant${NC} <node> --group remote|app [--user U]
+              install a permission group on the machine (one password prompt, once):
+                remote  ssh + swarm + AI-assisted setup — exactly the commands pol deploy sends
+                app     the app-setup route — what the store's doors run for a person
+  ${CYAN}tier${NC} <node> [--check | reach|member|hardware] [--install]
               --check: what the machine qualifies for (docker, virt flags, /dev/kvm, libvirt, IOMMU);
               a tier: label the swarm node (polari.tier) + the topology machine row; hardware
               tier refuses without kvm + libvirt on the target
@@ -152,8 +156,10 @@ EOF
                 FP="${ISLE_CA_FINGERPRINT:-}"
                 [ -n "$FP" ] || FP=$(ssh -o ConnectTimeout=8 isle-core "sudo -n openssl x509 -in /etc/isle-mesh/ca/isle-root.crt -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2" 2>/dev/null || true)
                 [ -n "$FP" ] || die "the isle CA fingerprint is needed (ISLE_CA_FINGERPRINT=…) — it is printed by isle core-install / isle status on the core"
+                # the JOIN INFO's own fetch: https://apt.isle/isle-bootstrap.sh resolved to the core (its CA is not trusted yet → -k; the sha check below is the guard)
+                SHA="${ISLE_BOOTSTRAP_SHA256:-$(ssh -o ConnectTimeout=8 isle-core "sha256sum /usr/share/isle-mesh/isle-cli/scripts/isle-bootstrap.sh 2>/dev/null | cut -d' ' -f1" 2>/dev/null || true)}"
                 STEPS=("$ENSURE_DOCKER"
-                       "curl -fsS -o /tmp/isle-bootstrap.sh http://$CORE_IP/isle-bootstrap.sh || curl -fsS -o /tmp/isle-bootstrap.sh https://$CORE_IP/isle-bootstrap.sh -k"
+                       "curl -fsSk -o /tmp/isle-bootstrap.sh --resolve apt.isle:443:$CORE_IP https://apt.isle/isle-bootstrap.sh && { [ -z '$SHA' ] || echo '$SHA  /tmp/isle-bootstrap.sh' | sha256sum -c - ; }"
                        "sudo bash /tmp/isle-bootstrap.sh --fingerprint '$FP' --core $CORE_IP $HOST_FLAG")
                 AFTER="" ;;
             isle-core)
@@ -218,10 +224,27 @@ echo "  containers   $(docker ps --format "{{.Names}}" 2>/dev/null | wc -l) runn
         for s in "${STEPS[@]}"; do log_info "ssh $SSH: $s"; ssh -t -o ConnectTimeout=8 "$SSH" "$s" || log_warn "step returned non-zero on $NODE: $s"; done
         [ -n "$POST" ] && eval "$POST"
         log_success "uninstall ($ROUTE) done on $NODE — pol deploy status $NODE" ;;
+    grant)
+        NODE=${1:?node required}; shift || true
+        GROUP=""; GUSER=""
+        while [ $# -gt 0 ]; do case "$1" in --group) GROUP="$2"; shift 2 ;; --user) GUSER="$2"; shift 2 ;; *) shift ;; esac; done
+        [ "$GROUP" = remote ] || [ "$GROUP" = app ] || die "--group remote|app"
+        SSH=$(node_field "$NODE" ssh); [ -n "$SSH" ] || die "$NODE is this machine — sudo bash polari-cli/shells/groups/install-groups.sh $GROUP \$USER"
+        [ -n "$GUSER" ] || GUSER=$(ssh -o ConnectTimeout=8 "$SSH" 'id -un') || die "ssh to $SSH failed"
+        pol_box "grant: $NODE group=polari-$GROUP user=$GUSER"
+        scp -q "$SCRIPT_DIR/../shells/groups/install-groups.sh" "$SCRIPT_DIR/../shells/groups/polari-$GROUP.sudoers" "$SSH:/tmp/" || die "scp failed"
+        if ssh -o ConnectTimeout=8 "$SSH" 'sudo -n true' 2>/dev/null; then
+            ssh "$SSH" "sudo bash /tmp/install-groups.sh $GROUP $GUSER" && log_success "polari-$GROUP installed on $NODE"
+        else
+            log_warn "$NODE needs a password for sudo — this is the ONE interactive step; run it there (or in a terminal here with ssh -t):"
+            echo "    ssh -t $SSH 'sudo bash /tmp/install-groups.sh $GROUP $GUSER'"
+            echo "    (the files are already at /tmp on $NODE; afterwards pol deploy needs no password on it)"
+            [ -t 0 ] && ssh -t "$SSH" "sudo bash /tmp/install-groups.sh $GROUP $GUSER" && log_success "polari-$GROUP installed on $NODE"
+        fi ;;
     tier)
         NODE=${1:?node required}; shift || true
-        WANT=""; CHECK=false
-        while [ $# -gt 0 ]; do case "$1" in --check) CHECK=true; shift ;; reach|member|hardware|core) WANT="$1"; shift ;; *) shift ;; esac; done
+        WANT=""; CHECK=false; INSTALL=false
+        while [ $# -gt 0 ]; do case "$1" in --check) CHECK=true; shift ;; --install) INSTALL=true; shift ;; reach|member|hardware|core) WANT="$1"; shift ;; *) shift ;; esac; done
         SSH=$(node_field "$NODE" ssh)
         PROBE='echo "docker=$(command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && echo yes || echo no) virt=$(grep -c -E "vmx|svm" /proc/cpuinfo) kvm=$([ -e /dev/kvm ] && echo yes || echo no) libvirt=$(command -v virsh >/dev/null 2>&1 && echo yes || echo no) iommu=$(ls /sys/kernel/iommu_groups 2>/dev/null | wc -l) agent=$(docker ps --format "{{.Names}}" 2>/dev/null | grep -cE "^isle-(vlan|remote)-agent$") isle=$(command -v isle >/dev/null 2>&1 && echo yes || echo no)"'
         if [ -n "$SSH" ]; then FACTS=$(ssh -o ConnectTimeout=8 "$SSH" "$PROBE") || die "ssh to $SSH failed"; else FACTS=$(bash -c "$PROBE"); fi
@@ -232,8 +255,14 @@ echo "  containers   $(docker ps --format "{{.Names}}" 2>/dev/null | wc -l) runn
         echo "  qualifies for: $ELIG$([ "$F_kvm" = yes ] && [ "$F_libvirt" = no ] && echo '  (hardware needs libvirt: sudo apt install -y qemu-kvm libvirt-daemon-system)')"
         $CHECK && exit 0
         [ -n "$WANT" ] || die "give a tier (reach|member|hardware|core) or --check"
+        if [ "$WANT" = hardware ] && [ "$F_kvm" = yes ] && [ "$F_libvirt" = no ] && $INSTALL; then
+            [ -n "$SSH" ] || die "install libvirt here yourself: sudo apt-get install -y qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils"
+            log_info "installing libvirt on $NODE (the polari-remote group allows this without a password)"
+            ssh -t -o ConnectTimeout=8 "$SSH" 'sudo apt-get install -y --no-install-recommends qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils && sudo usermod -aG libvirt "$USER" && sudo usermod -aG kvm "$USER" && sudo systemctl enable --now libvirtd' \
+                && { F_libvirt=yes; ELIG=hardware; log_success "libvirt installed on $NODE"; } || die "libvirt install failed on $NODE (is polari-remote granted? pol deploy grant $NODE --group remote)"
+        fi
         case "$WANT" in
-            hardware) [ "$ELIG" = hardware ] || die "$NODE does not qualify for the hardware tier (needs /dev/kvm + libvirt on the target)" ;;
+            hardware) [ "$ELIG" = hardware ] || die "$NODE does not qualify for the hardware tier (needs /dev/kvm + libvirt on the target — add --install to put libvirt there)" ;;
             member)   [ "$F_docker" = yes ] || die "$NODE has no working docker — member tier needs it" ;;
         esac
         NODE_ID=$(docker node ls --format '{{.ID}} {{json .}}' 2>/dev/null | grep "polari.machine=$NODE\|" | awk '{print $1}' | while read -r id; do docker node inspect --format '{{.ID}} {{.Spec.Labels}}' "$id" | grep -q "polari.machine:$NODE" && echo "$id"; done | head -1)

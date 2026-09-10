@@ -1,0 +1,12 @@
+# /etc/sudoers.d/polari-remote — the REMOTE OPERATION group (his ruling 2026-09-10):
+# ssh + swarm setup + AI-assisted setup. Members may run, without a password,
+# exactly the commands `pol deploy` sends over ssh — nothing else.
+# Separate from polari-app (the app-setup route the store uses).
+# Install: polari-cli/shells/groups/install-groups.sh remote <user>
+Cmnd_Alias POLARI_REMOTE_DOCKER  = /usr/bin/sh -c "curl -fsSL https\://get.docker.com | sh", /usr/sbin/usermod -aG docker *, /usr/bin/systemctl enable --now docker
+Cmnd_Alias POLARI_REMOTE_ISLE    = /usr/local/bin/isle, /usr/bin/isle, /usr/bin/bash /tmp/isle-bootstrap.sh *, /usr/bin/bash /usr/share/isle-mesh/isle-cli/scripts/*
+Cmnd_Alias POLARI_REMOTE_DEBS    = /usr/bin/apt-get install -y /tmp/polari-complete*.deb, /usr/bin/apt-get install -y /tmp/polari-complete-offline*.deb, /usr/bin/apt-get install -y qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils, /usr/bin/apt-get install -y --no-install-recommends qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils
+Cmnd_Alias POLARI_REMOTE_VIRT    = /usr/sbin/usermod -aG libvirt *, /usr/sbin/usermod -aG kvm *, /usr/bin/systemctl enable --now libvirtd
+Cmnd_Alias POLARI_REMOTE_READ    = /usr/bin/openssl x509 -in /etc/isle-mesh/ca/isle-root.crt *, /usr/bin/cat /etc/isle-mesh/*
+%polari-remote ALL=(root) NOPASSWD: POLARI_REMOTE_DOCKER, POLARI_REMOTE_ISLE, POLARI_REMOTE_DEBS, POLARI_REMOTE_VIRT, POLARI_REMOTE_READ
+Defaults:%polari-remote !requiretty

@@ -1,0 +1,7 @@
+# /etc/sudoers.d/polari-app — the APP SETUP group: what the Isle App Store's doors
+# run for a person (the same verbs polkit fronts in the GUI), nothing about ssh,
+# swarm or other machines. Separate from polari-remote.
+# Install: polari-cli/shells/groups/install-groups.sh app <user>
+Cmnd_Alias POLARI_APP_ISLE = /usr/local/bin/isle core-install *, /usr/local/bin/isle onboard *, /usr/local/bin/isle app *, /usr/local/bin/isle url *, /usr/local/bin/isle status, /usr/local/bin/isle uninstall *, /usr/bin/isle core-install *, /usr/bin/isle onboard *, /usr/bin/isle app *, /usr/bin/isle url *, /usr/bin/isle status, /usr/bin/isle uninstall *
+Cmnd_Alias POLARI_APP_DEBS = /usr/bin/apt-get install -y /tmp/polari-*.deb, /usr/bin/apt-get install -y /var/lib/polari/apps/*.deb
+%polari-app ALL=(root) NOPASSWD: POLARI_APP_ISLE, POLARI_APP_DEBS
