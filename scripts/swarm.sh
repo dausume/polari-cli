@@ -91,8 +91,14 @@ render_stack() {
     # topology's stacks.yml via pol topology apply / pol allocate.
     local cargs=()
     for c in ${POL_STACK_CONSTRAINTS:-}; do cargs+=(--constraint "$c"); done
-    [ "$role" = prod ] && [ "${POL_PROD_ODOO:-off}" = on ] && cargs+=(--with-profile odoo)
-    $cmd config 2>/dev/null | python3 "$POL_SUITE_ROOT/pol-build/tools/stackify.py" "${cargs[@]}" > "$out"
+    # profile-gated services (odoo): `docker compose config` omits them unless
+    # the profile is activated, and swarm has no profiles — so name them here
+    # (POL_SWARM_PROFILES="odoo", or POL_PROD_ODOO=on for the prod role). Off by
+    # default, which is what every swarm role did before (compose dropped them).
+    local profs="${POL_SWARM_PROFILES-}" pargs=""
+    [ -z "${POL_SWARM_PROFILES+x}" ] && [ "$role" = prod ] && [ "${POL_PROD_ODOO:-off}" = on ] && profs="odoo"
+    for pr in $profs; do cargs+=(--with-profile "$pr"); pargs="$pargs --profile $pr"; done
+    $cmd $pargs config 2>/dev/null | python3 "$POL_SUITE_ROOT/pol-build/tools/stackify.py" "${cargs[@]}" > "$out"
     [ -s "$out" ] || die "stack render produced nothing — is the $role compose bundle present? (pol build list / pol build render)"
     log_success "stack rendered: $out"
 }
