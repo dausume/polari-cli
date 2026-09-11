@@ -182,6 +182,7 @@ do_facts() {  # machine-readable facts for the Textual guide: pol prod facts [--
         docker manifest inspect "${chk_repo}prf-backend:$chk_tag" >/dev/null 2>&1 && echo '{"ok": true}' || echo '{"ok": false}'; return 0
     fi
     local names; names=$(names "${dom:-example.org}")
+    POL_PROD_DOMAIN="${dom:-$POL_PROD_DOMAIN}"   # the links and names follow the domain being asked about
     {
         echo "suite=$SUITE"; echo "git=$(git -C "$SUITE" rev-parse --short HEAD 2>/dev/null)"; echo "host=$(hostname)"; echo "user=$(id -un)"
         for k in ROUTE DOMAIN EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO; do v="POL_PROD_$k"; echo "answer.$k=${!v}"; done

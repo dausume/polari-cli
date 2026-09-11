@@ -12,8 +12,8 @@ Screen { layout: vertical; }
 RadioSet { width: 100%; }
 Input { width: 100%; }
 DataTable { height: auto; max-height: 14; margin: 1 0; }
-#nav { height: 3; dock: bottom; padding: 0 1; border-top: solid $primary-darken-2; }
-#problems { width: 1fr; color: $error; }
+#nav { height: 5; dock: bottom; padding: 0 1; border-top: solid $primary-darken-2; align-vertical: middle; }
+#problems { width: 1fr; color: $error; padding: 1 1 0 0; }
 #back, #next { margin: 0 1; }
 #log { height: 1fr; min-height: 12; border: solid $primary-darken-2; }
 #after { height: 3; }
