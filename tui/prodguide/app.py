@@ -61,6 +61,7 @@ class ProdGuide(App):
         self.apply_done = False
         self.confirmed_apply = False
         self.answers_file: str = (facts or {}).get("answers_file", "")
+        self.releases_mounted = False
 
     # ---------------------------------------------------------------- layout
     def compose(self) -> ComposeResult:
@@ -184,12 +185,16 @@ class ProdGuide(App):
     def panel_extras(self) -> ComposeResult:
         with Vertical(id="step-extras"):
             yield Markdown("## Installers and the demonstration notice")
-            yield Label("Installers to hand out on the Download page", classes="q")
+            yield Label("Installers to hand out on the Download page — installers are release artifacts: built once, published, fetched here", classes="q")
             with RadioSet(id="rs-debs"):
                 yield RadioButton("Skip for now (the page lists nothing)", id="debs-skip", value=True)
-                yield RadioButton("Build the platform debs here (needs the Isle-Mesh and app-shell pieces; minutes)", id="debs-build")
-                yield RadioButton("Copy them from a release pool directory (type it below)", id="debs-copy")
-            yield Input(placeholder="/path/to/release/debs", id="in-debs")
+                yield RadioButton("A published official release (choose below)", id="debs-release")
+                yield RadioButton("Build the platform debs here (needs the Isle-Mesh and app-shell pieces and the toolchain; minutes)", id="debs-build")
+                yield RadioButton("Another pool: a directory, a release page URL, or github:<owner/repo>@<tag>", id="debs-copy")
+            yield Label("Official releases with installers", classes="q", id="lbl-rel")
+            with RadioSet(id="rs-rel"):
+                yield RadioButton("(none published yet)", id="rel-none", value=True)
+            yield Input(placeholder="/path/to/debs  or  https://github.com/dausume/polari-suite/releases/tag/polari-v2026.09.11  or  github:dausume/polari-suite@polari-v2026.09.11", id="in-debs")
             yield Checkbox("Show the 'demonstration instance — no personal information' notice and terms gate on the apps", id="cb-demo", value=True)
 
     def panel_review(self) -> ComposeResult:
@@ -262,7 +267,18 @@ class ProdGuide(App):
             self.set_radio("rs-imgsrc", "imgsrc-staging" if a.IMAGE_TAG == "staging" else "imgsrc-build")
         self.query_one("#in-imgrepo", Input).value = a.IMAGE_REPO
         self.query_one("#in-imgtag", Input).value = a.IMAGE_TAG if a.IMAGE_REPO else ""
-        self.set_radio("rs-debs", "debs-copy" if a.DEBS.startswith("copy") else "debs-" + a.DEBS)
+        rels = self.facts.get("releases", []) or []
+        rs = self.query_one("#rs-rel", RadioSet)
+        if rels and not self.releases_mounted:
+            self.releases_mounted = True
+            for b in list(rs.query(RadioButton)):
+                b.remove()
+            for i, r in enumerate(rels):
+                rs.mount(RadioButton(f"{r['tag']} — {r['info']}", id="rel-" + r["tag"].replace(".", "_"), value=(i == 0)))
+        if a.DEBS.startswith("release:"):
+            self.set_radio("rs-debs", "debs-release"); self.set_radio("rs-rel", "rel-" + a.DEBS[8:].replace(".", "_"))
+        else:
+            self.set_radio("rs-debs", "debs-copy" if a.DEBS.startswith("copy") else "debs-" + a.DEBS)
         self.query_one("#in-debs", Input).value = a.DEBS[5:] if a.DEBS.startswith("copy:") else ""
         self.query_one("#cb-demo", Checkbox).value = a.DEMO == "on"
         # facts → tables and notes
@@ -343,7 +359,14 @@ class ProdGuide(App):
                 a.registry_verified = False
             a.IMAGE_REPO, a.IMAGE_TAG = repo, tag
         debs = radio(self.query_one("#rs-debs", RadioSet))
-        a.DEBS = ("copy:" + self.query_one("#in-debs", Input).value.strip()) if debs == "copy" else (debs or a.DEBS)
+        if debs == "copy":
+            a.DEBS = "copy:" + self.query_one("#in-debs", Input).value.strip()
+        elif debs == "release":
+            rel = radio(self.query_one("#rs-rel", RadioSet))
+            tags = {r["tag"].replace(".", "_"): r["tag"] for r in (self.facts.get("releases", []) or [])}
+            a.DEBS = ("release:" + tags[rel]) if rel in tags else "release:"
+        else:
+            a.DEBS = debs or a.DEBS
         a.DEMO = "on" if self.query_one("#cb-demo", Checkbox).value else "off"
 
     # ---------------------------------------------------------------- navigation
@@ -443,7 +466,9 @@ class ProdGuide(App):
         if rs == "rs-addr":
             self.query_one("#in-addr").display = radio(ev.radio_set) == "other"
         if rs == "rs-debs":
-            self.query_one("#in-debs").display = radio(ev.radio_set) == "copy"
+            v = radio(ev.radio_set)
+            self.query_one("#in-debs").display = v == "copy"
+            self.query_one("#rs-rel").display = v == "release"; self.query_one("#lbl-rel").display = v == "release"
 
     @on(Button.Pressed, "#verify-image")
     async def _verify(self) -> None:

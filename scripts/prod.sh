@@ -202,6 +202,8 @@ do_facts() {  # machine-readable facts for the Textual guide: pol prod facts [--
         for n in $names; do echo "dns=$n|$(resolve "$n" || true)"; done
         official_image_sources | while IFS=$'\t' read -r pfx ttl; do echo "source=$pfx|$ttl"; done
         echo "release_tags=$(git -C "$SUITE" tag -l 'polari-v*' 2>/dev/null | sort -r | head -8 | tr '\n' ' ')"
+        echo "release_source=$(official_release_sources | head -1 | cut -f1)"
+        release_tags_with_debs "$(official_release_sources | head -1 | cut -f1)" | while IFS=$'\t' read -r t i; do echo "release=$t|$i"; done
         echo "staging_images=$(docker image inspect prf-backend:staging >/dev/null 2>&1 && echo 1 || echo 0)"
         echo "swarm=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || echo none)"
         for p in 80 443; do echo "port.$p=$(ss -ltn 2>/dev/null | grep -q ":$p " && echo busy || echo free)"; done
@@ -227,6 +229,7 @@ for line in sys.stdin.read().split("\n"):
     elif k.startswith("answer."): out["answers"][k[7:]] = v
     elif k.startswith("names."): out.setdefault("names", {})[k[6:]] = v.split()
     elif k == "release_tags": out[k] = v.split()
+    elif k == "release": t, i = v.split("|", 1); out.setdefault("releases", []).append({"tag": t, "info": i})
     else: out[k] = v
 print(json.dumps(out, indent=1))'
 }
@@ -322,11 +325,17 @@ Nothing else to do here. (pol prod is the server route.)"
         keycloak "Keycloak logins — the FULL profile: + scorecard, MariaDB, MinIO (11 names, ~7 GB of limits)")
     [ "$POL_PROD_AUTH" = keycloak ] && { tui_yesno "Odoo" "Also deploy the Odoo ERP pair? (off unless you use it)" && POL_PROD_ODOO=on || POL_PROD_ODOO=off; }
     POL_PROD_MODULES=$(tui_input "Modules" "The floor set the server boots (comma-separated; more = more memory):" "$POL_PROD_MODULES")
-    POL_PROD_DEBS=$(tui_menu "Installers to hand out" "The site's Download page serves the platform debs staged in .generated/debs." "$POL_PROD_DEBS" \
-        build "Build them on this machine now (needs the suite checkout + dpkg-deb; ~minutes)" \
-        copy  "Copy them from a release pool directory I will name" \
-        skip  "Skip for now (the Download page will say none are staged)")
-    if [ "$POL_PROD_DEBS" = copy ]; then POL_PROD_DEBS="copy:$(tui_input "Release pool" "Directory holding the release's debs/ (e.g. polari-jenkins/pool/<version>/debs):" "")"; fi
+    # Installers: skip | a PUBLISHED release (our official source, listed) | build here | manual pool (dir, release URL, github:owner/repo@tag)
+    local ditems=(skip "Skip for now (the Download page lists nothing)") drel dtag dinfo
+    while IFS=$'\t' read -r dtag dinfo; do [ -n "$dtag" ] && ditems+=("release:$dtag" "Official release $dtag — $dinfo (github.com/$(official_release_sources | head -1 | cut -f1))"); done < <(release_tags_with_debs "$(official_release_sources | head -1 | cut -f1)")
+    [ ${#ditems[@]} -eq 2 ] && ditems+=(none "(no official release with installers is published yet)")
+    ditems+=(build "Build them on this machine now (needs the Isle-Mesh + app-shell pieces and the toolchain; minutes)")
+    ditems+=(manual "Another pool: a directory, a GitHub release page URL, or github:<owner/repo>@<tag>")
+    POL_PROD_DEBS=$(tui_menu "Installers to hand out" "The site's Download page serves the platform debs staged in .generated/debs. Installers should be RELEASE ARTIFACTS: built once, published, fetched here." "${POL_PROD_DEBS:-skip}" "${ditems[@]}")
+    case "$POL_PROD_DEBS" in
+        none) POL_PROD_DEBS=skip ;;
+        manual) drel=$(tui_input "Release pool" "A directory holding the debs, a release page URL (https://github.com/<owner>/<repo>/releases/tag/<tag>), or github:<owner/repo>@<tag>:" ""); case "$drel" in "") POL_PROD_DEBS=skip ;; http*|github:*) POL_PROD_DEBS="copy:$drel" ;; *) POL_PROD_DEBS="copy:$drel" ;; esac ;;
+    esac
     if tui_yesno "Demonstration notice" "Show the 'demonstration instance — no personal information' notice and terms gate on the apps? (Answer No for a plain distribution server.)"; then POL_PROD_DEMO=on; else POL_PROD_DEMO=off; fi
     # Images: ONE choice that sets registry + tag together (they must match; no free-text tag)
     local items=() src cur="build"
@@ -466,6 +475,18 @@ stage_debs() {
     load_answers; mkdir -p "$GEN/debs"
     case "$POL_PROD_DEBS" in
         build) log_info "building the platform debs (this takes minutes)"; (cd "$SUITE" && bash build-polari-isle-deb.sh && bash build-polari-complete-deb.sh --flavor online) || log_warn "deb build failed — the Download page will list what is staged" ;;
+        release:*|github:*|copy:github:*|copy:https://github.com/*)
+            # a published GitHub release is the release pool: release:<tag> (the official source), github:<owner/repo>@<tag>,
+            # or a release page URL https://github.com/<owner>/<repo>/releases/tag/<tag>
+            local ref=${POL_PROD_DEBS#copy:} repo tag
+            case "$ref" in
+                release:*) repo=$(official_release_sources | head -1 | cut -f1); tag=${ref#release:} ;;
+                github:*)  ref=${ref#github:}; repo=${ref%@*}; tag=${ref##*@} ;;
+                https://github.com/*) repo=$(echo "$ref" | sed -E 's|https://github.com/([^/]+/[^/]+)/releases/tag/(.+)|\1|'); tag=$(echo "$ref" | sed -E 's|.*/releases/tag/||') ;;
+            esac
+            log_info "fetching the installers of release $tag from github.com/$repo (a published release is the pool)"
+            local urls; urls=$(release_deb_urls "$repo" "$tag"); [ -n "$urls" ] || die "release $tag of $repo carries no .deb assets (or does not exist)"
+            rm -f "$GEN"/debs/*.deb; for u in $urls; do curl -fsSL --max-time 600 -o "$GEN/debs/$(basename "$u")" "$u" && log_success "fetched $(basename "$u")" || log_warn "failed: $u"; done ;;
         copy:*) local src=${POL_PROD_DEBS#copy:}; [ -d "$src" ] || die "release pool dir not found: $src"; cp -v "$src"/*.deb "$GEN/debs/" ;;
         *) : ;;
     esac

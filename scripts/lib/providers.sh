@@ -85,3 +85,30 @@ official_image_sources() {
 image_source_title() {  # prefix → title, or "manual: <prefix>"
     local t; t=$(official_image_sources | awk -F'\t' -v p="$1" '$1==p{print $2}'); [ -n "$t" ] && echo "official — $t" || echo "manual entry — $1"
 }
+
+# ---- official release sources: where published installers (debs) come from ------
+# GitHub Releases of the suite: free for a public repository; assets are the platform debs.
+official_release_sources() {
+    printf 'dausume/polari-suite\tGitHub Releases of the Polari suite — the official installers (built and published by the release job)\n'
+}
+release_tags_with_debs() {  # owner/repo → tags whose release carries .deb assets (newest first, ≤ 8); unauthenticated API, 60 calls/h
+    curl -fsSL --max-time 15 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$1/releases?per_page=15" 2>/dev/null | python3 -c '
+import sys, json
+try: rels = json.load(sys.stdin)
+except Exception: rels = []
+n = 0
+for r in rels if isinstance(rels, list) else []:
+    if r.get("draft"): continue
+    debs = [a for a in r.get("assets", []) if a.get("name", "").endswith(".deb")]
+    if debs:
+        print("%s\t%d deb(s), %s" % (r.get("tag_name"), len(debs), (r.get("published_at") or "")[:10])); n += 1
+    if n >= 8: break'
+}
+release_deb_urls() {  # owner/repo tag → download URLs of the .deb assets
+    curl -fsSL --max-time 15 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$1/releases/tags/$2" 2>/dev/null | python3 -c '
+import sys, json
+try: r = json.load(sys.stdin)
+except Exception: r = {}
+for a in r.get("assets", []):
+    if a.get("name", "").endswith(".deb"): print(a["browser_download_url"])'
+}

@@ -108,7 +108,11 @@ class Answers:
         if missing:
             p.append(("MODULES", "the floor modules are required: " + ", ".join(missing)))
         if self.DEBS.startswith("copy:") and len(self.DEBS) <= 5:
-            p.append(("DEBS", "copy needs a directory: copy:/path/to/release/debs"))
+            p.append(("DEBS", "the pool needs a directory, a release page URL, or github:<owner/repo>@<tag>"))
+        if self.DEBS.startswith("copy:") and self.DEBS[5:].startswith("github:") and "@" not in self.DEBS:
+            p.append(("DEBS", "a GitHub pool needs a tag: github:<owner/repo>@<tag>"))
+        if self.DEBS == "release:":
+            p.append(("DEBS", "no official release with installers is published yet — choose skip, build, or another pool"))
         # images: registry and tag are ONE decision
         if not TAG_RE.match(self.IMAGE_TAG or ""):
             p.append(("IMAGE_TAG", "an image tag is required"))
@@ -180,7 +184,7 @@ class Answers:
             ("logins", "Keycloak" if self.AUTH == "keycloak" else "none"),
             ("odoo", self.ODOO),
             ("modules", self.MODULES),
-            ("installers", self.DEBS),
+            ("installers", {"skip": "none staged", "build": "built on this machine"}.get(self.DEBS, self.DEBS.replace("release:", "official release ").replace("copy:", "pool: "))),
             ("demo notice", self.DEMO),
             ("images", self.images_from),
             ("provider stash", self.STASH),
