@@ -23,6 +23,7 @@
 #   pol prod debs [build|copy <dir>]   stage the platform debs the server hands out
 #   pol prod render | deploy | down    the individual steps
 #  (credentials: everything generated goes to the root-only encrypted vault — sudo pol security vault show; provider credentials stashed all/some/none by your answer)
+#  pol prod log [n]               print the n-th last run log (every run is logged: .generated/prod-log/)
 #  pol prod providers             which providers are in use for what (hosting, DNS, certificate, registry, code) and the pages to visit for each
 #  pol prod addresses [--use <ip>|--auto]  every address assigned to this machine (droplet metadata on DigitalOcean); the exposure IP the A records need (detected, or the one you answered)
 #  pol prod bootstrap             a fresh VM: install docker, swarm init, then the guide
@@ -61,7 +62,7 @@ load_answers() {
     fi
     : "${POL_PROD_ROUTE:=swarm}"; : "${POL_PROD_CERT_MODE:=self-signed}"; : "${POL_PROD_LE_CHALLENGE:=http}"
     : "${POL_PROD_AUTH:=off}"; : "${POL_PROD_MODULES:=polariapps,appstore,islemesh,terms}"; : "${POL_PROD_DEBS:=skip}"
-    : "${POL_PROD_DEMO:=on}"; : "${POL_PROD_IMAGE_TAG:=staging}"; : "${POL_PROD_ODOO:=off}"
+    : "${POL_PROD_DEMO:=on}"; : "${POL_PROD_IMAGE_TAG:=prod}"; : "${POL_PROD_ODOO:=off}"
 }
 save_answers() {
     {
@@ -71,6 +72,7 @@ save_answers() {
         done
     } > "$ANSWERS"
     log_success "answers saved: $ANSWERS"
+    [ -n "${LOG_FILE:-}" ] && { echo "# answers:"; sed 's/^/#   /' "$ANSWERS"; } >> "$LOG_FILE" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------- TUI
@@ -266,8 +268,27 @@ Nothing else to do here. (pol prod is the server route.)"
         skip  "Skip for now (the Download page will say none are staged)")
     if [ "$POL_PROD_DEBS" = copy ]; then POL_PROD_DEBS="copy:$(tui_input "Release pool" "Directory holding the release's debs/ (e.g. polari-jenkins/pool/<version>/debs):" "")"; fi
     if tui_yesno "Demonstration notice" "Show the 'demonstration instance — no personal information' notice and terms gate on the apps? (Answer No for a plain distribution server.)"; then POL_PROD_DEMO=on; else POL_PROD_DEMO=off; fi
-    POL_PROD_IMAGE_REPO=$(tui_input "Image registry" "Registry prefix to PULL release images from (e.g. ghcr.io/dausume/), or empty to build them on this machine from the checkout:" "$POL_PROD_IMAGE_REPO")
-    POL_PROD_IMAGE_TAG=$(tui_input "Image tag" "The image tag (a release tag from the registry, or the local tag present on the manager):" "$POL_PROD_IMAGE_TAG")
+    # Images: ONE choice that sets registry + tag together (they must match; no free-text tag)
+    local items=() src cur="build"
+    [ -n "$POL_PROD_IMAGE_REPO" ] && cur="custom"; [ -z "$POL_PROD_IMAGE_REPO" ] && [ "$POL_PROD_IMAGE_TAG" = staging ] && cur="staging"
+    items+=(build "Build the images on this machine from this checkout → tag 'prod' (needs ~3 GB RAM, 5–15 min)")
+    docker image inspect prf-backend:staging >/dev/null 2>&1 && items+=(staging "Use the 'staging' images already present on this machine (a dev/staging box)")
+    local t; for t in $(git -C "$SUITE" tag -l 'polari-v*' 2>/dev/null | sort -r | head -5); do items+=("$t" "Pull the release $t from the official registry ghcr.io/dausume/"); done
+    items+=(custom "Pull from a registry I name — example: ghcr.io/dausume/  +  tag polari-v2026.09.11")
+    src=$(tui_menu "Where do the images come from?" "Backend + frontend images for this deployment. Building here is the default; releases are pulled by tag." "$cur" "${items[@]}")
+    case "$src" in
+        build)   POL_PROD_IMAGE_REPO=""; POL_PROD_IMAGE_TAG="prod" ;;
+        staging) POL_PROD_IMAGE_REPO=""; POL_PROD_IMAGE_TAG="staging" ;;
+        custom)  POL_PROD_IMAGE_REPO=$(tui_input "Registry prefix" "Registry + namespace the images are pulled from, ending in a slash — example: ghcr.io/dausume/" "${POL_PROD_IMAGE_REPO:-ghcr.io/dausume/}")
+                 case "$POL_PROD_IMAGE_REPO" in */) ;; "") die "a registry prefix is required for a pull" ;; *) POL_PROD_IMAGE_REPO="$POL_PROD_IMAGE_REPO/" ;; esac
+                 POL_PROD_IMAGE_TAG=$(tui_input "Image tag" "The tag every image is pulled at — example: polari-v2026.09.11 (a release) or staging (the moving tier tag)" "${POL_PROD_IMAGE_TAG:-}")
+                 [ -n "$POL_PROD_IMAGE_TAG" ] && [ "$POL_PROD_IMAGE_TAG" != prod ] || die "a tag is required (prod is reserved for images built here)" ;;
+        polari-v*) POL_PROD_IMAGE_REPO="ghcr.io/dausume/"; POL_PROD_IMAGE_TAG="$src" ;;
+    esac
+    if [ -n "$POL_PROD_IMAGE_REPO" ]; then
+        docker manifest inspect "${POL_PROD_IMAGE_REPO}prf-backend:$POL_PROD_IMAGE_TAG" >/dev/null 2>&1 && log_success "registry has ${POL_PROD_IMAGE_REPO}prf-backend:$POL_PROD_IMAGE_TAG" \
+            || { tui_msg "Not found" "${POL_PROD_IMAGE_REPO}prf-backend:$POL_PROD_IMAGE_TAG is not reachable from here (not published, private, or a typo). Choose again."; POL_PROD_IMAGE_REPO=""; POL_PROD_IMAGE_TAG="prod"; tui_msg "Images" "Falling back to: build on this machine (tag prod)."; }
+    fi
     save_answers
     do_plan
     if tui_yesno "Apply now?" "Render the configuration, stage the certificate and debs, and deploy stack polari-lean on this swarm?"; then do_apply --yes; else log_info "Not applied. Later: pol prod apply"; fi
@@ -647,6 +668,14 @@ do_status() {
 # ---------------------------------------------------------------- dispatch
 show_help() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; }
 COMMAND=${1:-guide}; shift || true
+# every run is logged in full (stdout+stderr, the TUI's answers, every step) so it can be reviewed afterwards:
+#   pol prod log            the last run      pol prod log 3      the third-last      ls .generated/prod-log/
+LOG_DIR="$GEN/prod-log"; mkdir -p "$LOG_DIR" 2>/dev/null || true
+case "$COMMAND" in
+    log) n=${1:-1}; f=$(ls -1t "$LOG_DIR"/*.log 2>/dev/null | sed -n "${n}p"); [ -n "$f" ] || { echo "no runs logged yet ($LOG_DIR)"; exit 0; }; echo "== $f"; sed 's/\x1b\[[0-9;]*m//g' "$f"; exit 0 ;;
+    help|-h|--help) ;;
+    *) if [ -d "$LOG_DIR" ]; then LOG_FILE="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$COMMAND.log"; { echo "# pol prod $COMMAND $* — $(date -u +%FT%TZ) on $(hostname) as $(id -un) — $(git -C "$SUITE" rev-parse --short HEAD 2>/dev/null)"; } > "$LOG_FILE"; exec > >(tee -a "$LOG_FILE") 2>&1; fi ;;
+esac
 case "$COMMAND" in
     guide)   do_guide ;;
     plan)    do_plan ;;
