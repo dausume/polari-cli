@@ -79,9 +79,10 @@ save_answers() {
 # ---------------------------------------------------------------- TUI
 launch_guide() {  # the Textual guide when a python with textual exists and we have a terminal; else the plain dialogs
     local py
-    if [ "${POL_PROD_TUI:-}" != whiptail ] && [ -t 0 ] && [ -t 1 ] && py=$(tui_python); then
+    # stdout is the run-log tee by now; the guide draws on the terminal itself (apply, started by the guide, logs its own run)
+    if [ "${POL_PROD_TUI:-}" != whiptail ] && { [ "${HAD_TTY:-0}" = 1 ] || { [ -t 0 ] && [ -t 1 ]; }; } && [ -e /dev/tty ] && py=$(tui_python); then
         log_info "opening the guide (Textual) — POL_PROD_TUI=whiptail for the plain dialogs"
-        cd "$SUITE" && PYTHONPATH="$SCRIPT_DIR/../tui${PYTHONPATH:+:$PYTHONPATH}" POL_SUITE_ROOT="$SUITE" exec "$py" -m prodguide
+        cd "$SUITE" && PYTHONPATH="$SCRIPT_DIR/../tui${PYTHONPATH:+:$PYTHONPATH}" POL_SUITE_ROOT="$SUITE" exec "$py" -m prodguide </dev/tty >/dev/tty 2>&1
     fi
     [ "${POL_PROD_TUI:-}" = whiptail ] || log_warn "Textual guide not available (pol prod tui-install) — using the plain dialogs"
     do_guide
@@ -739,7 +740,8 @@ LOG_DIR="$GEN/prod-log"; mkdir -p "$LOG_DIR" 2>/dev/null || true
 case "$COMMAND" in
     log) n=${1:-1}; f=$(ls -1t "$LOG_DIR"/*.log 2>/dev/null | sed -n "${n}p"); [ -n "$f" ] || { echo "no runs logged yet ($LOG_DIR)"; exit 0; }; echo "== $f"; sed 's/\x1b\[[0-9;]*m//g' "$f"; exit 0 ;;
     help|-h|--help|facts) ;;
-    *) if [ -d "$LOG_DIR" ]; then LOG_FILE="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$COMMAND.log"; { echo "# pol prod $COMMAND $* — $(date -u +%FT%TZ) on $(hostname) as $(id -un) — $(git -C "$SUITE" rev-parse --short HEAD 2>/dev/null)"; } > "$LOG_FILE"; exec > >(tee -a "$LOG_FILE") 2>&1; fi ;;
+    *) HAD_TTY=0; [ -t 0 ] && [ -t 1 ] && HAD_TTY=1   # remembered before stdout becomes the tee pipe
+       if [ -d "$LOG_DIR" ]; then LOG_FILE="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$COMMAND.log"; { echo "# pol prod $COMMAND $* — $(date -u +%FT%TZ) on $(hostname) as $(id -un) — $(git -C "$SUITE" rev-parse --short HEAD 2>/dev/null)"; } > "$LOG_FILE"; exec > >(tee -a "$LOG_FILE") 2>&1; fi ;;
 esac
 case "$COMMAND" in
     guide)   launch_guide ;;
