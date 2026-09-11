@@ -22,7 +22,10 @@
 #   pol prod cert                  (re)issue the edge certificate per the answers
 #   pol prod debs [build|copy <dir>]   stage the platform debs the server hands out
 #   pol prod render | deploy | down    the individual steps
-#   pol prod bootstrap             a fresh VM: install docker, swarm init, then the guide
+#  (credentials: everything generated goes to the root-only encrypted vault — sudo pol security vault show; provider credentials stashed all/some/none by your answer)
+#  pol prod providers             which providers are in use for what (hosting, DNS, certificate, registry, code) and the pages to visit for each
+#  pol prod addresses [--use <ip>|--auto]  every address assigned to this machine (droplet metadata on DigitalOcean); the exposure IP the A records need (detected, or the one you answered)
+#  pol prod bootstrap             a fresh VM: install docker, swarm init, then the guide
 # Profiles: logins=off → the LEAN stack (docker-compose.lean.yml, stack polari-lean);
 # logins=keycloak → the FULL stack (docker-compose.prod.yml, stack polari-prod: Keycloak,
 # MariaDB, MinIO, the scorecard; odoo with POL_PROD_ODOO=on). Both deploy the same way.
@@ -34,6 +37,9 @@
 set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/log.sh"
+source "$SCRIPT_DIR/lib/providers.sh"
+source "$SCRIPT_DIR/lib/vault.sh"
+[ -f "${POL_RF_NODE:-$SUITE/polari-rf-node}/security-ledger.sh" ] && source "${POL_RF_NODE:-$SUITE/polari-rf-node}/security-ledger.sh"
 source "$SCRIPT_DIR/lib/state.sh"
 SUITE="$POL_SUITE_ROOT"
 GEN="$SUITE/.generated"
@@ -44,7 +50,7 @@ mkdir -p "$GEN"
 # ---------------------------------------------------------------- answers
 # defaults → file → env (env wins: the AI/script route)
 POL_PROD_ROUTE="${POL_PROD_ROUTE:-}"; POL_PROD_DOMAIN="${POL_PROD_DOMAIN:-}"; POL_PROD_CERT_MODE="${POL_PROD_CERT_MODE:-}"
-POL_PROD_LE_CHALLENGE="${POL_PROD_LE_CHALLENGE:-}"; POL_PROD_LE_EMAIL="${POL_PROD_LE_EMAIL:-}"; POL_PROD_AUTH="${POL_PROD_AUTH:-}"
+POL_PROD_LE_CHALLENGE="${POL_PROD_LE_CHALLENGE:-}"; POL_PROD_LE_EMAIL="${POL_PROD_LE_EMAIL:-}"; POL_PROD_AUTH="${POL_PROD_AUTH:-}"; POL_PROD_EXPOSURE_IP="${POL_PROD_EXPOSURE_IP:-}"; POL_PROD_DNS_PROVIDER="${POL_PROD_DNS_PROVIDER:-}"; POL_PROD_STASH="${POL_PROD_STASH:-}"
 POL_PROD_MODULES="${POL_PROD_MODULES:-}"; POL_PROD_DEBS="${POL_PROD_DEBS:-}"; POL_PROD_DEMO="${POL_PROD_DEMO:-}"; POL_PROD_IMAGE_TAG="${POL_PROD_IMAGE_TAG:-}"
 POL_PROD_IMAGE_REPO="${POL_PROD_IMAGE_REPO:-}"; POL_PROD_ODOO="${POL_PROD_ODOO:-}"
 load_answers() {
@@ -60,7 +66,7 @@ load_answers() {
 save_answers() {
     {
         echo "# pol prod answers — $(date -Is). Edit and re-run: pol prod apply. Env vars POL_PROD_* override."
-        for k in ROUTE DOMAIN CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO; do
+        for k in ROUTE DOMAIN EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO; do
             v="POL_PROD_$k"; echo "$v=${!v}"
         done
     } > "$ANSWERS"
@@ -90,7 +96,96 @@ tui_yesno() {  # title text → 0 yes / 1 no
 tui_msg() { if [ "$HAS_TUI" = 1 ]; then whiptail --title "$1" --msgbox "$2" 20 78; else echo; echo "== $1"; echo "$2"; fi; }
 
 # ---------------------------------------------------------------- facts
-public_ip() { curl -s --max-time 4 https://api.ipify.org 2>/dev/null || curl -s --max-time 4 https://ifconfig.me 2>/dev/null || true; }
+# ---- addresses: what the internet reaches this machine at ---------------------
+# On a DigitalOcean droplet the metadata service (169.254.169.254, no token)
+# names every address assigned to the VM: the public IPv4, the public IPv6 when
+# enabled, the RESERVED (floating) IP when one is attached, and the private VPC
+# address. The exposure address — what the DNS A records must point at — is the
+# reserved IP when attached (it survives a droplet rebuild), else the public
+# IPv4. Elsewhere: the address the internet sees (ipify) and the LAN address.
+_do_meta() { curl -s --max-time 1 "http://169.254.169.254/metadata/v1/$1" 2>/dev/null; }
+on_droplet() { [ -n "${_ON_DROPLET+x}" ] || { _ON_DROPLET=$(_do_meta id); export _ON_DROPLET; }; [ -n "$_ON_DROPLET" ]; }
+# cached per process: every network probe here costs seconds and the verbs ask several times
+server_addresses() { [ -n "${_ADDRS+x}" ] || { _ADDRS=$(_server_addresses_raw); export _ADDRS; }; [ -n "$_ADDRS" ] && printf '%s\n' "$_ADDRS"; }
+_server_addresses_raw() {  # prints: role<TAB>address<TAB>note  (roles: reserved public4 public6 private lan)
+    if on_droplet; then
+        local r4 p4 p6 v; r4=""; p4=$(_do_meta interfaces/public/0/ipv4/address); p6=$(_do_meta interfaces/public/0/ipv6/address); v=$(_do_meta interfaces/private/0/ipv4/address)
+        [ "$(_do_meta floating_ip/ipv4/active)" = true ] && r4=$(_do_meta floating_ip/ipv4/ip_address)
+        [ -n "$r4" ] && printf 'reserved\t%s\tDigitalOcean reserved IP — attached; survives a rebuild of this droplet: POINT THE A RECORDS HERE\n' "$r4"
+        [ -n "$p4" ] && printf 'public4\t%s\tdroplet public IPv4 (region %s, droplet %s)%s\n' "$p4" "$(_do_meta region)" "$(_do_meta id)" "$([ -z "$r4" ] && echo ' — no reserved IP attached: the A records point here, and a rebuilt droplet gets a NEW one')"
+        [ -n "$p6" ] && printf 'public6\t%s\tdroplet public IPv6 — add AAAA records only if you want IPv6 visitors (the proxy listens on both)\n' "$p6"
+        [ -n "$v" ] && printf 'private\t%s\tVPC address — swarm/peer traffic only, never in DNS\n' "$v"
+    else
+        local e4 e6; e4=$(curl -s --max-time 4 https://api.ipify.org 2>/dev/null || curl -s --max-time 4 https://ifconfig.me 2>/dev/null || true); e6=$(curl -s --max-time 4 https://api6.ipify.org 2>/dev/null || true)
+        [ -n "$e4" ] && printf 'public4\t%s\tthe address the internet sees this machine at (behind NAT: forward 80/443 on the router to the LAN address below)\n' "$e4"
+        [ -n "$e6" ] && [ "$e6" != "$e4" ] && printf 'public6\t%s\tpublic IPv6 — AAAA records optional\n' "$e6"
+        printf 'lan\t%s\tLAN address (swarm advertise address)\n' "$(lan_ip)"
+    fi
+}
+detected_ip() {  # what this machine believes its exposure address is
+    server_addresses | awk -F'\t' '$1=="reserved"{print $2; exit} $1=="public4"{p=$2} END{if(p!="")print p}' | head -1
+}
+exposure_ip() {  # the ONE address the A records must carry: the operator's answer when given, else the detection
+    if [ -n "$POL_PROD_EXPOSURE_IP" ]; then echo "$POL_PROD_EXPOSURE_IP"; else detected_ip; fi
+}
+exposure_source() { [ -n "$POL_PROD_EXPOSURE_IP" ] && echo "answered" || echo "detected"; }
+public_ip() { exposure_ip; }
+exposure_ip6() { server_addresses | awk -F'\t' '$1=="public6"{print $2; exit}'; }
+resolve6() { getent ahostsv6 "$1" 2>/dev/null | awk '$1 ~ /:/ {print $1; exit}'; }
+stash_provider() {  # provider key value note — honours POL_PROD_STASH (all|some|none)
+    local prov=$1 key=$2 val=$3 note=$4
+    [ -n "$val" ] || return 0
+    case "${POL_PROD_STASH:-some}" in
+        all)  vault_put "provider $prov" "$key" "$val" "$note" && log_success "stashed $key for $(provider_title "$prov") in the vault (sudo pol security vault forget 'provider $prov' removes it)" ;;
+        some) if [ "$HAS_TUI" = 1 ]; then tui_yesno "Stash $key?" "Keep the $(provider_title "$prov") $key in the encrypted vault so the next run does not ask? (Advice: your password manager first; forget it from the vault afterwards.)" && vault_put "provider $prov" "$key" "$val" "$note" && log_success "stashed $key"; else log_info "$key not stashed (no terminal to ask; POL_PROD_STASH=all stashes without asking)"; fi ;;
+        none) log_info "$key used for this run only (stash policy: none)" ;;
+    esac
+}
+recall_provider() {  # provider key → value from the vault, if stashed
+    vault_get "provider $1" "$2" 2>/dev/null || true
+}
+providers_in_use() {  # role<TAB>provider<TAB>why
+    load_answers
+    on_droplet && printf 'hosting\tdigitalocean\tthis machine is a DigitalOcean droplet (metadata service answers)\n'
+    case "${POL_PROD_DNS_PROVIDER:-}" in
+        digitalocean) printf 'dns\tdigitalocean\tthe domain'"'"'s records are managed at DigitalOcean (answered)\n' ;;
+        cloudflare)   printf 'dns\tcloudflare\tthe domain'"'"'s records are managed at Cloudflare (answered)\n' ;;
+        "")           printf 'dns\tregistrar\tnot answered yet — the registrar'"'"'s DNS page by default (pol prod guide asks)\n' ;;
+        *)            printf 'dns\tregistrar\tthe domain'"'"'s records are managed at the registrar (answered)\n' ;;
+    esac
+    if [ "${POL_PROD_CERT_MODE:-}" = letsencrypt ]; then printf 'certificate\tletsencrypt\tpublicly trusted, %s challenge, contact %s\n' "${POL_PROD_LE_CHALLENGE:-http}" "${POL_PROD_LE_EMAIL:-?}"; else printf 'certificate\tsuite-ca\tself-signed by the suite CA (browsers warn) — pol prod cert switches to Let'"'"'s Encrypt\n'; fi
+    case "${POL_PROD_IMAGE_REPO:-}" in ghcr.io/*) printf 'registry\tgithub\timages pulled from %s\n' "$POL_PROD_IMAGE_REPO" ;; "") printf 'registry\tlocal-build\timages built here from the checkout\n' ;; *) printf 'registry\t%s\timages pulled from %s\n' "$POL_PROD_IMAGE_REPO" "$POL_PROD_IMAGE_REPO" ;; esac
+    printf 'code\tgithub\tthe suite and every module repo (github.com/dausume)\n'
+}
+do_providers() {
+    pol_box "pol prod — providers in use, and where to go"
+    providers_in_use | while IFS=$'\t' read -r role prov why; do
+        printf "  %-12s %-52s %s\n" "$role" "$(provider_title "$prov")" "$why"
+        provider_links "$prov" | while IFS=$'\t' read -r label url; do printf "  %-12s   · %s\n  %-12s     %s\n" "" "$label" "" "$url"; done
+        local c; c=$(provider_credential "$prov"); [ "$c" != none ] && printf "  %-12s   credential: %s\n" "" "$c"
+        echo
+    done
+    echo "  Credentials for these providers are never typed into pol prod except the DNS-challenge token (DO_API_TOKEN, env only)."
+    echo "  When the vault exists (prd-9) the guide asks, at the start, whether to stash provider credentials in it — all, some, or none — and advises keeping them elsewhere."
+}
+do_addresses() {
+    load_answers
+    case "${1:-}" in
+        --use)  POL_PROD_EXPOSURE_IP="${2:?address}"; save_answers; log_success "exposure address answered: $POL_PROD_EXPOSURE_IP (the DNS check and the certificate use it; --auto returns to detection)" ;;
+        --auto) POL_PROD_EXPOSURE_IP=""; save_answers; log_success "exposure address: back to autodetection" ;;
+    esac
+    pol_box "pol prod — addresses ($(on_droplet && echo 'DigitalOcean droplet, from the metadata service' || echo 'this machine'))"
+    server_addresses | while IFS=$'\t' read -r role addr note; do printf "  %-9s %-40s %s\n" "$role" "$addr" "$note"; done
+    local x d; x=$(exposure_ip); d=$(detected_ip); echo
+    echo "  exposure address: ${x:-unknown} ($(exposure_source)) — every name this server answers for needs an A record → ${x:-?}"
+    [ -n "$POL_PROD_EXPOSURE_IP" ] && [ "$POL_PROD_EXPOSURE_IP" != "$d" ] && echo "  detected here:    ${d:-unknown} — differs from the answer; keep the answer if you know the address the world reaches (NAT, a reserved IP, a proxy in front), else: pol prod addresses --auto"
+    echo "  change it:        pol prod addresses --use <ip>   (or answer it in pol prod guide)"
+    [ -n "$(exposure_ip6)" ] && echo "  IPv6:             $(exposure_ip6) — optional AAAA records"
+    if on_droplet; then
+        [ -n "$(server_addresses | awk -F'\t' '$1=="reserved"')" ] || log_warn "no reserved IP attached — attach one in the DigitalOcean console (Networking → Reserved IPs) BEFORE pointing DNS, so wiping and rebuilding this droplet never changes the address"
+        log_info "DigitalOcean cloud firewall (if one is attached to this droplet) must allow inbound 22, 80, 443 (and 2377/7946/4789 from peers only); ufw on the host is rendered by os-security"
+    fi
+}
 resolve() { getent ahostsv4 "$1" 2>/dev/null | awk '{print $1; exit}'; }
 lean_names() { echo "$1 www.$1 prf.$1 api.prf.$1 apt.$1"; }
 full_names() { echo "$1 www.$1 auth.$1 psc.$1 api.psc.$1 prf.$1 api.prf.$1 files.$1 s3.$1 odoo.$1 apt.$1"; }
@@ -107,6 +202,11 @@ LE_LIVE() { echo "${CERTBOT_CONFIG_DIR:-$CA_DIR/.generated/letsencrypt}/live/${L
 do_guide() {
     load_answers
     pol_box "pol prod — production deployment guide"
+    tui_msg "Credentials and the vault" "Everything this guide generates (Keycloak admin, database and file-store passwords on the full profile) is written ONCE into an encrypted, root-only vault at /etc/polari/vault and nowhere else you have to protect. Read it later with:  sudo pol security vault show\n\nProvider credentials you give along the way (a DigitalOcean API token for the DNS challenge, a registry pull token) CAN be stashed in the same vault so the next run does not ask again. Advice: record them in your own password manager and remove them from the vault afterwards (sudo pol security vault forget 'provider <name>'). The next question sets the rule; you can still answer per item."
+    POL_PROD_STASH=$(tui_menu "Stash provider credentials in the vault?" "Generated Polari credentials are always vaulted. For PROVIDER credentials choose:" "${POL_PROD_STASH:-some}" \
+        all "Stash every provider credential I enter (convenient; move them out later)" \
+        some "Ask me for each one" \
+        none "Never — I keep them myself and re-enter when asked")
     local route
     route=$(tui_menu "Which kind of production deployment?" \
 "Two routes exist. Pick the one for THIS machine." "$POL_PROD_ROUTE" \
@@ -125,9 +225,22 @@ Nothing else to do here. (pol prod is the server route.)"
     POL_PROD_DOMAIN=$(tui_input "Domain" "The public domain this server answers for (the site at the apex; prf., api.prf., apt. are made from it):" "${POL_PROD_DOMAIN:-polari-systems.org}")
     [ -n "$POL_PROD_DOMAIN" ] || die "a domain is required"
     local ip; ip=$(public_ip)
-    local dnsmsg="Names this deployment serves, and where they resolve now (this host's public address: ${ip:-unknown}):\n"
+    local addrmsg="Addresses assigned to this machine$(on_droplet && echo ' (DigitalOcean droplet, from its metadata)'):\n"
+    while IFS=$'\t' read -r role addr note; do addrmsg+="  $role: $addr — $note\n"; done < <(server_addresses)
+    addrmsg+="\nThe A records for every name must point at: ${ip:-unknown}"
+    on_droplet && [ -z "$(server_addresses | awk -F'\t' '$1=="reserved"')" ] && addrmsg+="\n\nNo reserved IP is attached. Attach one (Networking → Reserved IPs) before setting DNS, so a wiped and rebuilt droplet keeps the same address."
+    tui_msg "Addresses" "$(printf "$addrmsg")"
+    local ans; ans=$(tui_input "Exposure address" "The address the internet reaches this server at — the DNS A records for every name must carry it. Detected: ${ip:-unknown}. Keep it, or type the address you know is right (a reserved IP, the public side of a NAT, a proxy in front); an address can change, so what you answer here is what the checks and the certificate use:" "${POL_PROD_EXPOSURE_IP:-$ip}")
+    if [ -n "$ans" ] && [ "$ans" != "$(detected_ip)" ]; then POL_PROD_EXPOSURE_IP="$ans"; else POL_PROD_EXPOSURE_IP=""; fi
+    ip=$(exposure_ip)
+    local dnsmsg="Names this deployment serves, and where they resolve now (exposure address: ${ip:-unknown}, $(exposure_source)):\n"
     for n in $(lean_names "$POL_PROD_DOMAIN"); do dnsmsg+="  $n → $(resolve "$n" || true)\n"; done
     dnsmsg+="\nEvery name must point at this server before a provider-issued certificate can be approved."
+    POL_PROD_DNS_PROVIDER=$(tui_menu "Where are the domain's DNS records managed?" "The A records for the five names are set there. Pick the one that applies:" "${POL_PROD_DNS_PROVIDER:-registrar}" \
+        registrar "At the registrar where the domain was bought (most common)" \
+        digitalocean "At DigitalOcean (the domain is delegated to DigitalOcean nameservers) — also enables the DNS challenge" \
+        cloudflare "At Cloudflare")
+    dnsmsg+="\nSet the records at:\n"; while IFS=$'\t' read -r label url; do dnsmsg+="  $label\n    $url\n"; done < <(provider_links "$POL_PROD_DNS_PROVIDER" | head -3)
     tui_msg "DNS check" "$(printf "$dnsmsg")"
     POL_PROD_CERT_MODE=$(tui_menu "HTTPS certificate" \
 "A PUBLICLY TRUSTED certificate is one signed by an authority every browser and phone already trusts, so visitors see the padlock with no warning. Let's Encrypt issues them free and automatically. Choose:" "$POL_PROD_CERT_MODE" \
@@ -139,6 +252,8 @@ Nothing else to do here. (pol prod is the server route.)"
             http "HTTP challenge through this server's port 80 — any registrar, nothing to configure" \
             dns  "DNS challenge through the DigitalOcean API — needs DO_API_TOKEN; works before port 80 is open")
         POL_PROD_LE_EMAIL=$(tui_input "Contact e-mail" "Let's Encrypt sends expiry warnings here (never published):" "${POL_PROD_LE_EMAIL:-}")
+        local lemsg="Let's Encrypt — useful pages:\n"; while IFS=$'\t' read -r label url; do lemsg+="  $label\n    $url\n"; done < <(provider_links letsencrypt); tui_msg "Let's Encrypt" "$(printf "$lemsg")"
+        [ "$POL_PROD_LE_CHALLENGE" = dns ] && tui_msg "DigitalOcean API token" "The DNS challenge needs a DigitalOcean API token with DNS write scope. Create it here and export DO_API_TOKEN in the shell that runs pol prod apply — it is never written into the answers:\n  $(provider_links digitalocean | awk -F'\t' '/API tokens/{print $2}')"
     fi
     POL_PROD_AUTH=$(tui_menu "Logins" "A distribution server needs no accounts (D2 default). Keycloak adds ~1 GB and brings the scorecard + file store." "$POL_PROD_AUTH" \
         off "No login server — the LEAN profile: site, docs, downloads, one Polari backend (4 services)" \
@@ -186,8 +301,10 @@ do_check() {
     local imgs="prf-backend prf-frontend"; [ "$(profile)" = full ] && imgs="prf-backend prf-frontend pol-mariadb pol-file-store psc-redis pol-keycloak psc-frontend psc-backend"
     for img in $imgs; do docker image inspect "${POL_PROD_IMAGE_REPO}$img:$POL_PROD_IMAGE_TAG" >/dev/null 2>&1 && log_success "image ${POL_PROD_IMAGE_REPO}$img:$POL_PROD_IMAGE_TAG present" || log_warn "image ${POL_PROD_IMAGE_REPO}$img:$POL_PROD_IMAGE_TAG absent — apply will $([ -n "$POL_PROD_IMAGE_REPO" ] && echo pull || echo build) it"; done
     if [ -n "$POL_PROD_DOMAIN" ]; then
-        local ip; ip=$(public_ip); local bad=0
-        for n in $(names "$POL_PROD_DOMAIN"); do r=$(resolve "$n" || true); if [ -n "$ip" ] && [ "$r" = "$ip" ]; then log_success "DNS $n → $r"; else log_warn "DNS $n → ${r:-unresolved} (this host: ${ip:-unknown})"; bad=1; fi; done
+        local ip ip6 ours; ip=$(public_ip); ip6=$(exposure_ip6); ours="$ip $(server_addresses | awk -F'\t' '$1=="reserved"||$1=="public4"{print $2}' | tr '\n' ' ')"; local bad=0
+        log_info "exposure address ${ip:-unknown} ($(exposure_source)$(on_droplet && echo ', droplet'))$([ -n "$ip6" ] && echo ", IPv6 $ip6")"
+        for n in $(names "$POL_PROD_DOMAIN"); do r=$(resolve "$n" || true); if [ -n "$r" ] && [[ " $ours " == *" $r "* ]]; then log_success "DNS $n → $r$([ "$r" != "$ip" ] && echo ' (droplet public IPv4; a reserved IP is attached — prefer it)')"; else log_warn "DNS $n → ${r:-unresolved} (this host: ${ip:-unknown})"; bad=1; fi
+            if [ -n "$ip6" ]; then r6=$(resolve6 "$n" || true); [ -n "$r6" ] && [ "$r6" != "$ip6" ] && log_warn "AAAA $n → $r6 but this host's IPv6 is $ip6 (a wrong AAAA record breaks IPv6 visitors and the HTTP challenge)"; fi; done
         [ "$bad" = 1 ] && [ "$POL_PROD_CERT_MODE" = letsencrypt ] && log_warn "a provider-issued certificate needs every name pointing here first"
     else log_warn "no domain answered yet (pol prod guide)"; fi
     if [ -s "$GEN/certs/edge/fullchain.pem" ]; then edge_cert_is_public && log_success "edge certificate: publicly trusted ($(edge_cert_issuer))" || log_warn "edge certificate: self-signed — browsers will warn (pol prod cert)"; else log_warn "no edge certificate staged yet (apply stages one)"; fi
@@ -315,8 +432,19 @@ deploy_stack() {
 security_setup() {
     # the full profile's CA + Keycloak + DB/MinIO credentials — generated once, never weak defaults
     load_answers
+    # placeholder-bearing credential files count as MISSING (today's finding: the old skip-if-exists kept public
+    # placeholders alive); they are moved aside, never silently reused. A fresh DB volume is then required.
+    local f stale=""
+    for f in "$SUITE/pol-keycloak/keycloak-admin.env" "$SUITE/pol-mariadb/mariadb.env" "$SUITE/pol-file-store/minio.env" "$SUITE/pol-file-store/client.env"; do
+        [ -s "$f" ] && [ "$(sec_placeholders "$f" 2>/dev/null || echo 0)" -gt 0 ] && stale="$stale $f"   # the ledger's rule (security-ledger.sh)
+    done
+    if [ -n "$stale" ]; then
+        local dir="$GEN/stale-creds/$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$dir"
+        for f in $stale; do mv "$f" "$dir/"; done
+        log_warn "credential file(s) with PLACEHOLDER values moved to $dir — fresh credentials will be generated; a database volume created with the old values must be recreated (pol prod down; docker volume rm …)"
+    fi
     if [ -s "$SUITE/pol-proxy/certs/ca/pol-ca.crt" ] && [ -s "$SUITE/pol-keycloak/keycloak-admin.env" ] && [ -s "$SUITE/pol-mariadb/mariadb.env" ]; then
-        log_success "security material present (CA, Keycloak admin, DB/MinIO credentials) — pol security rotate prod to renew"; return 0
+        log_success "security material present (CA, Keycloak admin, DB/MinIO credentials) — pol security rotate prod to renew"; vault_generated; return 0
     fi
     log_info "security setup (CA, Keycloak certs + admin, DB/MinIO credentials) — non-interactive, random passwords"
     local pw; pw() { openssl rand -base64 24 | tr -d '/+=' | cut -c1-24; }
@@ -326,6 +454,40 @@ security_setup() {
         POLARI_MINIO_ROOT_USER="${POLARI_MINIO_ROOT_USER:-polari-admin}" POLARI_MINIO_ROOT_PASS="${POLARI_MINIO_ROOT_PASS:-$(pw)}" \
         bash "$SUITE/setup-polari-security.sh" prod >"$GEN/security-setup.log" 2>&1 || { tail -20 "$GEN/security-setup.log" >&2; die "security setup failed (log: .generated/security-setup.log)"; }
     log_success "security material generated (log: .generated/security-setup.log)"
+    vault_generated
+}
+vault_generated() {  # every generated credential → the vault, section [polari <domain>] (idempotent: same key = replaced)
+    load_answers; local sec="polari ${POL_PROD_DOMAIN:-local}" f k v n=0
+    while IFS='|' read -r f k note; do
+        [ -s "$SUITE/$f" ] || continue
+        v=$(grep -s "^$k=" "$SUITE/$f" | head -1 | cut -d= -f2- | sed -e "s/^[\"']//" -e "s/[\"']\$//"); [ -n "$v" ] || continue
+        vault_put "$sec" "$k" "$v" "$note (from $f)" && n=$((n+1))
+    done <<'LIST'
+pol-keycloak/keycloak-admin.env|KEYCLOAK_ADMIN|Keycloak admin user (auth.<domain>)
+pol-keycloak/keycloak-admin.env|KEYCLOAK_ADMIN_PASSWORD|Keycloak admin password
+pol-keycloak/keycloak-admin.env|KEYCLOAK_POLARI_BACKEND_CLIENT_SECRET|Keycloak client secret for the Polari backend
+pol-mariadb/mariadb.env|MARIADB_ROOT_PASSWORD|MariaDB root
+pol-mariadb/mariadb.env|KC_DB_PASSWORD|Keycloak database user
+pol-mariadb/mariadb.env|PSC_DB_PASSWORD|Scorecard database user
+pol-file-store/minio.env|MINIO_ROOT_USER|MinIO (file store) root user
+pol-file-store/minio.env|MINIO_ROOT_PASSWORD|MinIO root password
+pol-file-store/client.env|MINIO_ACCESS_KEY|MinIO client access key
+pol-file-store/client.env|MINIO_SECRET_KEY|MinIO client secret key
+LIST
+    [ "$n" -gt 0 ] && log_success "$n generated credential(s) recorded in the vault ($VAULT_FILE) — sudo pol security vault show" || true
+}
+vault_prompt() {  # the end-of-apply choice (TUI only; unattended keeps)
+    vault_exists || return 0
+    [ "$HAS_TUI" = 1 ] || { log_info "$(vault_status | head -1)"; return 0; }
+    local c; c=$(tui_menu "The credential vault" "Generated credentials are in the encrypted, root-only vault:\n  $VAULT_FILE\nWhat do you want to do with it?" keep \
+        keep   "Keep it here — read later with: sudo pol security vault show" \
+        show   "Show everything NOW, once, so I can write it down / put it in a password manager — then SHRED the vault" \
+        export "Export the vault (+ its key, kept apart) to a path I choose, then shred the local copy")
+    case "$c" in
+        show)   echo; vault_show; echo; tui_yesno "Shred now?" "Have you recorded every value above? The vault will be shredded and nothing recoverable stays on this machine." && vault_shred || log_info "kept" ;;
+        export) local dst; dst=$(tui_input "Export to" "Path for the exported vault (a USB stick, a mounted share):" "$HOME/polari-vault-$(date -u +%F).enc"); vault_export "$dst" && tui_yesno "Shred the local copy?" "Exported to $dst (and $dst.identity). Shred the local vault now?" && vault_shred || true ;;
+        *)      log_info "vault kept: sudo pol security vault show" ;;
+    esac
 }
 write_configs_full() {
     # the FULL profile's inputs — what prod-setup.sh used to write, minus the weak defaults
@@ -407,6 +569,10 @@ issue_cert() {
     load_answers
     [ "$POL_PROD_CERT_MODE" = letsencrypt ] || { log_info "certificate mode is $POL_PROD_CERT_MODE — nothing to issue"; return 0; }
     [ -n "$POL_PROD_LE_EMAIL" ] || die "LE needs an e-mail (POL_PROD_LE_EMAIL)"
+    if [ "$POL_PROD_LE_CHALLENGE" = dns ]; then
+        if [ -n "${DO_API_TOKEN:-}" ]; then stash_provider digitalocean DO_API_TOKEN "$DO_API_TOKEN" "DNS-challenge token (DNS write scope)"
+        else DO_API_TOKEN=$(recall_provider digitalocean DO_API_TOKEN); [ -n "$DO_API_TOKEN" ] && { export DO_API_TOKEN; log_info "DigitalOcean API token taken from the vault (stashed earlier)"; } || die "the DNS challenge needs DO_API_TOKEN in the environment (create one: $(provider_links digitalocean | awk -F'\t' '/API tokens/{print $2}'))"; fi
+    fi
     log_info "issuing the Let's Encrypt certificate for $(names "$POL_PROD_DOMAIN") ($POL_PROD_LE_CHALLENGE challenge)"
     LE_CERT_NAME=$(cert_row) LE_DOMAIN="$POL_PROD_DOMAIN" LE_EMAIL="$POL_PROD_LE_EMAIL" LE_CHALLENGE="$POL_PROD_LE_CHALLENGE" \
         LE_WEBROOT="$GEN/certbot-www" DEPLOY_ENV=prod PROD_DOMAIN="$POL_PROD_DOMAIN" BASE_DOMAIN="$POL_PROD_DOMAIN" \
@@ -434,6 +600,7 @@ do_apply() {
         log_info "waiting for the proxy before the HTTP challenge…"; sleep 8; issue_cert
     fi
     do_status
+    [ "${1:-}" = "--yes" ] || vault_prompt
 }
 do_status() {
     load_answers
@@ -442,12 +609,13 @@ do_status() {
     echo "  profile      $(profile)   stack $(docker stack ls --format '{{.Name}} ({{.Services}} services)' 2>/dev/null | grep "$(stack_name)" || echo "$(stack_name) not deployed")"
     docker stack services "$(stack_name)" --format '  service      {{.Name}}  {{.Replicas}}  {{.Image}}' 2>/dev/null | sed "s/$(stack_name)_//"
     echo "  certificate  $(edge_cert_issuer)  expires $(edge_cert_expiry)  $(edge_cert_is_public && echo 'PUBLICLY TRUSTED' || echo 'NOT public — browsers warn (pol prod cert)')"
-    local ip r; ip=$(public_ip); for n in $(names "${POL_PROD_DOMAIN:-x}"); do r=$(resolve "$n" || true); printf "  dns          %-32s %s%s\n" "$n" "${r:-unresolved}" "$([ -n "$ip" ] && [ "$r" = "$ip" ] && echo '  ✓ this host')"; done
+    local ip r; ip=$(public_ip); for n in $(names "${POL_PROD_DOMAIN:-x}"); do r=$(resolve "$n" || true); printf "  dns          %-32s %s%s\n" "$n" "${r:-unresolved}" "$([ -n "$ip" ] && [ "$r" = "$ip" ] && echo "  ✓ exposure address ($(exposure_source))")"; done
     echo "  installers   $(ls "$GEN"/debs/*.deb 2>/dev/null | wc -l) staged (https://${POL_PROD_DOMAIN:-…}/downloads)   apt tree: $([ -d "$GEN/apt/dists" ] && echo present || echo 'not published')"
     local h; h=$(curl -sk --max-time 5 -H "Host: api.prf.${POL_PROD_DOMAIN:-x}" https://127.0.0.1/api/health 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('phase'), '—', d.get('onlineCount'), '/', d.get('moduleCount'), 'modules online')" 2>/dev/null || echo "not answering yet")
     echo "  backend      $h"
     local t; t=$(curl -sk --max-time 5 -H "Host: api.prf.${POL_PROD_DOMAIN:-x}" "https://127.0.0.1/api/terms/active" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print('terms gate on' if d.get('pending') else 'no terms gate', '· demo bar', 'on' if d.get('show_bar') else 'off')" 2>/dev/null || echo "-")
     echo "  terms        $t"
+    echo "  vault        $(vault_status | head -1 | sed 's/^vault: //')$([ -n "$POL_PROD_STASH" ] && echo " · provider stash policy: $POL_PROD_STASH")"
     local nxt=""; edge_cert_is_public || nxt="pol prod cert (public certificate) · "; [ "$(ls "$GEN"/debs/*.deb 2>/dev/null | wc -l)" -gt 0 ] || nxt="${nxt}pol prod debs build · "
     echo "  next         ${nxt}pol prod status"
 }
@@ -467,6 +635,8 @@ case "$COMMAND" in
     deploy)  render_stack; deploy_stack ;;
     down)    # remove the answered profile's stack — and any other pol prod stack still up (never leave one behind)
              for st in polari-lean polari-prod; do docker stack ls --format '{{.Name}}' | grep -qx "$st" && { docker stack rm "$st"; log_success "stack $st removed (data volumes kept)"; }; done; true ;;
+    addresses) do_addresses "$@" ;;
+    providers) do_providers ;;
     bootstrap)
         # a fresh VM (D6): docker, swarm, then the guide
         command -v docker >/dev/null 2>&1 || { log_info "installing docker (get.docker.com)"; curl -fsSL https://get.docker.com | sh; sudo usermod -aG docker "$USER" || true; }

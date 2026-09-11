@@ -12,6 +12,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/log.sh"
 source "$POL_RF_NODE/security-ledger.sh"
+source "$SCRIPT_DIR/lib/vault.sh"
 
 show_help() {
     pol_box "pol security — credentials + certificates"
@@ -54,6 +55,13 @@ ${BOLD}COMMANDS${NC}
         shell with POLARI_ROTATE_KC=yes, then rolls out in the required
         order — Keycloak first (its entrypoint re-PATCHes the client
         secret), backend second — and verifies the rollout.
+
+  ${CYAN}vault${NC} init|put|get|list|show|forget|export|import|shred|status
+        The credential vault (root-only, encrypted; /etc/polari/vault):
+        generated credentials + the provider credentials you CHOSE to stash
+        (pol prod guide asks: all / some / none). show prints to the
+        terminal only. Advice: move stashed provider credentials to your
+        password manager and: sudo pol security vault forget 'provider <name>'
 
   ${CYAN}cleanup${NC}
         Remove ALL generated certs + credential env files (suite script's
@@ -233,6 +241,8 @@ case "$COMMAND" in
             escape-test) [ "$(id -u)" = 0 ] && bash "$OSD/escape-test.sh" --scenario "$SCN" "${REST[@]}" || sudo bash "$OSD/escape-test.sh" --scenario "$SCN" "${REST[@]}" ;;
             *) echo "pol security os render|apply [--complain|--enforce|--dry-run]|audit [--json]|escape-test [--profile P]   [--scenario isle|swarm-lean|swarm-full|dev]  (scenario auto-detected: $SCN)" ;;
         esac ;;
+    vault)      # prd-9: the credential vault — root-only, encrypted, the keystore for generated + stashed credentials
+                vault_cmd "$@" ;;
     setup)      exec bash "$POL_SUITE_ROOT/setup-polari-security.sh" "${1:-dev}" "${@:2}" ;;
     node-setup)
         MODE="${1:-staging}"
@@ -243,7 +253,7 @@ case "$COMMAND" in
             prod)    exec bash "$POL_RF_NODE/prod-setup.sh" ;;
             *)       die "unknown node-setup mode '$MODE' (staging|prod)" ;;
         esac ;;
-    status)     status || true ;;
+    status)     status || true; echo; echo "  $(vault_status | head -1)"; vault_status | sed -n 2p | sed "s/^/  /" ;;
     gate)       gate "$@" ;;
     rotate)     rotate "$@" ;;
     cleanup)
