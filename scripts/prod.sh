@@ -131,7 +131,7 @@ exposure_ip() {  # the ONE address the A records must carry: the operator's answ
 exposure_source() { [ -n "$POL_PROD_EXPOSURE_IP" ] && echo "answered" || echo "detected"; }
 public_ip() { exposure_ip; }
 exposure_ip6() { server_addresses | awk -F'\t' '$1=="public6"{print $2; exit}'; }
-resolve6() { getent ahostsv6 "$1" 2>/dev/null | awk '$1 ~ /:/ {print $1; exit}'; }
+resolve6() { getent ahostsv6 "$1" 2>/dev/null | awk '$1 ~ /:/ && $1 !~ /^::ffff:/ {print $1; exit}'; }
 stash_provider() {  # provider key value note — honours POL_PROD_STASH (all|some|none)
     local prov=$1 key=$2 val=$3 note=$4
     [ -n "$val" ] || return 0
@@ -415,14 +415,38 @@ build_or_pull_images() {
         log_info "pulling release images from $POL_PROD_IMAGE_REPO (tag $POL_PROD_IMAGE_TAG)"
         docker compose -f "$(compose_file)" --env-file "$(env_file)" pull --ignore-buildable 2>&1 | tail -3 || die "pull failed"
     else
-        log_info "building the profile's images locally (compose builds; the stack deploys them by name — minutes)"
-        docker compose -f "$(compose_file)" --env-file "$(env_file)" build 2>&1 | grep -E "^#[0-9]+ (naming|ERROR)|error|Error" | tail -12 || true
+        # the lean/prod compose files carry no build: (swarm-first rule) — the prf images are built from the
+        # node's own staging definitions (context, dockerfile, args), then tagged for this profile
+        build_prf_images
     fi
     build_hub
 }
+prf_build_spec() {  # service → "context<TAB>dockerfile<TAB>arg=val …" from polari-rf-node/docker-compose.staging-nip.yml
+    python3 - "$SUITE/polari-rf-node/docker-compose.staging-nip.yml" "$1" <<'PY'
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1])); svc = doc['services'][sys.argv[2]]; b = svc.get('build') or {}
+ctx = b if isinstance(b, str) else b.get('context', '.'); df = '' if isinstance(b, str) else b.get('dockerfile', '')
+args = {} if isinstance(b, str) else (b.get('args') or {})
+print(ctx, df, ' '.join('%s=%s' % kv for kv in args.items()), sep='\t')
+PY
+}
+build_prf_images() {
+    local RF="$SUITE/polari-rf-node" tag="$POL_PROD_IMAGE_TAG" svc img spec ctx df args a
+    [ -d "$RF/polari-framework" ] && [ -d "$RF/polari-platform-angular" ] || die "polari-rf-node pieces are missing (get-polari.sh pulls them) — or answer an image registry to pull instead of building"
+    log_warn "building the two Polari images on THIS machine — the frontend build needs ~3 GB of memory and 5–15 minutes; a registry answer (pol prod guide → Images) pulls them instead"
+    for svc in backend frontend; do
+        img="prf-$svc:$tag"
+        spec=$(prf_build_spec "$svc") || die "no build definition for $svc in docker-compose.staging-nip.yml"
+        ctx=$(echo "$spec" | cut -f1); df=$(echo "$spec" | cut -f2); args=$(echo "$spec" | cut -f3)
+        local extra=(); [ -n "$df" ] && extra+=(-f "$RF/$ctx/$df"); for a in $args; do extra+=(--build-arg "$a"); done
+        log_info "docker build -t $img ${extra[*]} $RF/$ctx"
+        docker build -t "$img" "${extra[@]}" "$RF/$ctx" 2>&1 | grep -E "^#[0-9]+ (naming|ERROR)|^ERROR|error:" | tail -8
+        docker image inspect "$img" >/dev/null 2>&1 && log_success "image $img built" || die "image $img did not build — see the lines above (memory? run: free -h)"
+    done
+}
 deploy_stack() {
     load_answers
-    docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null | grep -q active || { log_info "docker swarm init"; docker swarm init --advertise-addr "$(lan_ip)" >/dev/null; }
+    [ "$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null)" = active ] || { log_info "docker swarm init (advertise $(lan_ip))"; docker swarm init --advertise-addr "$(lan_ip)" >/dev/null || die "docker swarm init failed — run it by hand: docker swarm init --advertise-addr <this machine's address>"; }
     set -a; source "$(env_file)"; set +a
     local wra=(); [ -n "$POL_PROD_IMAGE_REPO" ] && wra+=(--with-registry-auth)
     docker stack deploy "${wra[@]}" -c "$GEN/stack-$(role).yml" "$(stack_name)"
@@ -640,8 +664,8 @@ case "$COMMAND" in
     bootstrap)
         # a fresh VM (D6): docker, swarm, then the guide
         command -v docker >/dev/null 2>&1 || { log_info "installing docker (get.docker.com, else Ubuntu's docker.io)"; ( curl -fsSL https://get.docker.com | sh ) || { apt-get install -y -qq docker.io docker-compose-v2 docker-buildx && systemctl enable --now docker; }; [ "$(id -u)" = 0 ] || sudo usermod -aG docker "$USER" || true; }
-        docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null | grep -q active || docker swarm init --advertise-addr "$(lan_ip)" >/dev/null
-        log_success "docker + swarm ready"; do_guide ;;
+        [ "$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null)" = active ] || { docker swarm init --advertise-addr "$(lan_ip)" >/dev/null || die "docker swarm init failed — run it by hand: docker swarm init --advertise-addr <this machine's address>"; }
+        log_success "docker + swarm ready ($(docker info --format '{{.Swarm.LocalNodeState}}'))"; do_guide ;;
     help|-h|--help) show_help ;;
     *) die "unknown verb '$COMMAND' — pol prod help" ;;
 esac
