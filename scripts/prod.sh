@@ -77,6 +77,15 @@ save_answers() {
 }
 
 # ---------------------------------------------------------------- TUI
+launch_guide() {  # the Textual guide when a python with textual exists and we have a terminal; else the plain dialogs
+    local py
+    if [ "${POL_PROD_TUI:-}" != whiptail ] && [ -t 0 ] && [ -t 1 ] && py=$(tui_python); then
+        log_info "opening the guide (Textual) — POL_PROD_TUI=whiptail for the plain dialogs"
+        cd "$SUITE" && PYTHONPATH="$SCRIPT_DIR/../tui${PYTHONPATH:+:$PYTHONPATH}" POL_SUITE_ROOT="$SUITE" exec "$py" -m prodguide
+    fi
+    [ "${POL_PROD_TUI:-}" = whiptail ] || log_warn "Textual guide not available (pol prod tui-install) — using the plain dialogs"
+    do_guide
+}
 tui_python() {  # a python that can import textual: the venv beside the checkout, else the system python (pip --user)
     local p; for p in "$SUITE/.venv-tui/bin/python" python3; do command -v "$p" >/dev/null 2>&1 && "$p" -c "import textual" >/dev/null 2>&1 && { command -v "$p"; return 0; }; done; return 1
 }
@@ -733,10 +742,7 @@ case "$COMMAND" in
     *) if [ -d "$LOG_DIR" ]; then LOG_FILE="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$COMMAND.log"; { echo "# pol prod $COMMAND $* — $(date -u +%FT%TZ) on $(hostname) as $(id -un) — $(git -C "$SUITE" rev-parse --short HEAD 2>/dev/null)"; } > "$LOG_FILE"; exec > >(tee -a "$LOG_FILE") 2>&1; fi ;;
 esac
 case "$COMMAND" in
-    guide)   if [ "${POL_PROD_TUI:-}" != whiptail ] && [ -t 0 ] && [ -t 1 ] && py=$(tui_python); then
-                 log_info "opening the guide (Textual) — POL_PROD_TUI=whiptail for the plain dialogs"
-                 cd "$SUITE" && PYTHONPATH="$SCRIPT_DIR/../tui${PYTHONPATH:+:$PYTHONPATH}" POL_SUITE_ROOT="$SUITE" exec "$py" -m prodguide
-             else do_guide; fi ;;
+    guide)   launch_guide ;;
     tui|tui-install)  # the Python TUI (Textual): user-level pip install, else a venv beside the checkout
              if py=$(tui_python); then log_success "Textual guide available ($py)"; exit 0; fi
              log_info "installing Textual (pip --user, else a venv at $SUITE/.venv-tui)"
@@ -760,7 +766,7 @@ case "$COMMAND" in
         # a fresh VM (D6): docker, swarm, then the guide
         command -v docker >/dev/null 2>&1 || { log_info "installing docker (get.docker.com, else Ubuntu's docker.io)"; ( curl -fsSL https://get.docker.com | sh ) || { apt-get install -y -qq docker.io docker-compose-v2 docker-buildx && systemctl enable --now docker; }; [ "$(id -u)" = 0 ] || sudo usermod -aG docker "$USER" || true; }
         [ "$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null)" = active ] || { docker swarm init --advertise-addr "$(lan_ip)" >/dev/null || die "docker swarm init failed — run it by hand: docker swarm init --advertise-addr <this machine's address>"; }
-        log_success "docker + swarm ready ($(docker info --format '{{.Swarm.LocalNodeState}}'))"; do_guide ;;
+        log_success "docker + swarm ready ($(docker info --format '{{.Swarm.LocalNodeState}}'))"; launch_guide ;;
     help|-h|--help) show_help ;;
     *) die "unknown verb '$COMMAND' — pol prod help" ;;
 esac
