@@ -76,3 +76,12 @@ provider_links() {
             printf 'images are built on this machine from the checkout — publish them to a registry to make a small server only pull\t(local)\n' ;;
     esac
 }
+
+# ---- official image sources: where release images are pulled from ------------
+# One line per source: prefix<TAB>title. The FIRST is the default official source.
+official_image_sources() {
+    printf 'ghcr.io/dausume/\tGitHub Container Registry — the official Polari images (built and published by the release job)\n'
+}
+image_source_title() {  # prefix → title, or "manual: <prefix>"
+    local t; t=$(official_image_sources | awk -F'\t' -v p="$1" '$1==p{print $2}'); [ -n "$t" ] && echo "official — $t" || echo "manual entry — $1"
+}

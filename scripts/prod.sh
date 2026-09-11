@@ -274,16 +274,22 @@ Nothing else to do here. (pol prod is the server route.)"
     items+=(build "Build the images on this machine from this checkout → tag 'prod' (needs ~3 GB RAM, 5–15 min)")
     docker image inspect prf-backend:staging >/dev/null 2>&1 && items+=(staging "Use the 'staging' images already present on this machine (a dev/staging box)")
     local t; for t in $(git -C "$SUITE" tag -l 'polari-v*' 2>/dev/null | sort -r | head -5); do items+=("$t" "Pull the release $t from the official registry ghcr.io/dausume/"); done
-    items+=(custom "Pull from a registry I name — example: ghcr.io/dausume/  +  tag polari-v2026.09.11")
+    items+=(custom "Pull from a registry: choose one of our official sources or type one — then a tag (example: polari-v2026.09.11)")
     src=$(tui_menu "Where do the images come from?" "Backend + frontend images for this deployment. Building here is the default; releases are pulled by tag." "$cur" "${items[@]}")
     case "$src" in
         build)   POL_PROD_IMAGE_REPO=""; POL_PROD_IMAGE_TAG="prod" ;;
         staging) POL_PROD_IMAGE_REPO=""; POL_PROD_IMAGE_TAG="staging" ;;
-        custom)  POL_PROD_IMAGE_REPO=$(tui_input "Registry prefix" "Registry + namespace the images are pulled from, ending in a slash — example: ghcr.io/dausume/" "${POL_PROD_IMAGE_REPO:-ghcr.io/dausume/}")
+        custom)  # the source first: our official sources as a list, then a manual entry
+                 local srcs=() line pfx ttl
+                 while IFS=$'\t' read -r pfx ttl; do srcs+=("$pfx" "official: $ttl"); done < <(official_image_sources)
+                 srcs+=(manual "Type a registry prefix myself — example: registry.example.org/polari/")
+                 pfx=$(tui_menu "Pull images from which source?" "The images are pulled from ONE registry prefix; every image name is appended to it (prefix + prf-backend:tag)." "${POL_PROD_IMAGE_REPO:-$(official_image_sources | head -1 | cut -f1)}" "${srcs[@]}")
+                 if [ "$pfx" = manual ]; then pfx=$(tui_input "Registry prefix" "Registry + namespace, ending in a slash — example: ghcr.io/dausume/  or  registry.example.org/polari/" "${POL_PROD_IMAGE_REPO:-}"); fi
+                 POL_PROD_IMAGE_REPO="$pfx"
                  case "$POL_PROD_IMAGE_REPO" in */) ;; "") die "a registry prefix is required for a pull" ;; *) POL_PROD_IMAGE_REPO="$POL_PROD_IMAGE_REPO/" ;; esac
                  POL_PROD_IMAGE_TAG=$(tui_input "Image tag" "The tag every image is pulled at — example: polari-v2026.09.11 (a release) or staging (the moving tier tag)" "${POL_PROD_IMAGE_TAG:-}")
                  [ -n "$POL_PROD_IMAGE_TAG" ] && [ "$POL_PROD_IMAGE_TAG" != prod ] || die "a tag is required (prod is reserved for images built here)" ;;
-        polari-v*) POL_PROD_IMAGE_REPO="ghcr.io/dausume/"; POL_PROD_IMAGE_TAG="$src" ;;
+        polari-v*) POL_PROD_IMAGE_REPO="$(official_image_sources | head -1 | cut -f1)"; POL_PROD_IMAGE_TAG="$src" ;;
     esac
     if [ -n "$POL_PROD_IMAGE_REPO" ]; then
         docker manifest inspect "${POL_PROD_IMAGE_REPO}prf-backend:$POL_PROD_IMAGE_TAG" >/dev/null 2>&1 && log_success "registry has ${POL_PROD_IMAGE_REPO}prf-backend:$POL_PROD_IMAGE_TAG" \
@@ -305,7 +311,7 @@ do_plan() {
     echo "  modules      $POL_PROD_MODULES"
     echo "  installers   $POL_PROD_DEBS   staged now: $(ls "$GEN"/debs/*.deb 2>/dev/null | wc -l)"
     echo "  demo notice  $POL_PROD_DEMO"
-    echo "  images       ${POL_PROD_IMAGE_REPO:-<local build>}…:$POL_PROD_IMAGE_TAG"
+    if [ -n "$POL_PROD_IMAGE_REPO" ]; then echo "  images       PULL from $POL_PROD_IMAGE_REPO ($(image_source_title "$POL_PROD_IMAGE_REPO")) at tag $POL_PROD_IMAGE_TAG"; else echo "  images       BUILD on this machine from this checkout, tagged $POL_PROD_IMAGE_TAG"; fi
     echo
     echo "  apply will: 1 preflight · 2 write env + runtime configs · 3 render the proxy config$([ "$(profile)" = full ] && echo ' · 3b security setup (CA, Keycloak, DB credentials)')"
     echo "              4 stage the edge certificate · 5 stage debs · 6 build or pull images · 7 render the stack"
@@ -433,7 +439,7 @@ build_or_pull_images() {
     load_answers
     set -a; source "$(env_file)"; set +a
     if [ -n "$POL_PROD_IMAGE_REPO" ]; then
-        log_info "pulling release images from $POL_PROD_IMAGE_REPO (tag $POL_PROD_IMAGE_TAG)"
+        log_info "pulling images from $POL_PROD_IMAGE_REPO ($(image_source_title "$POL_PROD_IMAGE_REPO")), tag $POL_PROD_IMAGE_TAG: ${POL_PROD_IMAGE_REPO}prf-backend:$POL_PROD_IMAGE_TAG, ${POL_PROD_IMAGE_REPO}prf-frontend:$POL_PROD_IMAGE_TAG"
         docker compose -f "$(compose_file)" --env-file "$(env_file)" pull --ignore-buildable 2>&1 | tail -3 || die "pull failed"
     else
         # the lean/prod compose files carry no build: (swarm-first rule) — the prf images are built from the
