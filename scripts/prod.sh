@@ -23,6 +23,7 @@
 #   pol prod debs [build|copy <dir>]   stage the platform debs the server hands out
 #   pol prod render | deploy | down    the individual steps
 #  (credentials: everything generated goes to the root-only encrypted vault — sudo pol security vault show; provider credentials stashed all/some/none by your answer)
+#  pol prod tui-install          install the Textual guide (python); guide uses it when present, POL_PROD_TUI=whiptail forces the plain dialogs
 #  pol prod log [n]               print the n-th last run log (every run is logged: .generated/prod-log/)
 #  pol prod providers             which providers are in use for what (hosting, DNS, certificate, registry, code) and the pages to visit for each
 #  pol prod addresses [--use <ip>|--auto]  every address assigned to this machine (droplet metadata on DigitalOcean); the exposure IP the A records need (detected, or the one you answered)
@@ -76,6 +77,9 @@ save_answers() {
 }
 
 # ---------------------------------------------------------------- TUI
+tui_python() {  # a python that can import textual: the venv beside the checkout, else the system python (pip --user)
+    local p; for p in "$SUITE/.venv-tui/bin/python" python3; do command -v "$p" >/dev/null 2>&1 && "$p" -c "import textual" >/dev/null 2>&1 && { command -v "$p"; return 0; }; done; return 1
+}
 HAS_TUI=0; [ -t 0 ] && [ -t 1 ] && command -v whiptail >/dev/null 2>&1 && HAS_TUI=1
 tui_menu() {  # title text default item1 desc1 item2 desc2 … → chosen item
     local title=$1 text=$2 default=$3; shift 3
@@ -169,6 +173,51 @@ do_providers() {
     done
     echo "  Credentials for these providers are never typed into pol prod except the DNS-challenge token (DO_API_TOKEN, env only)."
     echo "  When the vault exists (prd-9) the guide asks, at the start, whether to stash provider credentials in it — all, some, or none — and advises keeping them elsewhere."
+}
+do_facts() {  # machine-readable facts for the Textual guide: pol prod facts [--domain D] [--check-image REPO TAG]
+    load_answers
+    local dom="$POL_PROD_DOMAIN" chk_repo="" chk_tag=""
+    while [ $# -gt 0 ]; do case "$1" in --domain) dom=$2; shift 2 ;; --check-image) chk_repo=$2; chk_tag=$3; shift 3 ;; *) shift ;; esac; done
+    if [ -n "$chk_repo" ]; then
+        docker manifest inspect "${chk_repo}prf-backend:$chk_tag" >/dev/null 2>&1 && echo '{"ok": true}' || echo '{"ok": false}'; return 0
+    fi
+    local names; names=$(names "${dom:-example.org}")
+    {
+        echo "suite=$SUITE"; echo "git=$(git -C "$SUITE" rev-parse --short HEAD 2>/dev/null)"; echo "host=$(hostname)"; echo "user=$(id -un)"
+        for k in ROUTE DOMAIN EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO; do v="POL_PROD_$k"; echo "answer.$k=${!v}"; done
+        echo "on_droplet=$(on_droplet && echo 1 || echo 0)"; echo "detected_ip=$(detected_ip)"; echo "ipv6=$(exposure_ip6)"
+        server_addresses | while IFS=$'\t' read -r r a n; do echo "address=$r|$a|$n"; done
+        echo "names.lean=$(lean_names "${dom:-example.org}")"; echo "names.full=$(full_names "${dom:-example.org}")"
+        for n in $names; do echo "dns=$n|$(resolve "$n" || true)"; done
+        official_image_sources | while IFS=$'\t' read -r pfx ttl; do echo "source=$pfx|$ttl"; done
+        echo "release_tags=$(git -C "$SUITE" tag -l 'polari-v*' 2>/dev/null | sort -r | head -8 | tr '\n' ' ')"
+        echo "staging_images=$(docker image inspect prf-backend:staging >/dev/null 2>&1 && echo 1 || echo 0)"
+        echo "swarm=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || echo none)"
+        for p in 80 443; do echo "port.$p=$(ss -ltn 2>/dev/null | grep -q ":$p " && echo busy || echo free)"; done
+        echo "debs_staged=$(ls "$GEN"/debs/*.deb 2>/dev/null | wc -l)"
+        echo "piece.isle-mesh=$([ -d "$SUITE/Isle-Mesh/.git" ] || [ -f "$SUITE/Isle-Mesh/.git" ] && echo 1 || echo 0)"; echo "piece.app-shell=$([ -e "$SUITE/polari-app-shell/.git" ] && echo 1 || echo 0)"
+        echo "piece.rf-node=$([ -d "$SUITE/polari-rf-node/polari-framework/moduleService" ] && echo 1 || echo 0)"
+        echo "mem_total_mb=$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null)"
+        echo "vault=$(vault_status 2>/dev/null | head -1)"
+        if [ -s "$GEN/certs/edge/fullchain.pem" ]; then echo "cert.issuer=$(edge_cert_issuer)"; echo "cert.public=$(edge_cert_is_public && echo 1 || echo 0)"; echo "cert.expiry=$(edge_cert_expiry)"; fi
+        providers_in_use | while IFS=$'\t' read -r role prov why; do echo "provider=$role|$prov|$(provider_title "$prov")|$why|$(provider_credential "$prov")"; provider_links "$prov" | while IFS=$'\t' read -r l u; do echo "link=$prov|$l|$u"; done; done
+        echo "answers_file=$ANSWERS"; echo "log_dir=$GEN/prod-log"
+    } | python3 -c '
+import sys, json
+out = {"addresses": [], "dns": {}, "sources": [], "providers": [], "links": {}, "answers": {}}
+for line in sys.stdin.read().split("\n"):
+    if "=" not in line: continue
+    k, v = line.split("=", 1)
+    if k == "address": r, a, n = v.split("|", 2); out["addresses"].append({"role": r, "address": a, "note": n})
+    elif k == "dns": n, a = v.split("|", 1); out["dns"][n] = a
+    elif k == "source": p, t = v.split("|", 1); out["sources"].append({"prefix": p, "title": t})
+    elif k == "provider": role, prov, title, why, cred = v.split("|", 4); out["providers"].append({"role": role, "id": prov, "title": title, "why": why, "credential": cred})
+    elif k == "link": prov, l, u = v.split("|", 2); out["links"].setdefault(prov, []).append({"label": l, "url": u})
+    elif k.startswith("answer."): out["answers"][k[7:]] = v
+    elif k.startswith("names."): out.setdefault("names", {})[k[6:]] = v.split()
+    elif k == "release_tags": out[k] = v.split()
+    else: out[k] = v
+print(json.dumps(out, indent=1))'
 }
 do_addresses() {
     load_answers
@@ -679,11 +728,20 @@ COMMAND=${1:-guide}; shift || true
 LOG_DIR="$GEN/prod-log"; mkdir -p "$LOG_DIR" 2>/dev/null || true
 case "$COMMAND" in
     log) n=${1:-1}; f=$(ls -1t "$LOG_DIR"/*.log 2>/dev/null | sed -n "${n}p"); [ -n "$f" ] || { echo "no runs logged yet ($LOG_DIR)"; exit 0; }; echo "== $f"; sed 's/\x1b\[[0-9;]*m//g' "$f"; exit 0 ;;
-    help|-h|--help) ;;
+    help|-h|--help|facts) ;;
     *) if [ -d "$LOG_DIR" ]; then LOG_FILE="$LOG_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$COMMAND.log"; { echo "# pol prod $COMMAND $* — $(date -u +%FT%TZ) on $(hostname) as $(id -un) — $(git -C "$SUITE" rev-parse --short HEAD 2>/dev/null)"; } > "$LOG_FILE"; exec > >(tee -a "$LOG_FILE") 2>&1; fi ;;
 esac
 case "$COMMAND" in
-    guide)   do_guide ;;
+    guide)   if [ "${POL_PROD_TUI:-}" != whiptail ] && [ -t 0 ] && [ -t 1 ] && py=$(tui_python); then
+                 log_info "opening the guide (Textual) — POL_PROD_TUI=whiptail for the plain dialogs"
+                 cd "$SUITE" && PYTHONPATH="$SCRIPT_DIR/../tui${PYTHONPATH:+:$PYTHONPATH}" POL_SUITE_ROOT="$SUITE" exec "$py" -m prodguide
+             else do_guide; fi ;;
+    tui|tui-install)  # the Python TUI (Textual): user-level pip install, else a venv beside the checkout
+             if py=$(tui_python); then log_success "Textual guide available ($py)"; exit 0; fi
+             log_info "installing Textual (pip --user, else a venv at $SUITE/.venv-tui)"
+             python3 -m pip install --user -q textual 2>/dev/null || python3 -m pip install --user -q --break-system-packages textual 2>/dev/null \
+               || { apt-get install -y -qq python3-venv >/dev/null 2>&1 || sudo apt-get install -y -qq python3-venv >/dev/null 2>&1; python3 -m venv "$SUITE/.venv-tui" && "$SUITE/.venv-tui/bin/pip" install -q textual; }
+             py=$(tui_python) && log_success "Textual guide available ($py)" || die "could not install Textual — the guide falls back to the plain dialogs (whiptail)" ;;
     plan)    do_plan ;;
     check)   do_check ;;
     apply)   do_apply "$@" ;;
@@ -695,6 +753,7 @@ case "$COMMAND" in
     down)    # remove the answered profile's stack — and any other pol prod stack still up (never leave one behind)
              for st in polari-lean polari-prod; do docker stack ls --format '{{.Name}}' | grep -qx "$st" && { docker stack rm "$st"; log_success "stack $st removed (data volumes kept)"; }; done; true ;;
     addresses) do_addresses "$@" ;;
+    facts)     do_facts "$@" ;;
     providers) do_providers ;;
     bootstrap)
         # a fresh VM (D6): docker, swarm, then the guide

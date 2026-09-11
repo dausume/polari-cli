@@ -1,0 +1,20 @@
+Screen { layout: vertical; }
+#body { height: 1fr; }
+#side { width: 30; min-width: 24; border-right: solid $primary-darken-2; padding: 0 1; }
+.side-title { text-style: bold; color: $accent; padding: 1 0 0 0; }
+#steps { height: auto; max-height: 14; background: transparent; }
+#steps > ListItem { padding: 0 1; }
+#side-facts { color: $text-muted; padding: 1 0; }
+#main { padding: 0 2; }
+#main Markdown { margin: 0 0 1 0; }
+.q { text-style: bold; margin: 1 0 0 0; }
+.note { color: $text-muted; margin: 1 0 0 0; }
+RadioSet { width: 100%; }
+Input { width: 100%; }
+DataTable { height: auto; max-height: 14; margin: 1 0; }
+#nav { height: 3; dock: bottom; padding: 0 1; border-top: solid $primary-darken-2; }
+#problems { width: 1fr; color: $error; }
+#back, #next { margin: 0 1; }
+#log { height: 1fr; min-height: 12; border: solid $primary-darken-2; }
+#after { height: 3; }
+#after Button { margin: 0 1; }
