@@ -639,7 +639,7 @@ case "$COMMAND" in
     providers) do_providers ;;
     bootstrap)
         # a fresh VM (D6): docker, swarm, then the guide
-        command -v docker >/dev/null 2>&1 || { log_info "installing docker (get.docker.com)"; curl -fsSL https://get.docker.com | sh; sudo usermod -aG docker "$USER" || true; }
+        command -v docker >/dev/null 2>&1 || { log_info "installing docker (get.docker.com, else Ubuntu's docker.io)"; ( curl -fsSL https://get.docker.com | sh ) || { apt-get install -y -qq docker.io docker-compose-v2 docker-buildx && systemctl enable --now docker; }; [ "$(id -u)" = 0 ] || sudo usermod -aG docker "$USER" || true; }
         docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null | grep -q active || docker swarm init --advertise-addr "$(lan_ip)" >/dev/null
         log_success "docker + swarm ready"; do_guide ;;
     help|-h|--help) show_help ;;
