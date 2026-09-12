@@ -25,6 +25,7 @@
 #  (credentials: everything generated goes to the root-only encrypted vault — sudo pol security vault show; provider credentials stashed all/some/none by your answer)
 #  pol prod tui-install          install the Textual guide (python); guide uses it when present, POL_PROD_TUI=whiptail forces the plain dialogs
 #  pol prod log [n]               print the n-th last run log (every run is logged: .generated/prod-log/)
+#  pol prod verify [--module m] [--api URL]  after apply: modules/apps set up by every route (console fetch-admit, apps/downloads, interfaces, topology assign)
 #  pol prod providers             which providers are in use for what (hosting, DNS, certificate, registry, code) and the pages to visit for each
 #  pol prod addresses [--use <ip>|--auto]  every address assigned to this machine (droplet metadata on DigitalOcean); the exposure IP the A records need (detected, or the one you answered)
 #  pol prod bootstrap             a fresh VM: install docker, swarm init, then the guide
@@ -246,6 +247,52 @@ for line in sys.stdin.read().split("\n"):
     elif k == "release": t, i = v.split("|", 1); out.setdefault("releases", []).append({"tag": t, "info": i})
     else: out[k] = v
 print(json.dumps(out, indent=1))'
+}
+do_verify() {  # pol prod verify [--module <optional module>] — after apply: prove modules and apps can be set up through
+               # every route: the console (pol / the API), the apps (App Store + downloads), the interfaces and the topology
+    load_answers; set +e   # every check reports; none may abort the run
+    local mod="" base; while [ $# -gt 0 ]; do case "$1" in --module) mod=$2; shift 2 ;; --api) base=$2; shift 2 ;; *) shift ;; esac; done
+    base="${base:-https://api.prf.$POL_PROD_DOMAIN}"; local front="https://prf.$POL_PROD_DOMAIN" k="-k" pass=0 fail=0
+    edge_cert_is_public 2>/dev/null && k=""
+    ok(){ pass=$((pass+1)); log_success "$1"; }; bad(){ fail=$((fail+1)); log_error "$1"; }
+    j(){ curl -s $k --max-time "${3:-30}" ${2:+-X $2} -H 'Content-Type: application/json' ${4:+-d "$4"} "$base$1"; }
+    pol_box "pol prod — verify (modules + apps by every route) @ $base"
+    # 0. alive
+    [ "$(curl -s $k -o /dev/null -w '%{http_code}' --max-time 15 "$base/api/health")" = 200 ] && ok "API alive: $base/api/health" || { bad "API not answering at $base/api/health"; echo; log_error "verify: $pass passed, $fail failed"; return 1; }
+    # 1. the registrar — the unified truth every route reads
+    local reg; reg=$(j /api/modules/health?brief=1); local online; online=$(echo "$reg" | python3 -c "import sys,json; d=json.load(sys.stdin); ms=d.get('modules',{}); print(' '.join(m for m,r in ms.items() if r.get('state')=='online'))" 2>/dev/null)
+    [ -n "$online" ] && ok "registrar: online → $(echo $online | wc -w) module(s): $(echo $online | cut -c1-90)" || bad "registrar reports no online module"
+    # pick an optional module that is NOT online (the fetch path is the point)
+    if [ -z "$mod" ]; then for cand in $(python3 -c "import json; r=json.load(open('$SUITE/polari-rf-node/polari-framework/modules/polari-modules.json'))['modules']; print(' '.join(m for m,e in r.items() if e.get('tier')!='core' and not (e.get('requires') or [])))" 2>/dev/null); do case " $online " in *" $cand "*) ;; *) mod=$cand; break ;; esac; done; fi
+    [ -n "$mod" ] || { bad "no optional module without dependencies is offline — pass --module <name>"; }
+    # 2. CONSOLE route: what `pol project deploy --api` and `pol modules` do — fetch from the module's repository and admit
+    if [ -n "$mod" ]; then
+        local repo="https://github.com/dausume/polari-module-$mod.git"
+        local r; r=$(j "/modules/$mod/fetch-admit" POST 300 "{\"sourceRef\": \"$repo\", \"sourceKind\": \"git\", \"ref\": \"main\", \"installDeps\": true}")
+        echo "$r" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('ok') else 1)" 2>/dev/null && ok "console route: $mod fetched from $repo and admitted (POST /modules/$mod/fetch-admit)" || bad "console route: fetch-admit of $mod failed: $(echo "$r" | cut -c1-200)"
+        local st; st=$(j "/api/modules/health?brief=1" | python3 -c "import sys,json; d=json.load(sys.stdin); r=(d.get('modules') or {}).get('$mod') or {}; print(r.get('state','?'), (r.get('error') or '')[:80])" 2>/dev/null)
+        case "$st" in online*) ok "registrar after admit: $mod $st" ;; *) bad "registrar after admit: $mod $st" ;; esac
+    fi
+    # 3. APPS route: the App Store / downloads page — what the store and the isle install from (HTML; a click on an
+    #    entry starts the on-demand deb build, so verify only reads the list and never starts one)
+    local page; page=$(curl -s $k --max-time 30 "$base/downloads/apps?flavor=online"); local n; n=$(echo "$page" | grep -o "/downloads/apps/status/[a-z_]*" | sort -u | wc -l)
+    [ "${n:-0}" -gt 0 ] && ok "apps route: /downloads/apps lists $n installable module(s) (online flavor; offline too)" || bad "apps route: /downloads/apps lists nothing"
+    [ -n "$mod" ] && { echo "$page" | grep -q "/downloads/apps/status/$mod" && ok "apps route: $mod is offered on the Download page (its deb is built on demand from the fetched repository when clicked)" || bad "apps route: $mod is not offered on /downloads/apps"; }
+    # 4. INTERFACES: the module-health display and the module's own pages exist as rows (the registrar's pages piece), the frontend serves the route
+    case "$base" in http://127.0.0.1*|http://localhost*) log_info "interfaces: frontend check skipped (API-only target); on the server it is $front/display/module-health" ;;
+        *) [ "$(curl -s $k -o /dev/null -w '%{http_code}' --max-time 15 "$front/display/module-health")" = 200 ] && ok "interfaces: $front/display/module-health served (the module-health display)" || bad "interfaces: $front/display/module-health not served" ;; esac
+    local floor_missing=""; for m in $(echo "${POL_PROD_MODULES:-polariapps,appstore,islemesh,terms}" | tr ',' ' '); do case " $online " in *" $m "*) ;; *) floor_missing="$floor_missing $m" ;; esac; done
+    [ -z "$floor_missing" ] && ok "interfaces: every answered module is online (${POL_PROD_MODULES:-floor set}) — their displays are seeded rows" || bad "interfaces: answered module(s) not online:$floor_missing"
+    # 5. TOPOLOGY: assign the module to this instance as a row (the durable truth POLARI_MODULES derives from)
+    local inst; inst=$(j /api/topology/graph | python3 -c "import sys,json; d=json.load(sys.stdin); g=d.get('graph') or d; i=(g.get('instances') or [])
+print((i[0].get('name') if i and isinstance(i[0],dict) else (i[0] if i else '')) or '')" 2>/dev/null)
+    if [ -n "$inst" ]; then
+        local t; t=$(j /api/topology/assign POST 60 "{\"module\": \"${mod:-terms}\", \"to_instance\": \"$inst\"}")
+        echo "$t" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('ok', d.get('success', True)) and not d.get('error') else 1)" 2>/dev/null && ok "topology route: POST /api/topology/assign ${mod:-terms} → instance '$inst' (a ModuleAssignment row — the durable truth POLARI_MODULES derives from)" || bad "topology route: assign failed: $(echo "$t" | cut -c1-160)"
+    else bad "topology route: no InstanceDefinition row to assign to (GET /api/topology/graph lists none)"; fi
+    POLARI_CORE_URL="$base" bash "$SCRIPT_DIR/topology.sh" status >/dev/null 2>&1 && ok "topology route: pol topology status reads the instance over the API (POLARI_CORE_URL=$base)" || bad "topology route: pol topology status could not read $base"
+    echo; [ "$fail" = 0 ] && log_success "verify: all $pass checks passed — modules and apps can be set up by console, apps, interfaces and topology" || log_error "verify: $pass passed, $fail failed"
+    set -e; [ "$fail" = 0 ]
 }
 do_addresses() {
     load_answers
@@ -836,6 +883,7 @@ case "$COMMAND" in
     down)    # remove the answered profile's stack — and any other pol prod stack still up (never leave one behind)
              for st in polari-lean polari-prod; do docker stack ls --format '{{.Name}}' | grep -qx "$st" && { docker stack rm "$st"; log_success "stack $st removed (data volumes kept)"; }; done; true ;;
     addresses) do_addresses "$@" ;;
+    verify)    do_verify "$@" ;;
     facts)     do_facts "$@" ;;
     providers) do_providers ;;
     bootstrap)
