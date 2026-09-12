@@ -162,6 +162,9 @@ class Answers:
             w.append("a publicly trusted certificate needs every name pointing here first; not yet: " + ", ".join(bad))
         if not wildcard and len([1 for n, k, _, _ in self.name_rows() if k == "subdomain"]) > 2:
             w.append("one wildcard record (*." + (self.DOMAIN or "example.org") + " → " + self.exposure_ip + ") at your DNS host covers every current and future subdomain; otherwise each subdomain needs its own A record")
+        det = facts.get("dns_host_detected", "")
+        if det and det != self.DNS_PROVIDER:
+            w.append(f"the domain's nameservers say its DNS lives at {det}, but the DNS host answered is {self.DNS_PROVIDER} — records added at {self.DNS_PROVIDER} will not take effect")
         if facts.get("on_droplet") == "1" and not any(a["role"] == "reserved" for a in facts.get("addresses", [])):
             w.append("no reserved IP attached to this droplet — a rebuild changes its address (attach one in Networking → Reserved IPs)")
         if not self.IMAGE_REPO:

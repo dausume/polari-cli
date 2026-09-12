@@ -121,6 +121,7 @@ class ProdGuide(App):
                 yield RadioButton("At the registrar where the domain was bought (most common)", id="dnsp-registrar", value=True)
                 yield RadioButton("At DigitalOcean (delegated to its nameservers) — also enables the DNS challenge", id="dnsp-digitalocean")
                 yield RadioButton("At Cloudflare", id="dnsp-cloudflare")
+            yield Static("", id="dnsp-detected", classes="note")
             yield Static("", id="dnsp-links", classes="note")
 
     def panel_address(self) -> ComposeResult:
@@ -150,6 +151,7 @@ class ProdGuide(App):
             yield Label("Subdomains (Polari-defined for this profile)", classes="q")
             yield DataTable(id="tbl-dns")
             yield Static("", id="dns-wildcard", classes="note")
+            yield Static("", id="dns-todo", classes="todo")
             yield Static("", id="dns-links", classes="note")
 
     def panel_cert(self) -> ComposeResult:
@@ -342,14 +344,36 @@ class ProdGuide(App):
         wc = self.facts.get("wildcard", "") or ""
         wildcard = wc in ours and wc != ""
         d = self.a.DOMAIN or "example.org"
+        missing: List[str] = []
         for n, kind, role, by in self.a.name_rows():
             r = dns.get(n, "")
             here = bool(r) and r in ours
+            host = n[: -len(d) - 1] if n != d else "@"
             if kind == "primary":
-                tp.add_row(n, r or "unresolved", f"A record: {n} → {self.a.exposure_ip}", "✔ this server" if here else "✖ not here — set the A record")
+                tp.add_row(n, r or "unresolved", "present" if here else f"MISSING — A record, host @ (the domain itself), value {self.a.exposure_ip}", "✔ this server" if here else "✖ not here")
             else:
-                ext = "covered by the wildcard" if wildcard else f"A record → {self.a.exposure_ip}  (or one wildcard *.{d})"
+                if here:
+                    ext = "present"
+                elif wildcard:
+                    ext = "covered by the wildcard"
+                else:
+                    ext = f"MISSING — A record, host {host}, value {self.a.exposure_ip}"
+                    missing.append(host)
                 t.add_row(n, role, by, r or "unresolved", ext, "✔ this server" if here else ("✔ via wildcard" if wildcard else "✖ not here"))
+        prov = self.a.DNS_PROVIDER
+        page = (self.facts.get("dns_page") or {}).get(prov, "")
+        howto = (self.facts.get("dns_howto") or {}).get(prov, {})
+        todo = self.query_one("#dns-todo", Static)
+        if missing:
+            lines = [f"To do at {page}:"] + [f"   add  A record   host: {h:<10} value: {self.a.exposure_ip}" for h in missing]
+            lines.append(f"   — or one record instead of all of them:  host: *          value: {self.a.exposure_ip}   (the wildcard)")
+            if howto:
+                lines.append(f"How: {howto.get('clicks', '')}")
+                lines.append(f"Documentation: {howto.get('url', '')}")
+            lines.append("Then Ctrl+R here. New records take a minute or two to be visible.")
+            todo.update("\n".join(lines)); todo.display = True
+        else:
+            todo.update(""); todo.display = False
         self.query_one("#dns-wildcard", Static).update(
             f"wildcard *.{d}: present → every subdomain resolves here, now and later" if wildcard else
             f"no wildcard record yet: one record  *.{d}  →  {self.a.exposure_ip}  at your DNS host covers every subdomain, now and later")
@@ -358,6 +382,10 @@ class ProdGuide(App):
         links = self.facts.get("links", {}) or {}
         def fmt(prov: str, n: int = 3) -> str:
             return "\n".join(f"  {l['label']}\n    {l['url']}" for l in links.get(prov, [])[:n])
+        det = self.facts.get("dns_host_detected", ""); ns = " ".join(self.facts.get("nameservers") or [])
+        self.query_one("#dnsp-detected", Static).update(
+            (f"Detected from the domain's nameservers ({ns}): the records live at {det}." + ("" if det == self.a.DNS_PROVIDER else f"  ✖ You chose {self.a.DNS_PROVIDER} — records added there will have no effect; choose {det}.")) if ns else
+            "Nameservers not found yet — the domain may not be registered or delegated; the DNS check will say.")
         self.query_one("#dnsp-links", Static).update("Set the records at:\n" + fmt(self.a.DNS_PROVIDER))
         self.query_one("#dns-links", Static).update("Set the A records at:\n" + fmt(self.a.DNS_PROVIDER))
         self.query_one("#cert-links", Static).update("Let's Encrypt:\n" + fmt("letsencrypt", 4) + ("\nDigitalOcean API token:\n" + fmt("digitalocean", 7).split("API tokens")[-1] if self.a.LE_CHALLENGE == "dns" else ""))
@@ -506,6 +534,10 @@ class ProdGuide(App):
         nxt = order[order.index(self.current) + 1]
         if self.current == "domain":
             await self.load_facts(self.a.DOMAIN)
+            det = self.facts.get("dns_host_detected", "")
+            if det and not (self.facts.get("answers") or {}).get("DNS_PROVIDER") and det != self.a.DNS_PROVIDER:
+                self.a.DNS_PROVIDER = det; self.set_radio("rs-dnsp", "dnsp-" + det); self.fill_links()
+                self.notify(f"DNS records for {self.a.DOMAIN} live at {det} (from its nameservers) — selected for you", timeout=8)
         if nxt in ("dns", "address"):
             self.fill_dns(); self.fill_links()
         if nxt == "images" and radio(self.query_one("#rs-imgsrc", RadioSet)) == "pull":

@@ -19,3 +19,9 @@ DataTable { height: auto; max-height: 14; margin: 1 0; }
 #after { height: 3; }
 #after Button { margin: 0 1; }
 #problems-top { display: none; background: $error 25%; color: $text; border: solid $error; padding: 0 1; margin: 0 0 1 0; text-style: bold; }
+.todo { display: none; background: $warning 20%; border: solid $warning; padding: 0 1; margin: 1 0 0 0; }
+/* selection must be unmistakable: the chosen row is tinted and bold; the grey bar is only keyboard focus */
+RadioButton.-on { background: $success 25%; text-style: bold; }
+RadioButton.-on > .toggle--button { color: $success; text-style: bold; }
+RadioButton:focus { border-left: tall $accent; }
+Checkbox.-on { background: $success 25%; text-style: bold; }

@@ -135,3 +135,27 @@ def key(t):  # releases (polari-vYYYY.MM.DD[.n]) newest first, then the tier tag
 for t in sorted(tags, key=key)[:12]: print(t)'
 }
 official_image_tags() { registry_image_tags "$(official_image_sources | head -1 | cut -f1)" prf-backend; }
+
+# ---- where a domain's DNS actually lives (its nameservers), and how to add a record there ----
+domain_nameservers() {  # domain → nameserver hostnames, one per line
+    { resolvectl query -t NS "$1" 2>/dev/null | awk '/ IN NS /{print $4}'; } | sed 's/\.$//' | sort -u
+    [ -n "$(resolvectl query -t NS "$1" 2>/dev/null | awk '/ IN NS /')" ] || nslookup -type=NS "$1" 2>/dev/null | awk '/nameserver =/{print $NF}' | sed 's/\.$//' | sort -u
+}
+dns_host_of() {  # domain → digitalocean | cloudflare | registrar (the provider id the records must be created at)
+    local ns; ns=$(domain_nameservers "$1" | tr '\n' ' ')
+    case "$ns" in *digitalocean.com*) echo digitalocean ;; *cloudflare.com*) echo cloudflare ;; *) echo registrar ;; esac
+}
+provider_dns_page() {  # provider domain → the page where records are added
+    case "$1" in
+        digitalocean) echo "https://cloud.digitalocean.com/networking/domains/$2" ;;
+        cloudflare)   echo "https://dash.cloudflare.com/ (select the site $2 → DNS → Records)" ;;
+        *)            echo "your registrar's DNS page for $2" ;;
+    esac
+}
+provider_dns_howto() {  # provider → documentation on adding a record + the clicks
+    case "$1" in
+        digitalocean) printf 'https://docs.digitalocean.com/products/networking/dns/how-to/manage-records/\tNetworking → Domains → the domain → Create new record: type A, HOSTNAME = the subdomain (or * for the wildcard), WILL DIRECT TO = the droplet address\n' ;;
+        cloudflare)   printf 'https://developers.cloudflare.com/dns/manage-dns-records/how-to/create-dns-records/\tDNS → Records → Add record: type A, Name = the subdomain (or *), IPv4 address = the server address\n' ;;
+        *)            printf 'https://dnschecker.org/\tAt the registrar: DNS / Advanced DNS → add an A record: host = the subdomain (or *), value = the server address\n' ;;
+    esac
+}

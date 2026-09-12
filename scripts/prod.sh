@@ -202,6 +202,9 @@ do_facts() {  # machine-readable facts for the Textual guide: pol prod facts [--
         for n in $names; do echo "dns=$n|$(resolve "$n" || true)"; done
         name_rows "${dom:-example.org}" | while IFS=$'\t' read -r n k r e; do echo "namerow=$n|$k|$r|$e"; done
         echo "wildcard=$(resolve "polari-probe-$RANDOM.${dom:-example.org}" || true)"
+        echo "nameservers=$(domain_nameservers "${dom:-example.org}" | tr '\n' ' ')"
+        echo "dns_host_detected=$(dns_host_of "${dom:-example.org}")"
+        for prov in digitalocean cloudflare registrar; do echo "dns_page.$prov=$(provider_dns_page "$prov" "${dom:-example.org}")"; provider_dns_howto "$prov" | while IFS=$'\t' read -r u c; do echo "dns_howto.$prov=$u|$c"; done; done
         official_image_sources | while IFS=$'\t' read -r pfx ttl; do echo "source=$pfx|$ttl"; done
         echo "release_tags=$(git -C "$SUITE" tag -l 'polari-v*' 2>/dev/null | sort -r | head -8 | tr '\n' ' ')"
         echo "release_source=$(official_release_sources | head -1 | cut -f1)"
@@ -234,6 +237,9 @@ for line in sys.stdin.read().split("\n"):
     elif k.startswith("names."): out.setdefault("names", {})[k[6:]] = v.split()
     elif k == "release_tags": out[k] = v.split()
     elif k == "image_tags": out[k] = v.split()
+    elif k == "nameservers": out[k] = v.split()
+    elif k.startswith("dns_page."): out.setdefault("dns_page", {})[k[9:]] = v
+    elif k.startswith("dns_howto."): u, c = v.split("|", 1); out.setdefault("dns_howto", {})[k[10:]] = {"url": u, "clicks": c}
     elif k == "release": t, i = v.split("|", 1); out.setdefault("releases", []).append({"tag": t, "info": i})
     else: out[k] = v
 print(json.dumps(out, indent=1))'
@@ -322,8 +328,16 @@ Nothing else to do here. (pol prod is the server route.)"
     ip=$(exposure_ip)
     local dnsmsg="POLARI SIDE — the subdomains are defined here by what is enabled; the proxy and the certificate follow them.\nEXTERNAL SIDE — each must resolve through a DNS record at your DNS host: the primary domain's A record, plus ONE wildcard (*.$POL_PROD_DOMAIN → ${ip:-?}) or one A record per subdomain.\n\nNow (exposure address ${ip:-unknown}, $(exposure_source)):\n"
     while IFS=$'\t' read -r n k r e; do dnsmsg+="  $n → $(resolve "$n" || echo unresolved)   [$k: $r; enabled by: $e]\n"; done < <(name_rows "$POL_PROD_DOMAIN")
+    local missing=""; while IFS=$'\t' read -r n k r e; do [ "$(resolve "$n" || true)" = "$ip" ] || missing="$missing ${n%%.*}"; done < <(name_rows "$POL_PROD_DOMAIN")
+    if [ -n "$missing" ]; then
+        dnsmsg+="\nMISSING — add at $(provider_dns_page "$POL_PROD_DNS_PROVIDER" "$POL_PROD_DOMAIN"):\n"
+        for h in $missing; do dnsmsg+="  A record  host: $h   value: $ip\n"; done
+        dnsmsg+="  (or one wildcard: host: *   value: $ip — covers every subdomain)\n"
+        dnsmsg+="How: $(provider_dns_howto "$POL_PROD_DNS_PROVIDER" | cut -f2)\nDocs: $(provider_dns_howto "$POL_PROD_DNS_PROVIDER" | cut -f1)\n"
+    fi
     dnsmsg+="\nA provider-issued certificate needs every listed name pointing here first."
-    POL_PROD_DNS_PROVIDER=$(tui_menu "Where are the domain's DNS records managed?" "The A records for the five names are set there. Pick the one that applies:" "${POL_PROD_DNS_PROVIDER:-registrar}" \
+    local detected_host; detected_host=$(dns_host_of "$POL_PROD_DOMAIN")
+    POL_PROD_DNS_PROVIDER=$(tui_menu "Where are the domain's DNS records managed?" "Detected from the domain's nameservers ($(domain_nameservers "$POL_PROD_DOMAIN" | tr '\n' ' ')): $detected_host. Records must be created there:" "${POL_PROD_DNS_PROVIDER:-$detected_host}" \
         registrar "At the registrar where the domain was bought (most common)" \
         digitalocean "At DigitalOcean (the domain is delegated to DigitalOcean nameservers) — also enables the DNS challenge" \
         cloudflare "At Cloudflare")
