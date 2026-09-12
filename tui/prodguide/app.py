@@ -24,11 +24,11 @@ from .model import Answers
 
 STEPS = [
     ("welcome", "Credentials & vault"),
+    ("profile", "Profile & modules"),
     ("domain", "Domain & DNS host"),
     ("address", "Exposure address"),
-    ("dns", "DNS check"),
+    ("dns", "Names & DNS"),
     ("cert", "HTTPS certificate"),
-    ("profile", "Logins & modules"),
     ("images", "Images"),
     ("extras", "Installers & notice"),
     ("review", "Review & apply"),
@@ -74,11 +74,11 @@ class ProdGuide(App):
             with VerticalScroll(id="main"):
                 with ContentSwitcher(initial="step-welcome", id="panels"):
                     yield from self.panel_welcome()
+                    yield from self.panel_profile()
                     yield from self.panel_domain()
                     yield from self.panel_address()
                     yield from self.panel_dns()
                     yield from self.panel_cert()
-                    yield from self.panel_profile()
                     yield from self.panel_images()
                     yield from self.panel_extras()
                     yield from self.panel_review()
@@ -108,10 +108,12 @@ class ProdGuide(App):
 
     def panel_domain(self) -> ComposeResult:
         with Vertical(id="step-domain"):
-            yield Markdown("## Domain\n\nThe public domain this server answers for. The site lives at the apex; `www.`, `prf.`, "
-                           "`api.prf.` and `apt.` are made from it (the full profile adds `auth.`, `psc.`, `api.psc.`, `files.`, `s3.`, `odoo.`).")
-            yield Label("Domain", classes="q")
+            yield Markdown("## Primary domain\n\nThe registered domain this server answers for — the one thing that must exist **externally** "
+                           "(registered, with its DNS managed somewhere). Everything else is a subdomain **Polari defines** from it, per profile; "
+                           "the next steps show them and what, if anything, has to exist externally for each.")
+            yield Label("Domain (the apex, no www.)", classes="q")
             yield Input(placeholder="example.org", id="in-domain")
+            yield Checkbox("Also answer for www.<domain> — www is a hostname convention, not a protocol; optional, most sites redirect it to the apex", id="cb-www")
             yield Label("Where are the domain's DNS records managed?", classes="q")
             with RadioSet(id="rs-dnsp"):
                 yield RadioButton("At the registrar where the domain was bought (most common)", id="dnsp-registrar", value=True)
@@ -134,9 +136,18 @@ class ProdGuide(App):
 
     def panel_dns(self) -> ComposeResult:
         with Vertical(id="step-dns"):
-            yield Markdown("## DNS check\n\nWhere each name resolves right now, against the exposure address. "
-                           "A publicly trusted certificate needs every name pointing here first. Ctrl+R re-checks after you change records.")
+            yield Markdown("## Names: what Polari defines, what must exist externally\n\n"
+                           "**Polari side:** the subdomains below exist because a component you enabled needs them (the column says which) — "
+                           "the proxy answers for them and the certificate covers exactly them. Enable Odoo, logins or installers later and the name "
+                           "appears, Polari re-renders the proxy and re-issues the certificate; nothing about them is configured at DigitalOcean or the registrar.\n\n"
+                           "**External side:** the internet finds a name only through a DNS record at the host of your domain's DNS. That is one "
+                           "**A** record for the primary domain, plus either **one wildcard record** (`*.domain → address`, covers every current and "
+                           "future subdomain — recommended) or one A record per subdomain. Ctrl+R re-checks after you change records.")
+            yield Label("Primary domain", classes="q")
+            yield DataTable(id="tbl-dns-primary")
+            yield Label("Subdomains (Polari-defined for this profile)", classes="q")
             yield DataTable(id="tbl-dns")
+            yield Static("", id="dns-wildcard", classes="note")
             yield Static("", id="dns-links", classes="note")
 
     def panel_cert(self) -> ComposeResult:
@@ -156,7 +167,7 @@ class ProdGuide(App):
 
     def panel_profile(self) -> ComposeResult:
         with Vertical(id="step-profile"):
-            yield Markdown("## Logins and modules\n\nA distribution server needs no accounts. Keycloak adds about 1 GB and brings the scorecard and the file store; "
+            yield Markdown("## Profile and modules\n\nThe profile decides which services run and therefore which subdomains Polari defines (shown at the Names step). A distribution server needs no accounts. Keycloak adds about 1 GB and brings the scorecard and the file store; "
                            "its credentials are generated at apply and recorded in the vault.")
             with RadioSet(id="rs-auth"):
                 yield RadioButton("No logins — the lean profile (docker-compose.lean.yml → stack polari-lean, 5 names)", id="auth-off", value=True)
@@ -214,10 +225,11 @@ class ProdGuide(App):
 
     # ---------------------------------------------------------------- lifecycle
     async def on_mount(self) -> None:
-        for t in ("tbl-addr", "tbl-dns", "tbl-plan"):
+        for t in ("tbl-addr", "tbl-dns", "tbl-dns-primary", "tbl-plan"):
             self.query_one(f"#{t}", DataTable).cursor_type = "row"
         self.query_one("#tbl-addr", DataTable).add_columns("role", "address", "note")
-        self.query_one("#tbl-dns", DataTable).add_columns("name", "resolves to", "verdict")
+        self.query_one("#tbl-dns-primary", DataTable).add_columns("name", "resolves to", "external record", "verdict")
+        self.query_one("#tbl-dns", DataTable).add_columns("name", "serves", "enabled by", "resolves to", "external record", "verdict")
         self.query_one("#tbl-plan", DataTable).add_columns("item", "value")
         self.query_one("#after").display = False
         if not self.facts:
@@ -240,7 +252,7 @@ class ProdGuide(App):
         keep = self.a
         self.a = Answers.from_facts(self.facts)
         if domain:  # keep what the user already typed this session
-            for k in ("DOMAIN", "EXPOSURE_IP", "DNS_PROVIDER", "STASH", "CERT_MODE", "LE_CHALLENGE", "LE_EMAIL", "AUTH", "MODULES", "DEBS", "DEMO", "IMAGE_TAG", "IMAGE_REPO", "ODOO"):
+            for k in ("DOMAIN", "WWW", "EXPOSURE_IP", "DNS_PROVIDER", "STASH", "CERT_MODE", "LE_CHALLENGE", "LE_EMAIL", "AUTH", "MODULES", "DEBS", "DEMO", "IMAGE_TAG", "IMAGE_REPO", "ODOO"):
                 setattr(self.a, k, getattr(keep, k))
             self.a.registry_verified = keep.registry_verified
         self.fill_from_answers()
@@ -250,6 +262,7 @@ class ProdGuide(App):
         a = self.a
         self.set_radio("rs-stash", "stash-" + a.STASH)
         self.query_one("#in-domain", Input).value = a.DOMAIN
+        self.query_one("#cb-www", Checkbox).value = a.WWW == "on"
         self.set_radio("rs-dnsp", "dnsp-" + a.DNS_PROVIDER)
         self.set_radio("rs-addr", "addr-other" if a.EXPOSURE_IP else "addr-detected")
         self.query_one("#in-addr", Input).value = a.EXPOSURE_IP
@@ -293,12 +306,24 @@ class ProdGuide(App):
         self.fill_plan()
 
     def fill_dns(self) -> None:
+        tp = self.query_one("#tbl-dns-primary", DataTable); tp.clear()
         t = self.query_one("#tbl-dns", DataTable); t.clear()
         dns = self.facts.get("dns", {}) or {}
         ours = {r["address"] for r in self.facts.get("addresses", []) if r["role"] in ("reserved", "public4")} | {self.a.exposure_ip}
-        for n in self.a.names():
+        wc = self.facts.get("wildcard", "") or ""
+        wildcard = wc in ours and wc != ""
+        d = self.a.DOMAIN or "example.org"
+        for n, kind, role, by in self.a.name_rows():
             r = dns.get(n, "")
-            t.add_row(n, r or "unresolved", "✔ this server" if r and r in ours else "✖ not here")
+            here = bool(r) and r in ours
+            if kind == "primary":
+                tp.add_row(n, r or "unresolved", f"A record: {n} → {self.a.exposure_ip}", "✔ this server" if here else "✖ not here — set the A record")
+            else:
+                ext = "covered by the wildcard" if wildcard else f"A record → {self.a.exposure_ip}  (or one wildcard *.{d})"
+                t.add_row(n, role, by, r or "unresolved", ext, "✔ this server" if here else ("✔ via wildcard" if wildcard else "✖ not here"))
+        self.query_one("#dns-wildcard", Static).update(
+            f"wildcard *.{d}: present → every subdomain resolves here, now and later" if wildcard else
+            f"no wildcard record yet: one record  *.{d}  →  {self.a.exposure_ip}  at your DNS host covers every subdomain, now and later")
 
     def fill_links(self) -> None:
         links = self.facts.get("links", {}) or {}
@@ -335,6 +360,9 @@ class ProdGuide(App):
         a = self.a
         a.STASH = radio(self.query_one("#rs-stash", RadioSet)) or a.STASH
         a.DOMAIN = self.query_one("#in-domain", Input).value.strip().lower()
+        if a.DOMAIN.startswith("www."):
+            a.DOMAIN = a.DOMAIN[4:]; self.query_one("#cb-www", Checkbox).value = True
+        a.WWW = "on" if self.query_one("#cb-www", Checkbox).value else "off"
         a.DNS_PROVIDER = radio(self.query_one("#rs-dnsp", RadioSet)) or a.DNS_PROVIDER
         a.EXPOSURE_IP = self.query_one("#in-addr", Input).value.strip() if radio(self.query_one("#rs-addr", RadioSet)) == "other" else ""
         a.CERT_MODE = radio(self.query_one("#rs-cert", RadioSet)) or a.CERT_MODE
@@ -383,7 +411,7 @@ class ProdGuide(App):
 
     def step_problems(self, sid: str) -> List[str]:
         fields = {
-            "welcome": {"STASH"}, "domain": {"DOMAIN", "ROUTE"}, "address": {"EXPOSURE_IP"}, "dns": set(),
+            "welcome": {"STASH"}, "domain": {"DOMAIN", "WWW", "ROUTE"}, "address": {"EXPOSURE_IP"}, "dns": set(),
             "cert": {"CERT_MODE", "LE_EMAIL", "LE_CHALLENGE"}, "profile": {"AUTH", "ODOO", "MODULES"},
             "images": {"IMAGE_TAG", "IMAGE_REPO"}, "extras": {"DEBS"}, "review": set(KEYS_ALL),
         }.get(sid, set())
@@ -537,5 +565,5 @@ class ProdGuide(App):
         self.exit(0 if self.apply_done else 1)
 
 
-KEYS_ALL = ["ROUTE", "DOMAIN", "EXPOSURE_IP", "DNS_PROVIDER", "STASH", "CERT_MODE", "LE_CHALLENGE", "LE_EMAIL", "AUTH",
+KEYS_ALL = ["ROUTE", "DOMAIN", "WWW", "EXPOSURE_IP", "DNS_PROVIDER", "STASH", "CERT_MODE", "LE_CHALLENGE", "LE_EMAIL", "AUTH",
             "MODULES", "DEBS", "DEMO", "IMAGE_TAG", "IMAGE_REPO", "ODOO"]

@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field, fields
 from typing import Dict, List, Tuple
 
-KEYS = ["ROUTE", "DOMAIN", "EXPOSURE_IP", "DNS_PROVIDER", "STASH", "CERT_MODE", "LE_CHALLENGE",
+KEYS = ["ROUTE", "DOMAIN", "WWW", "EXPOSURE_IP", "DNS_PROVIDER", "STASH", "CERT_MODE", "LE_CHALLENGE",
         "LE_EMAIL", "AUTH", "MODULES", "DEBS", "DEMO", "IMAGE_TAG", "IMAGE_REPO", "ODOO"]
 FLOOR_MODULES = ["polariapps", "appstore", "islemesh", "terms"]
 HOST_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$")
@@ -24,10 +24,29 @@ EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 TAG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$")
 
 
+# Every name Polari answers for follows the ENABLED components (his rule): a subdomain exists only once the
+# service behind it is enabled. (subdomain, role, enabled-by) — "" is the primary domain.
+def component_names(auth: str, odoo: str, debs: str, www: str):
+    rows = [("", "the site (hub, documentation, downloads)", "always")]
+    if www == "on":
+        rows.append(("www", "the site under the www. convention", "www answer"))
+    if auth == "keycloak":
+        rows += [("auth", "Keycloak (logins)", "logins = Keycloak"), ("psc", "the scorecard frontend", "full profile"), ("api.psc", "the scorecard API", "full profile")]
+    rows += [("prf", "the Polari frontend", "always"), ("api.prf", "the Polari backend API", "always")]
+    if auth == "keycloak":
+        rows += [("files", "the file store (web)", "full profile"), ("s3", "the file store (S3 API)", "full profile")]
+    if odoo == "on":
+        rows.append(("odoo", "Odoo ERP", "odoo = on"))
+    if debs != "skip":
+        rows.append(("apt", "the apt repository of installers", "installers handed out"))
+    return rows
+
+
 @dataclass
 class Answers:
     ROUTE: str = "swarm"
     DOMAIN: str = ""
+    WWW: str = "off"               # on = also answer for www.<domain> (a hostname convention, optional)
     EXPOSURE_IP: str = ""          # empty = use the detected address
     DNS_PROVIDER: str = "registrar"  # registrar | digitalocean | cloudflare
     STASH: str = "some"            # all | some | none
@@ -62,13 +81,15 @@ class Answers:
     def cert_row(self) -> str:
         return "pol-proxy-public" if self.profile == "full" else "pol-proxy-lean"
 
-    def names(self) -> List[str]:
+    def name_rows(self) -> List[Tuple[str, str, str, str]]:
+        """(name, kind primary|subdomain, role, enabled-by) — what Polari defines, from the enabled components.
+        What must exist externally is one A record per name, or one wildcard record that covers every subdomain."""
         d = self.DOMAIN or "example.org"
-        if self.profile == "full":
-            subs = ["", "www.", "auth.", "psc.", "api.psc.", "prf.", "api.prf.", "files.", "s3.", "odoo.", "apt."]
-        else:
-            subs = ["", "www.", "prf.", "api.prf.", "apt."]
-        return [s + d for s in subs]
+        return [((sub + "." + d) if sub else d, "primary" if not sub else "subdomain", role, by)
+                for sub, role, by in component_names(self.AUTH, self.ODOO, self.DEBS, self.WWW)]
+
+    def names(self) -> List[str]:
+        return [r[0] for r in self.name_rows()]
 
     @property
     def exposure_ip(self) -> str:
@@ -135,9 +156,12 @@ class Answers:
         w: List[str] = []
         dns = facts.get("dns", {}) or {}
         ours = {a["address"] for a in facts.get("addresses", []) if a["role"] in ("reserved", "public4")} | {self.exposure_ip}
-        bad = [n for n in self.names() if dns.get(n, "") not in ours]
+        wildcard = facts.get("wildcard", "") in ours and facts.get("wildcard", "") != ""
+        bad = [n for n, k, _, _ in self.name_rows() if dns.get(n, "") not in ours and not (wildcard and k == "subdomain")]
         if bad and self.CERT_MODE == "letsencrypt":
             w.append("a publicly trusted certificate needs every name pointing here first; not yet: " + ", ".join(bad))
+        if not wildcard and len([1 for n, k, _, _ in self.name_rows() if k == "subdomain"]) > 2:
+            w.append("one wildcard record (*." + (self.DOMAIN or "example.org") + " → " + self.exposure_ip + ") at your DNS host covers every current and future subdomain; otherwise each subdomain needs its own A record")
         if facts.get("on_droplet") == "1" and not any(a["role"] == "reserved" for a in facts.get("addresses", [])):
             w.append("no reserved IP attached to this droplet — a rebuild changes its address (attach one in Networking → Reserved IPs)")
         if not self.IMAGE_REPO:
@@ -176,8 +200,8 @@ class Answers:
         return [
             ("route", "swarm (server)"),
             ("profile", f"{self.profile}  →  {self.compose_file}  →  stack {self.stack_name}  →  certificate row {self.cert_row}"),
-            ("domain", self.DOMAIN),
-            ("names", ", ".join(self.names())),
+            ("primary domain", self.DOMAIN + ("  (+ www.)" if self.WWW == "on" else "")),
+            ("subdomains (Polari-defined, from the enabled components)", ", ".join(n for n, k, _, _ in self.name_rows() if k == "subdomain")),
             ("exposure address", f"{self.exposure_ip} ({'answered' if self.EXPOSURE_IP else 'detected'})"),
             ("DNS records at", self.DNS_PROVIDER),
             ("certificate", ("publicly trusted (Let's Encrypt, %s challenge, %s)" % (self.LE_CHALLENGE, self.LE_EMAIL)) if self.CERT_MODE == "letsencrypt" else "self-signed by the suite CA (browsers warn)"),

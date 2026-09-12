@@ -52,7 +52,7 @@ mkdir -p "$GEN"
 # ---------------------------------------------------------------- answers
 # defaults → file → env (env wins: the AI/script route)
 POL_PROD_ROUTE="${POL_PROD_ROUTE:-}"; POL_PROD_DOMAIN="${POL_PROD_DOMAIN:-}"; POL_PROD_CERT_MODE="${POL_PROD_CERT_MODE:-}"
-POL_PROD_LE_CHALLENGE="${POL_PROD_LE_CHALLENGE:-}"; POL_PROD_LE_EMAIL="${POL_PROD_LE_EMAIL:-}"; POL_PROD_AUTH="${POL_PROD_AUTH:-}"; POL_PROD_EXPOSURE_IP="${POL_PROD_EXPOSURE_IP:-}"; POL_PROD_DNS_PROVIDER="${POL_PROD_DNS_PROVIDER:-}"; POL_PROD_STASH="${POL_PROD_STASH:-}"
+POL_PROD_LE_CHALLENGE="${POL_PROD_LE_CHALLENGE:-}"; POL_PROD_LE_EMAIL="${POL_PROD_LE_EMAIL:-}"; POL_PROD_AUTH="${POL_PROD_AUTH:-}"; POL_PROD_EXPOSURE_IP="${POL_PROD_EXPOSURE_IP:-}"; POL_PROD_DNS_PROVIDER="${POL_PROD_DNS_PROVIDER:-}"; POL_PROD_STASH="${POL_PROD_STASH:-}"; POL_PROD_WWW="${POL_PROD_WWW:-off}"
 POL_PROD_MODULES="${POL_PROD_MODULES:-}"; POL_PROD_DEBS="${POL_PROD_DEBS:-}"; POL_PROD_DEMO="${POL_PROD_DEMO:-}"; POL_PROD_IMAGE_TAG="${POL_PROD_IMAGE_TAG:-}"
 POL_PROD_IMAGE_REPO="${POL_PROD_IMAGE_REPO:-}"; POL_PROD_ODOO="${POL_PROD_ODOO:-}"
 load_answers() {
@@ -68,7 +68,7 @@ load_answers() {
 save_answers() {
     {
         echo "# pol prod answers — $(date -Is). Edit and re-run: pol prod apply. Env vars POL_PROD_* override."
-        for k in ROUTE DOMAIN EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO; do
+        for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO; do
             v="POL_PROD_$k"; echo "$v=${!v}"
         done
     } > "$ANSWERS"
@@ -195,11 +195,13 @@ do_facts() {  # machine-readable facts for the Textual guide: pol prod facts [--
     POL_PROD_DOMAIN="${dom:-$POL_PROD_DOMAIN}"   # the links and names follow the domain being asked about
     {
         echo "suite=$SUITE"; echo "git=$(git -C "$SUITE" rev-parse --short HEAD 2>/dev/null)"; echo "host=$(hostname)"; echo "user=$(id -un)"
-        for k in ROUTE DOMAIN EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO; do v="POL_PROD_$k"; echo "answer.$k=${!v}"; done
+        for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO; do v="POL_PROD_$k"; echo "answer.$k=${!v}"; done
         echo "on_droplet=$(on_droplet && echo 1 || echo 0)"; echo "detected_ip=$(detected_ip)"; echo "ipv6=$(exposure_ip6)"
         server_addresses | while IFS=$'\t' read -r r a n; do echo "address=$r|$a|$n"; done
         echo "names.lean=$(lean_names "${dom:-example.org}")"; echo "names.full=$(full_names "${dom:-example.org}")"
         for n in $names; do echo "dns=$n|$(resolve "$n" || true)"; done
+        name_rows "${dom:-example.org}" | while IFS=$'\t' read -r n k r e; do echo "namerow=$n|$k|$r|$e"; done
+        echo "wildcard=$(resolve "polari-probe-$RANDOM.${dom:-example.org}" || true)"
         official_image_sources | while IFS=$'\t' read -r pfx ttl; do echo "source=$pfx|$ttl"; done
         echo "release_tags=$(git -C "$SUITE" tag -l 'polari-v*' 2>/dev/null | sort -r | head -8 | tr '\n' ' ')"
         echo "release_source=$(official_release_sources | head -1 | cut -f1)"
@@ -223,6 +225,7 @@ for line in sys.stdin.read().split("\n"):
     k, v = line.split("=", 1)
     if k == "address": r, a, n = v.split("|", 2); out["addresses"].append({"role": r, "address": a, "note": n})
     elif k == "dns": n, a = v.split("|", 1); out["dns"][n] = a
+    elif k == "namerow": n, kd, r, e = v.split("|", 3); out.setdefault("name_rows", []).append({"name": n, "kind": kd, "role": r, "enabled_by": e})
     elif k == "source": p, t = v.split("|", 1); out["sources"].append({"prefix": p, "title": t})
     elif k == "provider": role, prov, title, why, cred = v.split("|", 4); out["providers"].append({"role": role, "id": prov, "title": title, "why": why, "credential": cred})
     elif k == "link": prov, l, u = v.split("|", 2); out["links"].setdefault(prov, []).append({"label": l, "url": u})
@@ -252,11 +255,26 @@ do_addresses() {
     fi
 }
 resolve() { getent ahostsv4 "$1" 2>/dev/null | awk '{print $1; exit}'; }
-lean_names() { echo "$1 www.$1 prf.$1 api.prf.$1 apt.$1"; }
-full_names() { echo "$1 www.$1 auth.$1 psc.$1 api.psc.$1 prf.$1 api.prf.$1 files.$1 s3.$1 odoo.$1 apt.$1"; }
+# The names this server answers for follow the ENABLED components (his rule 2026-09-11: a subdomain exists only
+# once the service behind it is enabled). name_rows prints: name<TAB>kind<TAB>role<TAB>enabled-by
+name_rows() {
+    local D=$1; load_answers
+    printf '%s\tprimary\tthe site (hub, documentation, downloads)\talways\n' "$D"
+    [ "$POL_PROD_WWW" = on ] && printf 'www.%s\tsubdomain\tthe site under the www. convention\twww answer\n' "$D"
+    [ "$POL_PROD_AUTH" = keycloak ] && printf 'auth.%s\tsubdomain\tKeycloak (logins)\tlogins = keycloak\n' "$D"
+    [ "$POL_PROD_AUTH" = keycloak ] && { printf 'psc.%s\tsubdomain\tthe scorecard frontend\tfull profile\n' "$D"; printf 'api.psc.%s\tsubdomain\tthe scorecard API\tfull profile\n' "$D"; }
+    printf 'prf.%s\tsubdomain\tthe Polari frontend\talways\n' "$D"
+    printf 'api.prf.%s\tsubdomain\tthe Polari backend API\talways\n' "$D"
+    [ "$POL_PROD_AUTH" = keycloak ] && { printf 'files.%s\tsubdomain\tthe file store (web)\tfull profile\n' "$D"; printf 's3.%s\tsubdomain\tthe file store (S3 API)\tfull profile\n' "$D"; }
+    [ "$POL_PROD_ODOO" = on ] && printf 'odoo.%s\tsubdomain\tOdoo ERP\todoo = on\n' "$D"
+    [ "${POL_PROD_DEBS:-skip}" != skip ] && printf 'apt.%s\tsubdomain\tthe apt repository of installers\tinstallers handed out\n' "$D"
+    return 0
+}
+lean_names() { name_rows "$1" | cut -f1 | tr '\n' ' '; }
+full_names() { name_rows "$1" | cut -f1 | tr '\n' ' '; }
 profile() { load_answers; [ "$POL_PROD_AUTH" = keycloak ] && echo full || echo lean; }
 stack_name() { [ "$(profile)" = full ] && echo polari-prod || echo polari-lean; }
-names() { if [ "$(profile)" = full ]; then full_names "$1"; else lean_names "$1"; fi; }
+names() { name_rows "$1" | cut -f1 | tr '\n' ' '; }
 cert_row() { [ "$(profile)" = full ] && echo pol-proxy-public || echo pol-proxy-lean; }
 edge_cert_issuer() { [ -s "$GEN/certs/edge/fullchain.pem" ] && openssl x509 -in "$GEN/certs/edge/fullchain.pem" -noout -issuer 2>/dev/null | sed 's/^issuer=//' || echo "none"; }
 edge_cert_expiry() { [ -s "$GEN/certs/edge/fullchain.pem" ] && openssl x509 -in "$GEN/certs/edge/fullchain.pem" -noout -enddate 2>/dev/null | cut -d= -f2 || echo "-"; }
@@ -289,6 +307,8 @@ Nothing else to do here. (pol prod is the server route.)"
     POL_PROD_ROUTE=swarm
     POL_PROD_DOMAIN=$(tui_input "Domain" "The public domain this server answers for (the site at the apex; prf., api.prf., apt. are made from it):" "${POL_PROD_DOMAIN:-polari-systems.org}")
     [ -n "$POL_PROD_DOMAIN" ] || die "a domain is required"
+    POL_PROD_DOMAIN=${POL_PROD_DOMAIN#www.}
+    if tui_yesno "www." "Also answer for www.$POL_PROD_DOMAIN? (www is a hostname convention, not a protocol — optional; most sites redirect it to the apex)"; then POL_PROD_WWW=on; else POL_PROD_WWW=off; fi
     local ip; ip=$(public_ip)
     local addrmsg="Addresses assigned to this machine$(on_droplet && echo ' (DigitalOcean droplet, from its metadata)'):\n"
     while IFS=$'\t' read -r role addr note; do addrmsg+="  $role: $addr — $note\n"; done < <(server_addresses)
@@ -298,9 +318,9 @@ Nothing else to do here. (pol prod is the server route.)"
     local ans; ans=$(tui_input "Exposure address" "The address the internet reaches this server at — the DNS A records for every name must carry it. Detected: ${ip:-unknown}. Keep it, or type the address you know is right (a reserved IP, the public side of a NAT, a proxy in front); an address can change, so what you answer here is what the checks and the certificate use:" "${POL_PROD_EXPOSURE_IP:-$ip}")
     if [ -n "$ans" ] && [ "$ans" != "$(detected_ip)" ]; then POL_PROD_EXPOSURE_IP="$ans"; else POL_PROD_EXPOSURE_IP=""; fi
     ip=$(exposure_ip)
-    local dnsmsg="Names this deployment serves, and where they resolve now (exposure address: ${ip:-unknown}, $(exposure_source)):\n"
-    for n in $(lean_names "$POL_PROD_DOMAIN"); do dnsmsg+="  $n → $(resolve "$n" || true)\n"; done
-    dnsmsg+="\nEvery name must point at this server before a provider-issued certificate can be approved."
+    local dnsmsg="POLARI SIDE — the subdomains are defined here by what is enabled; the proxy and the certificate follow them.\nEXTERNAL SIDE — each must resolve through a DNS record at your DNS host: the primary domain's A record, plus ONE wildcard (*.$POL_PROD_DOMAIN → ${ip:-?}) or one A record per subdomain.\n\nNow (exposure address ${ip:-unknown}, $(exposure_source)):\n"
+    while IFS=$'\t' read -r n k r e; do dnsmsg+="  $n → $(resolve "$n" || echo unresolved)   [$k: $r; enabled by: $e]\n"; done < <(name_rows "$POL_PROD_DOMAIN")
+    dnsmsg+="\nA provider-issued certificate needs every listed name pointing here first."
     POL_PROD_DNS_PROVIDER=$(tui_menu "Where are the domain's DNS records managed?" "The A records for the five names are set there. Pick the one that applies:" "${POL_PROD_DNS_PROVIDER:-registrar}" \
         registrar "At the registrar where the domain was bought (most common)" \
         digitalocean "At DigitalOcean (the domain is delegated to DigitalOcean nameservers) — also enables the DNS challenge" \
@@ -706,6 +726,7 @@ issue_cert() {
         else DO_API_TOKEN=$(recall_provider digitalocean DO_API_TOKEN); [ -n "$DO_API_TOKEN" ] && { export DO_API_TOKEN; log_info "DigitalOcean API token taken from the vault (stashed earlier)"; } || die "the DNS challenge needs DO_API_TOKEN in the environment (create one: $(provider_links digitalocean | awk -F'\t' '/API tokens/{print $2}'))"; fi
     fi
     log_info "issuing the Let's Encrypt certificate for $(names "$POL_PROD_DOMAIN") ($POL_PROD_LE_CHALLENGE challenge)"
+    LE_SANS="$(names "$POL_PROD_DOMAIN" | tr ' ' ',' | sed 's/,$//')" \
     LE_CERT_NAME=$(cert_row) LE_DOMAIN="$POL_PROD_DOMAIN" LE_EMAIL="$POL_PROD_LE_EMAIL" LE_CHALLENGE="$POL_PROD_LE_CHALLENGE" \
         LE_WEBROOT="$GEN/certbot-www" DEPLOY_ENV=prod PROD_DOMAIN="$POL_PROD_DOMAIN" BASE_DOMAIN="$POL_PROD_DOMAIN" \
         bash "$CA_DIR/setup-letsencrypt.sh" --non-interactive || die "certificate issue failed — see the certbot output above"
