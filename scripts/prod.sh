@@ -270,6 +270,7 @@ do_facts() {  # machine-readable facts for the Textual guide: pol prod facts [--
         if [ -s "$GEN/certs/edge/fullchain.pem" ]; then echo "cert.issuer=$(edge_cert_issuer)"; echo "cert.public=$(edge_cert_is_public && echo 1 || echo 0)"; echo "cert.expiry=$(edge_cert_expiry)"; fi
         providers_in_use | while IFS=$'\t' read -r role prov why; do echo "provider=$role|$prov|$(provider_title "$prov")|$why|$(provider_credential "$prov")"; provider_links "$prov" | while IFS=$'\t' read -r l u; do echo "link=$prov|$l|$u"; done; done
         echo "answers_file=$ANSWERS"; echo "log_dir=$GEN/prod-log"
+        echo "do_token_walkthrough=$(do_token_walkthrough "$(hostname)" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')"
         [ -f "$ANSWERS" ] && echo "last_run=$(stat -c %y "$ANSWERS" 2>/dev/null | cut -c1-16)|$(profile_summary "$ANSWERS")"
         profile_list | while IFS=$'\t' read -r n k sm c; do echo "profile=$n|$k|$sm|$c"; done
     } | python3 -c '
@@ -281,6 +282,7 @@ for line in sys.stdin.read().split("\n"):
     if k == "address": r, a, n = v.split("|", 2); out["addresses"].append({"role": r, "address": a, "note": n})
     elif k == "dns": n, a = v.split("|", 1); out["dns"][n] = a
     elif k == "dns_auth": n, a = v.split("|", 1); out.setdefault("dns_auth", {})[n] = a
+    elif k == "do_token_walkthrough": out[k] = json.loads(v)
     elif k == "last_run": t, sm = v.split("|", 1); out["last_run"] = {"when": t, "summary": sm}
     elif k == "profile": n, kd, sm, c = v.split("|", 3); out.setdefault("profiles", []).append({"name": n, "kind": kd, "summary": sm, "comment": c})
     elif k == "namerow": n, kd, r, e = v.split("|", 3); out.setdefault("name_rows", []).append({"name": n, "kind": kd, "role": r, "enabled_by": e})
@@ -461,7 +463,7 @@ Nothing else to do here. (pol prod is the server route.)"
             dns  "DNS challenge through the DigitalOcean API — needs DO_API_TOKEN; works before port 80 is open")
         POL_PROD_LE_EMAIL=$(tui_input "Contact e-mail" "Let's Encrypt sends expiry warnings here (never published):" "${POL_PROD_LE_EMAIL:-}")
         local lemsg="Let's Encrypt — useful pages:\n"; while IFS=$'\t' read -r label url; do lemsg+="  $label\n    $url\n"; done < <(provider_links letsencrypt); tui_msg "Let's Encrypt" "$(printf "$lemsg")"
-        [ "$POL_PROD_LE_CHALLENGE" = dns ] && tui_msg "DigitalOcean API token" "The DNS challenge needs a DigitalOcean API token with DNS write scope. Create it here and export DO_API_TOKEN in the shell that runs pol prod apply — it is never written into the answers:\n  $(provider_links digitalocean | awk -F'\t' '/API tokens/{print $2}')"
+        [ "$POL_PROD_LE_CHALLENGE" = dns ] && tui_msg "DigitalOcean API token" "$(do_token_walkthrough "$(hostname)")"
     fi
     POL_PROD_AUTH=$(tui_menu "User logins" "Keycloak handles authentication and user login: accounts, passwords and sign-in, and access control per user (who may see and change what). It is the default; with it the server also runs the scorecard and the file store, and its admin password is generated and kept in the vault. Without logins there are no accounts: anyone can browse, nothing is protected per user — fine for a plain distribution or demonstration server, about 1 GB lighter." "$POL_PROD_AUTH" \
         keycloak "User logins with Keycloak — accounts, sign-in, per-user security and access control (default)" \
@@ -861,7 +863,7 @@ issue_cert() {
     [ -n "$POL_PROD_LE_EMAIL" ] || die "LE needs an e-mail (POL_PROD_LE_EMAIL)"
     if [ "$POL_PROD_LE_CHALLENGE" = dns ]; then
         if [ -n "${DO_API_TOKEN:-}" ]; then stash_provider digitalocean DO_API_TOKEN "$DO_API_TOKEN" "DNS-challenge token (DNS write scope)"
-        else DO_API_TOKEN=$(recall_provider digitalocean DO_API_TOKEN); [ -n "$DO_API_TOKEN" ] && { export DO_API_TOKEN; log_info "DigitalOcean API token taken from the vault (stashed earlier)"; } || die "the DNS challenge needs DO_API_TOKEN in the environment (create one: $(provider_links digitalocean | awk -F'\t' '/API tokens/{print $2}'))"; fi
+        else DO_API_TOKEN=$(recall_provider digitalocean DO_API_TOKEN); if [ -n "$DO_API_TOKEN" ]; then export DO_API_TOKEN; log_info "DigitalOcean API token taken from the vault (stashed earlier)"; else echo; do_token_walkthrough "$(hostname)"; echo; die "the DNS challenge needs a DigitalOcean API token — follow the steps above, then re-run"; fi; fi
     fi
     log_info "issuing the Let's Encrypt certificate for $(names "$POL_PROD_DOMAIN") ($POL_PROD_LE_CHALLENGE challenge)"
     LE_SANS="$(names "$POL_PROD_DOMAIN" | tr ' ' ',' | sed 's/,$//')" \

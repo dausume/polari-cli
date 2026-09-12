@@ -425,7 +425,7 @@ class ProdGuide(App):
             "Nameservers not found yet — the domain may not be registered or delegated; the DNS check will say.")
         self.query_one("#dnsp-links", Static).update("Set the records at:\n" + fmt(self.a.DNS_PROVIDER))
         self.query_one("#dns-links", Static).update("Set the A records at:\n" + fmt(self.a.DNS_PROVIDER))
-        self.query_one("#cert-links", Static).update("Let's Encrypt:\n" + fmt("letsencrypt", 4) + ("\nDigitalOcean API token:\n" + fmt("digitalocean", 7).split("API tokens")[-1] if self.a.LE_CHALLENGE == "dns" else ""))
+        self.query_one("#cert-links", Static).update("Let's Encrypt:\n" + fmt("letsencrypt", 4) + ("\n\n" + (self.facts.get("do_token_walkthrough") or "The DNS challenge needs a DigitalOcean API token with domain write scope: https://cloud.digitalocean.com/account/api/tokens") if self.a.LE_CHALLENGE == "dns" else ""))
 
     def fill_plan(self) -> None:
         t = self.query_one("#tbl-plan", DataTable); t.clear()

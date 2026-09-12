@@ -200,3 +200,27 @@ PY
     done
     return 1
 }
+
+# ---- the DigitalOcean API token walk-through (DNS challenge only) ----------------
+# do_token_walkthrough [droplet-name] → the exact clicks, a suggested token name, the scope, and how to hand it over
+do_token_walkthrough() {
+    local who=${1:-$(hostname)}
+    cat <<EOT
+The DNS challenge proves you own the names by writing a record through DigitalOcean's API, so it needs an API
+token with DNS (domain) write scope. Nothing else needs one. Get it like this (2 minutes, once):
+
+  1. Open  https://cloud.digitalocean.com/account/api/tokens   (API → Tokens, signed in as the account that owns the domain)
+  2. Generate New Token
+       Name:        polari-${who}-dns        (so you can see later what it is for and revoke it alone)
+       Expiration:  90 days is fine — renewals only need it when a record must be re-proven
+       Scopes:      Custom scopes → domain: read + write   (nothing else; not full access)
+  3. Copy the token now — DigitalOcean shows it only once.
+  4. Hand it to Polari for this run (it is never written into the answers):
+       DO_API_TOKEN='paste-it-here' pol prod cert
+     With the stash policy 'all' (or 'some' and a yes) it is kept in the root-only vault and never asked again:
+       sudo pol security vault list
+
+Or avoid the token entirely: choose the HTTP challenge (pol prod guide → HTTPS certificate). It needs only port 80
+reachable and every name pointing here — no provider credential at all.
+EOT
+}
