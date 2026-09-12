@@ -164,10 +164,12 @@ class Answers:
             extra = [m for m in self.modules() if m not in core]
             if extra:
                 w.append("core image: " + ", ".join(extra) + " are optional modules not baked into it — they are fetched from their GitHub repositories on admission (their dependencies too)")
-        dns = facts.get("dns", {}) or {}
+        dns = facts.get("dns", {}) or {}; auth = facts.get("dns_auth", {}) or {}
         ours = {a["address"] for a in facts.get("addresses", []) if a["role"] in ("reserved", "public4")} | {self.exposure_ip}
-        wildcard = facts.get("wildcard", "") in ours and facts.get("wildcard", "") != ""
-        bad = [n for n, k, _, _ in self.name_rows() if dns.get(n, "") not in ours and not (wildcard and k == "subdomain")]
+        wc = facts.get("wildcard_auth") or facts.get("wildcard") or ""
+        wildcard = wc in ours and wc != ""
+        # the DNS host's own answer is the truth a certificate authority sees; the local resolver may lag behind a fix
+        bad = [n for n, k, _, _ in self.name_rows() if (auth.get(n) or dns.get(n, "")) not in ours and not (wildcard and k == "subdomain")]
         if bad and self.CERT_MODE == "letsencrypt":
             w.append("a publicly trusted certificate needs every name pointing here first; not yet: " + ", ".join(bad))
         if not wildcard and len([1 for n, k, _, _ in self.name_rows() if k == "subdomain"]) > 2:

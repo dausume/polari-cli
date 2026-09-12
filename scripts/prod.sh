@@ -244,7 +244,9 @@ do_facts() {  # machine-readable facts for the Textual guide: pol prod facts [--
         echo "on_droplet=$(on_droplet && echo 1 || echo 0)"; echo "detected_ip=$(detected_ip)"; echo "ipv6=$(exposure_ip6)"
         server_addresses | while IFS=$'\t' read -r r a n; do echo "address=$r|$a|$n"; done
         echo "names.lean=$(lean_names "${dom:-example.org}")"; echo "names.full=$(full_names "${dom:-example.org}")"
-        for n in $names; do echo "dns=$n|$(resolve "$n" || true)"; done
+        [ "$(id -u)" = 0 ] && resolvectl flush-caches >/dev/null 2>&1 || true   # a stale negative answer must not outlive a fix
+        for n in $names; do echo "dns=$n|$(resolve "$n" || true)"; echo "dns_auth=$n|$(resolve_authoritative "$n" "${dom:-example.org}" 2>/dev/null || true)"; done
+        echo "wildcard_auth=$(resolve_authoritative "polari-probe-$RANDOM.${dom:-example.org}" "${dom:-example.org}" 2>/dev/null || true)"
         name_rows "${dom:-example.org}" | while IFS=$'\t' read -r n k r e; do echo "namerow=$n|$k|$r|$e"; done
         echo "wildcard=$(resolve "polari-probe-$RANDOM.${dom:-example.org}" || true)"
         echo "nameservers=$(domain_nameservers "${dom:-example.org}" | tr '\n' ' ')"
@@ -278,6 +280,7 @@ for line in sys.stdin.read().split("\n"):
     k, v = line.split("=", 1)
     if k == "address": r, a, n = v.split("|", 2); out["addresses"].append({"role": r, "address": a, "note": n})
     elif k == "dns": n, a = v.split("|", 1); out["dns"][n] = a
+    elif k == "dns_auth": n, a = v.split("|", 1); out.setdefault("dns_auth", {})[n] = a
     elif k == "last_run": t, sm = v.split("|", 1); out["last_run"] = {"when": t, "summary": sm}
     elif k == "profile": n, kd, sm, c = v.split("|", 3); out.setdefault("profiles", []).append({"name": n, "kind": kd, "summary": sm, "comment": c})
     elif k == "namerow": n, kd, r, e = v.split("|", 3); out.setdefault("name_rows", []).append({"name": n, "kind": kd, "role": r, "enabled_by": e})
@@ -430,8 +433,9 @@ Nothing else to do here. (pol prod is the server route.)"
     if [ -n "$ans" ] && [ "$ans" != "$(detected_ip)" ]; then POL_PROD_EXPOSURE_IP="$ans"; else POL_PROD_EXPOSURE_IP=""; fi
     ip=$(exposure_ip)
     local dnsmsg="POLARI SIDE — the subdomains are defined here by what is enabled; the proxy and the certificate follow them.\nEXTERNAL SIDE — each must resolve through a DNS record at your DNS host: the primary domain's A record, plus ONE wildcard (*.$POL_PROD_DOMAIN → ${ip:-?}) or one A record per subdomain.\n\nNow (exposure address ${ip:-unknown}, $(exposure_source)):\n"
-    while IFS=$'\t' read -r n k r e; do dnsmsg+="  $n → $(resolve "$n" || echo unresolved)   [$k: $r; enabled by: $e]\n"; done < <(name_rows "$POL_PROD_DOMAIN")
-    local missing=""; while IFS=$'\t' read -r n k r e; do [ "$(resolve "$n" || true)" = "$ip" ] || missing="$missing ${n%%.*}"; done < <(name_rows "$POL_PROD_DOMAIN")
+    while IFS=$'\t' read -r n k r e; do local ra; ra=$(resolve_authoritative "$n" "$POL_PROD_DOMAIN" 2>/dev/null || echo none); dnsmsg+="  $n → $(resolve "$n" || echo unresolved) (at the DNS host: $ra)   [$k: $r; enabled by: $e]\n"; done < <(name_rows "$POL_PROD_DOMAIN")
+    dnsmsg+="\n'at the DNS host' is the answer of the domain's own nameservers — the truth a certificate authority sees; a cached 'unresolved' here clears within the zone's negative-cache time (often 30 min).\n"
+    local missing=""; while IFS=$'\t' read -r n k r e; do [ "$(resolve "$n" || true)" = "$ip" ] || [ "$(resolve_authoritative "$n" "$POL_PROD_DOMAIN" 2>/dev/null)" = "$ip" ] || missing="$missing ${n%%.*}"; done < <(name_rows "$POL_PROD_DOMAIN")
     if [ -n "$missing" ]; then
         dnsmsg+="\nMISSING — add at $(provider_dns_page "$POL_PROD_DNS_PROVIDER" "$POL_PROD_DOMAIN"):\n"
         for h in $missing; do dnsmsg+="  A record  host: $h   value: $ip\n"; done

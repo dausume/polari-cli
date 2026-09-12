@@ -161,3 +161,42 @@ provider_dns_howto() {  # provider → documentation on adding a record + the cl
         *)            printf 'https://dnschecker.org/\tAt the registrar: DNS / Advanced DNS → add an A record: host = the subdomain (or *), value = the server address\n' ;;
     esac
 }
+
+# ---- authoritative DNS answer (bypasses every cache): ask the domain's own nameservers directly ----
+# resolve_authoritative <name> <domain> → the A address the DNS host serves right now (pure python UDP query, no deps)
+resolve_authoritative() {
+    local name=$1 domain=$2 ns nsip
+    for ns in $(domain_nameservers "$domain"); do
+        nsip=$(getent ahostsv4 "$ns" 2>/dev/null | awk '{print $1; exit}'); [ -n "$nsip" ] || continue
+        python3 - "$name" "$nsip" <<'PY' && return 0
+import socket, struct, sys, random
+name, server = sys.argv[1], sys.argv[2]
+qid = random.randint(0, 65535)
+q = struct.pack('>HHHHHH', qid, 0x0000, 1, 0, 0, 0)   # RD=0: authoritative answer only
+for part in name.strip('.').split('.'):
+    q += bytes([len(part)]) + part.encode()
+q += b'\x00' + struct.pack('>HH', 1, 1)
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(4)
+try:
+    s.sendto(q, (server, 53)); data, _ = s.recvfrom(2048)
+except Exception:
+    sys.exit(1)
+if len(data) < 12 or struct.unpack('>H', data[:2])[0] != qid: sys.exit(1)
+ancount = struct.unpack('>H', data[6:8])[0]
+i = 12
+def skip_name(i):
+    while True:
+        l = data[i]
+        if l == 0: return i + 1
+        if l & 0xC0: return i + 2
+        i += 1 + l
+i = skip_name(i) + 4
+for _ in range(ancount):
+    i = skip_name(i); typ, cls, ttl, rdlen = struct.unpack('>HHIH', data[i:i+10]); i += 10
+    if typ == 1 and rdlen == 4: print('.'.join(str(b) for b in data[i:i+4])); sys.exit(0)
+    i += rdlen
+sys.exit(1)
+PY
+    done
+    return 1
+}

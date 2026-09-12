@@ -374,27 +374,29 @@ class ProdGuide(App):
     def fill_dns(self) -> None:
         tp = self.query_one("#tbl-dns-primary", DataTable); tp.clear()
         t = self.query_one("#tbl-dns", DataTable); t.clear()
-        dns = self.facts.get("dns", {}) or {}
+        dns = self.facts.get("dns", {}) or {}; auth = self.facts.get("dns_auth", {}) or {}
         ours = {r["address"] for r in self.facts.get("addresses", []) if r["role"] in ("reserved", "public4")} | {self.a.exposure_ip}
-        wc = self.facts.get("wildcard", "") or ""
+        wc = self.facts.get("wildcard_auth") or self.facts.get("wildcard") or ""
         wildcard = wc in ours and wc != ""
         d = self.a.DOMAIN or "example.org"
         missing: List[str] = []
         for n, kind, role, by in self.a.name_rows():
-            r = dns.get(n, "")
-            here = bool(r) and r in ours
+            r = dns.get(n, ""); ra = auth.get(n, "")
+            here_auth = bool(ra) and ra in ours          # the DNS host's own answer: the truth a certificate authority sees
+            here = (bool(r) and r in ours) or here_auth
+            shown = (ra or r or "unresolved") + ("  (local cache stale)" if here_auth and not (r and r in ours) else "")
             host = n[: -len(d) - 1] if n != d else "@"
             if kind == "primary":
-                tp.add_row(n, r or "unresolved", "present" if here else f"MISSING — A record, host @ (the domain itself), value {self.a.exposure_ip}", "✔ this server" if here else "✖ not here")
+                tp.add_row(n, shown, "present at the DNS host" if here else f"MISSING — A record, host @ (the domain itself), value {self.a.exposure_ip}", "✔ this server" if here else "✖ not here")
             else:
                 if here:
-                    ext = "present"
+                    ext = "present at the DNS host"
                 elif wildcard:
                     ext = "covered by the wildcard"
                 else:
                     ext = f"MISSING — A record, host {host}, value {self.a.exposure_ip}"
                     missing.append(host)
-                t.add_row(n, role, by, r or "unresolved", ext, "✔ this server" if here else ("✔ via wildcard" if wildcard else "✖ not here"))
+                t.add_row(n, role, by, shown, ext, "✔ this server" if here else ("✔ via wildcard" if wildcard else "✖ not here"))
         prov = self.a.DNS_PROVIDER
         page = (self.facts.get("dns_page") or {}).get(prov, "")
         howto = (self.facts.get("dns_howto") or {}).get(prov, {})
@@ -405,7 +407,7 @@ class ProdGuide(App):
             if howto:
                 lines.append(f"How: {howto.get('clicks', '')}")
                 lines.append(f"Documentation: {howto.get('url', '')}")
-            lines.append("Then Ctrl+R here. New records take a minute or two to be visible.")
+            lines.append("Then Ctrl+R here — the check asks your DNS host's own nameservers, so a new record shows within a minute; other resolvers catch up within the zone's cache time.")
             todo.update("\n".join(lines)); todo.display = True
         else:
             todo.update(""); todo.display = False
