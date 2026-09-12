@@ -205,6 +205,7 @@ do_facts() {  # machine-readable facts for the Textual guide: pol prod facts [--
         official_image_sources | while IFS=$'\t' read -r pfx ttl; do echo "source=$pfx|$ttl"; done
         echo "release_tags=$(git -C "$SUITE" tag -l 'polari-v*' 2>/dev/null | sort -r | head -8 | tr '\n' ' ')"
         echo "release_source=$(official_release_sources | head -1 | cut -f1)"
+        echo "image_tags=$(official_image_tags | tr '\n' ' ')"
         release_tags_with_debs "$(official_release_sources | head -1 | cut -f1)" | while IFS=$'\t' read -r t i; do echo "release=$t|$i"; done
         echo "staging_images=$(docker image inspect prf-backend:staging >/dev/null 2>&1 && echo 1 || echo 0)"
         echo "swarm=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || echo none)"
@@ -232,6 +233,7 @@ for line in sys.stdin.read().split("\n"):
     elif k.startswith("answer."): out["answers"][k[7:]] = v
     elif k.startswith("names."): out.setdefault("names", {})[k[6:]] = v.split()
     elif k == "release_tags": out[k] = v.split()
+    elif k == "image_tags": out[k] = v.split()
     elif k == "release": t, i = v.split("|", 1); out.setdefault("releases", []).append({"tag": t, "info": i})
     else: out[k] = v
 print(json.dumps(out, indent=1))'
@@ -376,7 +378,15 @@ Nothing else to do here. (pol prod is the server route.)"
                  if [ "$pfx" = manual ]; then pfx=$(tui_input "Registry prefix" "Registry + namespace, ending in a slash — example: ghcr.io/dausume/  or  registry.example.org/polari/" "${POL_PROD_IMAGE_REPO:-}"); fi
                  POL_PROD_IMAGE_REPO="$pfx"
                  case "$POL_PROD_IMAGE_REPO" in */) ;; "") die "a registry prefix is required for a pull" ;; *) POL_PROD_IMAGE_REPO="$POL_PROD_IMAGE_REPO/" ;; esac
-                 POL_PROD_IMAGE_TAG=$(tui_input "Image tag" "The tag every image is pulled at — example: polari-v2026.09.11 (a release) or staging (the moving tier tag)" "${POL_PROD_IMAGE_TAG:-}")
+                 local tagitems=() tg; if [ "$pfx" != manual ]; then while read -r tg; do [ -n "$tg" ] && tagitems+=("$tg" "$(case "$tg" in polari-v*) echo 'release';; staging|prod|latest) echo 'moving tier tag';; *) echo '';; esac)"); done < <(registry_image_tags "$POL_PROD_IMAGE_REPO" prf-backend); fi
+                 if [ ${#tagitems[@]} -gt 0 ]; then
+                     tagitems+=(other "Another tag (type it)")
+                     POL_PROD_IMAGE_TAG=$(tui_menu "Image tag" "Tags this registry actually has for prf-backend (valid by construction):" "${POL_PROD_IMAGE_TAG:-${tagitems[0]}}" "${tagitems[@]}")
+                     [ "$POL_PROD_IMAGE_TAG" = other ] && POL_PROD_IMAGE_TAG=$(tui_input "Image tag" "The tag every image is pulled at:" "")
+                 else
+                     [ "$pfx" != manual ] && tui_msg "No images published" "$POL_PROD_IMAGE_REPO has no prf-backend image yet (nothing published, or not public). You can type a tag, but the pull will fail until images are published — building here is the alternative."
+                     POL_PROD_IMAGE_TAG=$(tui_input "Image tag" "The tag every image is pulled at — example: polari-v2026.09.11 (a release) or staging (the moving tier tag)" "${POL_PROD_IMAGE_TAG:-}")
+                 fi
                  [ -n "$POL_PROD_IMAGE_TAG" ] && [ "$POL_PROD_IMAGE_TAG" != prod ] || die "a tag is required (prod is reserved for images built here)" ;;
         polari-v*) POL_PROD_IMAGE_REPO="$(official_image_sources | head -1 | cut -f1)"; POL_PROD_IMAGE_TAG="$src" ;;
     esac

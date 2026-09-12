@@ -62,6 +62,7 @@ class ProdGuide(App):
         self.confirmed_apply = False
         self.answers_file: str = (facts or {}).get("answers_file", "")
         self.releases_mounted = False
+        self.tags_mounted = False
 
     # ---------------------------------------------------------------- layout
     def compose(self) -> ComposeResult:
@@ -72,6 +73,7 @@ class ProdGuide(App):
                 yield ListView(*[ListItem(Label(f"{GLYPH['pending']} {t}", id=f"lbl-{sid}"), id=f"item-{sid}") for sid, t in STEPS], id="steps")
                 yield Static("", id="side-facts")
             with VerticalScroll(id="main"):
+                yield Static("", id="problems-top")
                 with ContentSwitcher(initial="step-welcome", id="panels"):
                     yield from self.panel_welcome()
                     yield from self.panel_profile()
@@ -191,6 +193,9 @@ class ProdGuide(App):
                 yield RadioButton("official: ghcr.io/dausume/ — GitHub Container Registry, the Polari images", id="imgreg-official")
                 yield RadioButton("manual entry", id="imgreg-manual")
             yield Input(placeholder="registry prefix, ending in a slash — example: registry.example.org/polari/", id="in-imgrepo")
+            yield Label("Tag — one this registry actually has (valid by construction)", classes="q", id="lbl-imgtaglist")
+            with RadioSet(id="rs-imgtag"):
+                yield RadioButton("(no images published at this source yet)", id="imgtag-none", value=True)
             yield Label("Tag — a release (example: polari-v2026.09.11) or staging (the moving tier tag)", classes="q", id="lbl-imgtag")
             yield Input(placeholder="polari-v2026.09.11", id="in-imgtag")
             yield Button("Verify the registry has this image", id="verify-image")
@@ -238,7 +243,7 @@ class ProdGuide(App):
         if not self.facts:
             await self.load_facts()
         else:
-            self.fill_from_answers()
+            await self.fill_from_answers()
         self.goto("welcome")
         self.refresh_side()
 
@@ -258,10 +263,21 @@ class ProdGuide(App):
             for k in ("DOMAIN", "WWW", "EXPOSURE_IP", "DNS_PROVIDER", "STASH", "CERT_MODE", "LE_CHALLENGE", "LE_EMAIL", "AUTH", "MODULES", "DEBS", "DEMO", "IMAGE_TAG", "IMAGE_REPO", "ODOO"):
                 setattr(self.a, k, getattr(keep, k))
             self.a.registry_verified = keep.registry_verified
-        self.fill_from_answers()
+        await self.fill_from_answers()
         self.refresh_side()
 
-    def fill_from_answers(self) -> None:
+    async def rebuild_radioset(self, rs_id: str, buttons: List[RadioButton]) -> RadioSet:
+        """A RadioButton mounted into an existing set never becomes its pressed button — so a list that comes from
+        facts is rebuilt as a whole new RadioSet in the same place."""
+        old = self.query_one(f"#{rs_id}", RadioSet)
+        parent = old.parent
+        idx = list(parent.children).index(old)
+        await old.remove()                      # the id must be free before the replacement is mounted
+        new = RadioSet(*buttons, id=rs_id)
+        await parent.mount(new, before=idx)
+        return new
+
+    async def fill_from_answers(self) -> None:
         a = self.a
         self.set_radio("rs-stash", "stash-" + a.STASH)
         self.query_one("#in-domain", Input).value = a.DOMAIN
@@ -276,6 +292,17 @@ class ProdGuide(App):
         self.query_one("#in-modules", Input).value = a.MODULES
         official = [s["prefix"] for s in self.facts.get("sources", [])] or ["ghcr.io/dausume/"]
         newest = (self.facts.get("release_tags") or [None])[0] or ((self.facts.get("releases") or [{}])[0].get("tag") or "")
+        tags = self.facts.get("image_tags") or []
+        if tags and not self.tags_mounted:
+            self.tags_mounted = True
+            btns = []
+            for i, t in enumerate(tags):
+                kind = "release" if t.startswith("polari-v") else ("moving tier tag" if t in ("staging", "prod", "latest") else "")
+                btns.append(RadioButton(f"{t}" + (f"  — {kind}" if kind else ""), id="imgtag-" + t.replace(".", "_"), value=(i == 0)))
+            btns.append(RadioButton("another tag (type it below)", id="imgtag-other"))
+            await self.rebuild_radioset("rs-imgtag", btns)
+        if a.IMAGE_REPO and a.IMAGE_TAG:
+            self.set_radio("rs-imgtag", "imgtag-" + a.IMAGE_TAG.replace(".", "_"))
         if a.IMAGE_REPO:
             self.set_radio("rs-imgsrc", "imgsrc-pull")
             self.set_radio("rs-imgreg", "imgreg-official" if a.IMAGE_REPO in official else "imgreg-manual")
@@ -286,13 +313,9 @@ class ProdGuide(App):
         self.query_one("#in-imgrepo", Input).value = a.IMAGE_REPO if a.IMAGE_REPO not in official else ""
         self.query_one("#in-imgtag", Input).value = (a.IMAGE_TAG if a.IMAGE_REPO else "") or newest
         rels = self.facts.get("releases", []) or []
-        rs = self.query_one("#rs-rel", RadioSet)
         if rels and not self.releases_mounted:
             self.releases_mounted = True
-            for b in list(rs.query(RadioButton)):
-                b.remove()
-            for i, r in enumerate(rels):
-                rs.mount(RadioButton(f"{r['tag']} — {r['info']}", id="rel-" + r["tag"].replace(".", "_"), value=(i == 0)))
+            await self.rebuild_radioset("rs-rel", [RadioButton(f"{r['tag']} — {r['info']}", id="rel-" + r["tag"].replace(".", "_"), value=(i == 0)) for i, r in enumerate(rels)])
         if a.DEBS.startswith("release:"):
             self.set_radio("rs-debs", "debs-release"); self.set_radio("rs-rel", "rel-" + a.DEBS[8:].replace(".", "_"))
         else:
@@ -346,6 +369,17 @@ class ProdGuide(App):
         w = self.a.warnings(self.facts)
         self.query_one("#review-warn", Static).update(("Notes:\n  " + "\n  ".join(w)) if w else "No warnings.")
 
+    def show_problems(self, probs: List[str]) -> None:
+        """Problems are shown where the eye is: a highlighted panel at the top of the step, plus a toast."""
+        top = self.query_one("#problems-top", Static)
+        if probs:
+            top.update("This step cannot continue yet:\n" + "\n".join("  ✖ " + p for p in probs))
+            top.display = True
+            self.notify(probs[0], title="Cannot continue", severity="error", timeout=8)
+        else:
+            top.update(""); top.display = False
+        self.query_one("#problems", Static).update("")
+
     def refresh_side(self) -> None:
         for sid, title in STEPS:
             st = "current" if sid == self.current else self.state[sid]
@@ -358,13 +392,22 @@ class ProdGuide(App):
     def sync_visibility(self) -> None:
         """Conditional controls: shown only while the choice that needs them is selected."""
         pull = radio(self.query_one("#rs-imgsrc", RadioSet)) == "pull"
-        for wid in ("#lbl-imgsrc", "#rs-imgreg", "#in-imgrepo", "#lbl-imgtag", "#in-imgtag", "#verify-image", "#img-note"):
+        for wid in ("#lbl-imgsrc", "#rs-imgreg", "#in-imgrepo", "#lbl-imgtaglist", "#rs-imgtag", "#lbl-imgtag", "#in-imgtag", "#verify-image", "#img-note"):
             try:
                 self.query_one(wid).display = pull
             except Exception:  # noqa: BLE001
                 pass
         if pull:
-            self.query_one("#in-imgrepo").display = radio(self.query_one("#rs-imgreg", RadioSet)) == "manual"
+            official = radio(self.query_one("#rs-imgreg", RadioSet)) == "official"
+            has_tags = bool(self.facts.get("image_tags"))
+            self.query_one("#in-imgrepo").display = not official
+            show_list = official and has_tags
+            self.query_one("#rs-imgtag").display = show_list; self.query_one("#lbl-imgtaglist").display = show_list
+            other = radio(self.query_one("#rs-imgtag", RadioSet)) == "other"
+            self.query_one("#in-imgtag").display = (not show_list) or other; self.query_one("#lbl-imgtag").display = (not show_list) or other
+            self.query_one("#verify-image").display = (not show_list) or other
+            if official and not has_tags:
+                self.query_one("#img-note", Static).update("no images are published at this source yet — a typed tag will not pull until they are; building here is the alternative")
         self.query_one("#in-addr").display = radio(self.query_one("#rs-addr", RadioSet)) == "other"
         debs = radio(self.query_one("#rs-debs", RadioSet))
         self.query_one("#in-debs").display = debs == "copy"
@@ -403,10 +446,18 @@ class ProdGuide(App):
             repo = official[0] if reg == "official" else self.query_one("#in-imgrepo", Input).value.strip()
             if repo and not repo.endswith("/"):
                 repo += "/"
-            tag = self.query_one("#in-imgtag", Input).value.strip()
+            listed = [t for t in (self.facts.get("image_tags") or [])]
+            chosen = radio(self.query_one("#rs-imgtag", RadioSet))
+            from_list = reg == "official" and listed and chosen not in ("other", "none", "")
+            if from_list:
+                tag = {t.replace(".", "_"): t for t in listed}.get(chosen, chosen)
+            else:
+                tag = self.query_one("#in-imgtag", Input).value.strip()
             if (repo, tag) != (a.IMAGE_REPO, a.IMAGE_TAG):
                 a.registry_verified = False
             a.IMAGE_REPO, a.IMAGE_TAG = repo, tag
+            if from_list:
+                a.registry_verified = True   # the registry itself listed it
         debs = radio(self.query_one("#rs-debs", RadioSet))
         if debs == "copy":
             a.DEBS = "copy:" + self.query_one("#in-debs", Input).value.strip()
@@ -428,6 +479,7 @@ class ProdGuide(App):
         self.query_one("#next", Button).label = "Apply" if sid == "review" else ("Close" if sid == "apply" else "Next")
         self.query_one("#back", Button).disabled = sid in ("welcome", "apply")
         self.query_one("#problems", Static).update("")
+        self.show_problems([])
         self.refresh_side()
 
     def step_problems(self, sid: str) -> List[str]:
@@ -445,7 +497,7 @@ class ProdGuide(App):
         self.collect()
         probs = self.step_problems(self.current)
         if probs:
-            self.query_one("#problems", Static).update("✖ " + "\n✖ ".join(probs))
+            self.show_problems(probs)
             self.state[self.current] = "failed"
             self.refresh_side()
             return
@@ -456,6 +508,8 @@ class ProdGuide(App):
             await self.load_facts(self.a.DOMAIN)
         if nxt in ("dns", "address"):
             self.fill_dns(); self.fill_links()
+        if nxt == "images" and radio(self.query_one("#rs-imgsrc", RadioSet)) == "pull":
+            self.call_after_refresh(self.verify_images)
         if nxt == "review":
             self.fill_plan()
         if nxt == "apply":
@@ -504,20 +558,52 @@ class ProdGuide(App):
     @on(RadioSet.Changed)
     def _radio_changed(self, ev: RadioSet.Changed) -> None:
         rs = ev.radio_set.id or ""
-        if rs in ("rs-dnsp", "rs-chal", "rs-cert"):
-            self.collect(); self.fill_links()
-        self.sync_visibility()
+        # the set un-toggles the previous button after this event — read the buttons once that has happened
+        async def later() -> None:
+            if rs in ("rs-dnsp", "rs-chal", "rs-cert"):
+                self.collect(); self.fill_links()
+            self.sync_visibility()
+            if rs in ("rs-imgsrc", "rs-imgreg", "rs-imgtag") and radio(self.query_one("#rs-imgsrc", RadioSet)) == "pull":
+                await self.verify_images()
+        self.call_after_refresh(later)
 
     @on(Button.Pressed, "#verify-image")
     async def _verify(self) -> None:
+        await self.verify_images(manual=True)
+
+    async def verify_images(self, manual: bool = False) -> None:
+        """Check that the chosen registry really has the image at the chosen tag; say what to do if not."""
         self.collect()
         note = self.query_one("#img-note", Static)
-        if not self.a.IMAGE_REPO or not self.a.IMAGE_TAG:
-            note.update("a registry prefix and a tag are needed first"); return
+        if not self.a.IMAGE_REPO:
+            return
+        if not self.a.IMAGE_TAG:
+            note.update("✖ a tag is needed — pick one from the list, or type one"); return
+        if self.a.registry_verified and not manual:
+            note.update(f"✔ {self.a.IMAGE_REPO}prf-backend:{self.a.IMAGE_TAG} — listed by the registry itself"); return
         note.update(f"checking {self.a.IMAGE_REPO}prf-backend:{self.a.IMAGE_TAG} …")
-        ok = await F.check_image(self.a.IMAGE_REPO, self.a.IMAGE_TAG)
+        try:
+            ok = await F.check_image(self.a.IMAGE_REPO, self.a.IMAGE_TAG)
+        except Exception as e:  # noqa: BLE001
+            ok = False
+            self.notify(f"could not check the registry: {e}", severity="error", timeout=8)
         self.a.registry_verified = ok
-        note.update(("✔ reachable: " if ok else "✖ not reachable (not published, private, or a typo): ") + f"{self.a.IMAGE_REPO}prf-backend:{self.a.IMAGE_TAG}")
+        if ok:
+            note.update(f"✔ reachable: {self.a.IMAGE_REPO}prf-backend:{self.a.IMAGE_TAG}")
+        else:
+            alt = ["build the images on this machine (this one has %s MB of memory%s)" % (self.facts.get("mem_total_mb", "?"), "" if self._mem_ok() else " — under the ~3 GB the frontend build needs")]
+            if self.facts.get("staging_images") == "1":
+                alt.append("use the staging images already on this machine")
+            alt.append("enter another registry (manual entry)")
+            note.update(f"✖ {self.a.IMAGE_REPO}prf-backend:{self.a.IMAGE_TAG} is not reachable — nothing is published there at that tag, it is private, or the tag is wrong.\n"
+                        "  Try instead:\n" + "\n".join("   · " + x for x in alt))
+            self.notify("that registry does not have the image — see the options under the tag", title="Not reachable", severity="warning", timeout=8)
+
+    def _mem_ok(self) -> bool:
+        try:
+            return int(self.facts.get("mem_total_mb") or 0) >= 3500
+        except ValueError:
+            return False
 
     # ---------------------------------------------------------------- apply
     def write_answers(self) -> None:

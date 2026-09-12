@@ -112,3 +112,26 @@ except Exception: r = {}
 for a in r.get("assets", []):
     if a.get("name", "").endswith(".deb"): print(a["browser_download_url"])'
 }
+
+# ---- tags a registry actually has for an image (public images, anonymous) ----------
+# registry_image_tags <prefix> <image> → tags, newest-looking first (≤ 12), empty when unreachable/unpublished
+registry_image_tags() {
+    local prefix=${1%/} image=$2 host repo tok url
+    host=${prefix%%/*}; repo="${prefix#*/}/$image"
+    case "$host" in
+        ghcr.io) tok=$(curl -fsSL --max-time 10 "https://ghcr.io/token?scope=repository:$repo:pull" 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))' 2>/dev/null)
+                 url="https://ghcr.io/v2/$repo/tags/list?n=100" ;;
+        docker.io|index.docker.io|"") tok=$(curl -fsSL --max-time 10 "https://auth.docker.io/token?service=registry.docker.io&scope=repository:$repo:pull" 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))' 2>/dev/null)
+                 url="https://registry-1.docker.io/v2/$repo/tags/list?n=100" ;;
+        *)       tok=""; url="https://$host/v2/${prefix#*/}/$image/tags/list?n=100" ;;
+    esac
+    curl -fsSL --max-time 10 ${tok:+-H "Authorization: Bearer $tok"} "$url" 2>/dev/null | python3 -c '
+import sys, json, re
+try: tags = json.load(sys.stdin).get("tags") or []
+except Exception: tags = []
+def key(t):  # releases (polari-vYYYY.MM.DD[.n]) newest first, then the tier tags, then the rest
+    m = re.match(r"^polari-v(\d{4})\.(\d{2})\.(\d{2})(?:\.(\d+))?$", t)
+    return (0, -int(m.group(1)), -int(m.group(2)), -int(m.group(3)), -int(m.group(4) or 0)) if m else ((1, t) if t in ("staging", "prod", "latest") else (2, t))
+for t in sorted(tags, key=key)[:12]: print(t)'
+}
+official_image_tags() { registry_image_tags "$(official_image_sources | head -1 | cut -f1)" prf-backend; }

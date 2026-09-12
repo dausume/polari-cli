@@ -18,3 +18,4 @@ DataTable { height: auto; max-height: 14; margin: 1 0; }
 #log { height: 1fr; min-height: 12; border: solid $primary-darken-2; }
 #after { height: 3; }
 #after Button { margin: 0 1; }
+#problems-top { display: none; background: $error 25%; color: $text; border: solid $error; padding: 0 1; margin: 0 0 1 0; text-style: bold; }
