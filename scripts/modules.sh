@@ -72,6 +72,8 @@ if d.get('error') and not d.get('state'): sys.exit(print('%s: %s (deploy/admit i
 print('%s: %s  (%s, %s)' % (d.get('module'), d.get('state'), d.get('source'), d.get('phase')))
 for piece, c in (d.get('confirmed') or {}).items(): print('  %-10s %s/%s' % (piece, c.get('count','?'), c.get('of','?')), ('MISSING: ' + ', '.join(map(str, d['missing'][piece][:5]))) if piece in (d.get('missing') or {}) else '')
 print('  selftest  ', (d.get('selftest') or {}).get('status'))
+hw = d.get('hardware') or {}
+if hw.get('notice'): print('  hardware  ', hw.get('reach'), '-', hw['notice'])
 if d.get('error'): print('  error     ', d['error'])" "$MOD"
         else
             curl -s "$API/api/modules/health?brief=1" | python3 -c "
@@ -79,7 +81,8 @@ import json,sys; d=json.load(sys.stdin)
 print('health: %s   %s' % ('OK' if d.get('ok') else 'UNHEALTHY', ' '.join('%s=%s' % kv for kv in sorted((d.get('counts') or {}).items()))))
 for m, r in sorted((d.get('modules') or {}).items()):
     flag = '!' if r['state'] in ('degraded', 'failed', 'blocked', 'invalid') else ' '
-    print('  %s %-26s %-10s %s' % (flag, m, r['state'], (r.get('error') or '')[:90]))"
+    hw = ' [hardware: Polari side only here]' if (r.get('hardware') or {}).get('reach') == 'polari-side-only' else ''
+    print('  %s %-26s %-10s %s%s' % (flag, m, r['state'], (r.get('error') or '')[:90], hw))"
         fi ;;
     list)
         pol_box "PRF module packages"

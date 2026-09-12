@@ -44,6 +44,9 @@ ${BOLD}HOW IT STAYS SECURE${NC}
                 remote  ssh + swarm + AI-assisted setup — exactly the commands pol deploy sends
                 app     the app-setup route — what the store's doors run for a person
   ${CYAN}audit${NC} <node> [--json]   the os-security audit on that machine (every ring, pass/fail, verdict), over ssh
+  ${CYAN}harden${NC} <node> [--scenario S] [--dry-run|--enforce] | --report [--rules] | --revert
+                          the os-security rings on that machine, WARN-ONLY unless --enforce (renders here, ships, applies there, audits);
+                          --report = what enforcing would break (kernel ALLOWED + seccomp-log lines); --revert = stock docker-default back
   ${CYAN}tier${NC} <node> [--check | reach|member|hardware] [--install]
               --check: what the machine qualifies for (docker, virt flags, /dev/kvm, libvirt, IOMMU);
               a tier: label the swarm node (polari.tier) + the topology machine row; hardware
@@ -251,6 +254,29 @@ echo "  containers   $(docker ps --format "{{.Names}}" 2>/dev/null | wc -l) runn
         scp -q "$SCRIPT_DIR/../../os-security/audit.sh" "$SSH:/tmp/os-security-audit.sh" || die "scp failed"
         ssh -o ConnectTimeout=8 "$SSH" "bash /tmp/os-security-audit.sh $*"; RC=$?
         [ $RC = 0 ] && log_success "$NODE: hardened" || log_warn "$NODE: not yet hardened (verdict above) — os-security/README.md"
+        exit $RC ;;
+    harden)
+        # sec-1a across the home machines: render here, ship the rendered scenario + scripts to the node, apply there WARN-ONLY
+        # (complain profiles, node-wide docker-default in complain, the other rings printed) unless --enforce; --dry-run prints;
+        # --report = what enforcing would break (the kernel's ALLOWED/seccomp-log lines); --revert = docker's stock docker-default back.
+        NODE=${1:?node required}; shift || true
+        SSH=$(node_field "$NODE" ssh); SCN=""; MODEARGS=(); REPORT=false; REVERT=false; RARGS=()
+        while [ $# -gt 0 ]; do case "$1" in --scenario) SCN="$2"; shift 2 ;; --report) REPORT=true; shift ;; --revert) REVERT=true; shift ;; --enforce|--dry-run|--complain) MODEARGS+=("$1"); shift ;; *) RARGS+=("$1"); shift ;; esac; done
+        OSD="$SCRIPT_DIR/../../os-security"
+        if [ -z "$SSH" ]; then bash "$SCRIPT_DIR/security.sh" os $($REPORT && echo allowed || { $REVERT && echo revert || echo apply; }) ${SCN:+--scenario "$SCN"} "${MODEARGS[@]}" "${RARGS[@]}"; exit $?; fi
+        # scenario: the node's role — an isle agent running there → isle; else the swarm's profile (lean unless told)
+        [ -n "$SCN" ] || SCN=$(ssh -o ConnectTimeout=8 "$SSH" "docker ps --format '{{.Names}}' 2>/dev/null | grep -qE '^isle-(vlan|remote)-agent$' && echo isle || echo swarm-lean")
+        pol_box "harden: $NODE ($SCN, $($REPORT && echo report || { $REVERT && echo revert || { case " ${MODEARGS[*]} " in *" --enforce "*) echo ENFORCE ;; *) echo warn-only ;; esac; }; }))"
+        REMOTE=/tmp/os-security-$SCN
+        if $REPORT; then ssh -o ConnectTimeout=8 "$SSH" "sudo -n python3 $REMOTE/allowed.py ${RARGS[*]}"; exit $?; fi
+        python3 "$OSD/render.py" --scenario "$SCN" --apps-from-manifests >/dev/null || die "render failed"
+        ssh -o ConnectTimeout=8 "$SSH" "rm -rf $REMOTE && mkdir -p $REMOTE/out" || die "ssh failed"
+        tar -C "$OSD" -cf - apply.sh audit.sh allowed.py escape-test.sh syscalls_x86_64.json "out/$SCN" | ssh "$SSH" "tar -C $REMOTE -xf -" || die "ship failed"
+        if $REVERT; then ssh -t -o ConnectTimeout=8 "$SSH" "sudo -n bash $REMOTE/apply.sh --scenario $SCN --revert-docker-default"; exit $?; fi
+        ssh -o ConnectTimeout=8 "$SSH" "sudo -n true 2>/dev/null" || { case " ${MODEARGS[*]} " in *" --dry-run "*) ;; *) die "$NODE: sudo needs a password there — run: ssh -t $SSH 'sudo bash $REMOTE/apply.sh --scenario $SCN ${MODEARGS[*]}' (or pol deploy grant $NODE)" ;; esac; }
+        ssh -o ConnectTimeout=8 "$SSH" "sudo -n bash $REMOTE/apply.sh --scenario $SCN ${MODEARGS[*]} 2>&1 || bash $REMOTE/apply.sh --scenario $SCN --dry-run ${MODEARGS[*]}"; RC=$?
+        case " ${MODEARGS[*]} " in *" --dry-run "*) ;; *) ssh -o ConnectTimeout=8 "$SSH" "sudo -n bash $REMOTE/audit.sh --scenario $SCN" || true
+            log_info "$NODE: warn-only rings loaded; after a day: pol deploy harden $NODE --report --rules   (revert: pol deploy harden $NODE --revert)" ;; esac
         exit $RC ;;
     tier)
         NODE=${1:?node required}; shift || true
