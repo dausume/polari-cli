@@ -25,6 +25,7 @@
 #  (credentials: everything generated goes to the root-only encrypted vault — sudo pol security vault show; provider credentials stashed all/some/none by your answer)
 #  pol prod tui-install          install the Textual guide (python); guide uses it when present, POL_PROD_TUI=whiptail forces the plain dialogs
 #  pol prod log [n]               print the n-th last run log (every run is logged: .generated/prod-log/)
+#  pol prod profile list|show|save|use <name> [--apply]|delete   saved answer sets: standard ones shipped (local-instance, public-server, demo-server, distribution-server) + yours; apply --profile <name> --yes
 #  pol prod verify [--module m] [--api URL]  after apply: modules/apps set up by every route (console fetch-admit, apps/downloads, interfaces, topology assign)
 #  pol prod providers             which providers are in use for what (hosting, DNS, certificate, registry, code) and the pages to visit for each
 #  pol prod addresses [--use <ip>|--auto]  every address assigned to this machine (droplet metadata on DigitalOcean); the exposure IP the A records need (detected, or the one you answered)
@@ -75,6 +76,49 @@ save_answers() {
     } > "$ANSWERS"
     log_success "answers saved: $ANSWERS"
     [ -n "${LOG_FILE:-}" ] && { echo "# answers:"; sed 's/^/#   /' "$ANSWERS"; } >> "$LOG_FILE" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------- profiles
+# A profile = a saved answers file (the same POL_PROD_* keys). Standard ones ship with the CLI
+# (polari-cli/prod-profiles/*.env); yours are saved in $SUITE/.polari/prod-profiles/<name>.env.
+STD_PROFILES="$SCRIPT_DIR/../prod-profiles"; USER_PROFILES="$SUITE/.polari/prod-profiles"
+profile_path() {  # name → file (user first, then standard)
+    [ -f "$USER_PROFILES/$1.env" ] && { echo "$USER_PROFILES/$1.env"; return; }
+    [ -f "$STD_PROFILES/$1.env" ] && { echo "$STD_PROFILES/$1.env"; return; }
+    return 1
+}
+profile_summary() {  # file → one line
+    local d a c i; d=$(grep -s '^POL_PROD_DOMAIN=' "$1" | cut -d= -f2-); a=$(grep -s '^POL_PROD_AUTH=' "$1" | cut -d= -f2-); c=$(grep -s '^POL_PROD_CERT_MODE=' "$1" | cut -d= -f2-); i=$(grep -s '^POL_PROD_IMAGE_TAG=' "$1" | cut -d= -f2-)
+    echo "${d:-<domain asked>} · logins ${a:-keycloak} · cert ${c:-self-signed} · images ${i:-build}"
+}
+profile_list() {  # name<TAB>kind<TAB>summary<TAB>comment
+    local f
+    for f in "$USER_PROFILES"/*.env; do [ -f "$f" ] || continue; printf '%s\tsaved\t%s\t%s\n' "$(basename "${f%.env}")" "$(profile_summary "$f")" "$(grep -m1 '^# ' "$f" | cut -c3-120)"; done
+    for f in "$STD_PROFILES"/*.env; do [ -f "$f" ] || continue; [ -f "$USER_PROFILES/$(basename "$f")" ] && continue; printf '%s\tstandard\t%s\t%s\n' "$(basename "${f%.env}")" "$(profile_summary "$f")" "$(grep -m1 '^# ' "$f" | cut -c3-120)"; done
+}
+profile_load() {  # name → sets POL_PROD_* from the file, expanding ${LAN_IP} ${PUBLIC_IP} ${HOSTNAME}; unset values are asked by the guide
+    local f; f=$(profile_path "$1") || die "no profile '$1' (pol prod profile list)"
+    local lan pub; lan=$(lan_ip); pub=$(detected_ip)
+    local k v; while IFS='=' read -r k v; do
+        case "$k" in POL_PROD_*) v=${v//\$\{LAN_IP\}/$lan}; v=${v//\$\{PUBLIC_IP\}/$pub}; v=${v//\$\{HOSTNAME\}/$(hostname)}; printf -v "$k" '%s' "$v" ;; esac
+    done < <(grep -v '^#' "$f")
+    POL_PROD_PROFILE="$1"
+}
+profile_save() {  # name → the current answers, with a comment
+    mkdir -p "$USER_PROFILES"; load_answers
+    { echo "# saved $(date -Is) on $(hostname) — pol prod profile use $1"; for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO; do v="POL_PROD_$k"; echo "$v=${!v}"; done; } > "$USER_PROFILES/$1.env"
+    log_success "profile saved: $USER_PROFILES/$1.env — pol prod profile use $1 [--apply]"
+}
+do_profile() {
+    case "${1:-list}" in
+        list)   printf '  %-22s %-9s %s\n' "profile" "kind" "answers"; profile_list | while IFS=$'\t' read -r n k s c; do printf '  %-22s %-9s %s\n  %-22s %-9s %s\n' "$n" "$k" "$s" "" "" "$c"; done
+                [ -f "$ANSWERS" ] && echo "  (last run: $ANSWERS — $(profile_summary "$ANSWERS"))" ;;
+        show)   cat "$(profile_path "${2:?name}")" ;;
+        save)   profile_save "${2:?name}" ;;
+        use)    profile_load "${2:?name}"; save_answers; log_success "answers set from profile '$2' (pol prod plan to see them; pol prod apply --yes to deploy)"; [ "${3:-}" = --apply ] && do_apply --yes ;;
+        delete) rm -f "$USER_PROFILES/${2:?name}.env" && log_success "deleted $USER_PROFILES/$2.env" ;;
+        *) echo "pol prod profile list|show <name>|save <name>|use <name> [--apply]|delete <name>   (standard: $STD_PROFILES; yours: $USER_PROFILES)" ;;
+    esac
 }
 
 # ---------------------------------------------------------------- TUI
@@ -224,6 +268,8 @@ do_facts() {  # machine-readable facts for the Textual guide: pol prod facts [--
         if [ -s "$GEN/certs/edge/fullchain.pem" ]; then echo "cert.issuer=$(edge_cert_issuer)"; echo "cert.public=$(edge_cert_is_public && echo 1 || echo 0)"; echo "cert.expiry=$(edge_cert_expiry)"; fi
         providers_in_use | while IFS=$'\t' read -r role prov why; do echo "provider=$role|$prov|$(provider_title "$prov")|$why|$(provider_credential "$prov")"; provider_links "$prov" | while IFS=$'\t' read -r l u; do echo "link=$prov|$l|$u"; done; done
         echo "answers_file=$ANSWERS"; echo "log_dir=$GEN/prod-log"
+        [ -f "$ANSWERS" ] && echo "last_run=$(stat -c %y "$ANSWERS" 2>/dev/null | cut -c1-16)|$(profile_summary "$ANSWERS")"
+        profile_list | while IFS=$'\t' read -r n k sm c; do echo "profile=$n|$k|$sm|$c"; done
     } | python3 -c '
 import sys, json
 out = {"addresses": [], "dns": {}, "sources": [], "providers": [], "links": {}, "answers": {}}
@@ -232,6 +278,8 @@ for line in sys.stdin.read().split("\n"):
     k, v = line.split("=", 1)
     if k == "address": r, a, n = v.split("|", 2); out["addresses"].append({"role": r, "address": a, "note": n})
     elif k == "dns": n, a = v.split("|", 1); out["dns"][n] = a
+    elif k == "last_run": t, sm = v.split("|", 1); out["last_run"] = {"when": t, "summary": sm}
+    elif k == "profile": n, kd, sm, c = v.split("|", 3); out.setdefault("profiles", []).append({"name": n, "kind": kd, "summary": sm, "comment": c})
     elif k == "namerow": n, kd, r, e = v.split("|", 3); out.setdefault("name_rows", []).append({"name": n, "kind": kd, "role": r, "enabled_by": e})
     elif k == "source": p, t = v.split("|", 1); out["sources"].append({"prefix": p, "title": t})
     elif k == "provider": role, prov, title, why, cred = v.split("|", 4); out["providers"].append({"role": role, "id": prov, "title": title, "why": why, "credential": cred})
@@ -343,6 +391,11 @@ LE_LIVE() { echo "${CERTBOT_CONFIG_DIR:-$CA_DIR/.generated/letsencrypt}/live/${L
 do_guide() {
     load_answers
     pol_box "pol prod — production deployment guide"
+    local start=() n k sm c; [ -f "$ANSWERS" ] && start+=(last "Continue from my last run — $(profile_summary "$ANSWERS")")
+    while IFS=$'\t' read -r n k sm c; do start+=("$n" "[$k] $sm — $c"); done < <(profile_list)
+    start+=(fresh "Walk through everything again")
+    local pick; pick=$(tui_menu "Start from" "Re-use the answers of a prior run or a profile (you still see every step and can change any answer), or start fresh:" "${start[0]}" "${start[@]}")
+    case "$pick" in last) : ;; fresh) rm -f "$ANSWERS"; for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO; do unset "POL_PROD_$k"; done; load_answers ;; *) profile_load "$pick" ;; esac
     tui_msg "Credentials and the vault" "Everything this guide generates (Keycloak admin, database and file-store passwords on the full profile) is written ONCE into an encrypted, root-only vault at /etc/polari/vault and nowhere else you have to protect. Read it later with:  sudo pol security vault show\n\nProvider credentials you give along the way (a DigitalOcean API token for the DNS challenge, a registry pull token) CAN be stashed in the same vault so the next run does not ask again. Advice: record them in your own password manager and remove them from the vault afterwards (sudo pol security vault forget 'provider <name>'). The next question sets the rule; you can still answer per item."
     POL_PROD_STASH=$(tui_menu "Stash provider credentials in the vault?" "Generated Polari credentials are always vaulted. For PROVIDER credentials choose:" "${POL_PROD_STASH:-some}" \
         all "Stash every provider credential I enter (convenient; move them out later)" \
@@ -460,7 +513,9 @@ Nothing else to do here. (pol prod is the server route.)"
     fi
     save_answers
     do_plan
-    if tui_yesno "Apply now?" "Render the configuration, stage the certificate and debs, and deploy stack polari-lean on this swarm?"; then do_apply --yes; else log_info "Not applied. Later: pol prod apply"; fi
+    local pname; pname=$(tui_input "Save as a profile?" "A name to save these answers under for next time (empty = do not save). Re-use with: pol prod profile use <name> [--apply]" "${POL_PROD_PROFILE:-}")
+    [ -n "$pname" ] && profile_save "$pname"
+    if tui_yesno "Apply now?" "Render the configuration, stage the certificate and debs, and deploy stack $(stack_name) on this swarm?"; then do_apply --yes; else log_info "Not applied. Later: pol prod apply"; fi
 }
 
 # ---------------------------------------------------------------- plan / check
@@ -816,6 +871,7 @@ issue_cert() {
     log_success "public certificate in place; weekly auto-renew installed"
 }
 do_apply() {
+    if [ "${1:-}" = --profile ]; then profile_load "$2"; save_answers; shift 2; fi
     load_answers
     [ "$POL_PROD_ROUTE" = swarm ] || die "route is '$POL_PROD_ROUTE' — pol prod applies the swarm (server) route"
     if [ "${1:-}" != "--yes" ] && [ "$HAS_TUI" = 1 ]; then do_plan; tui_yesno "Apply?" "Proceed with the plan above?" || return 0; fi
@@ -884,6 +940,7 @@ case "$COMMAND" in
              for st in polari-lean polari-prod; do docker stack ls --format '{{.Name}}' | grep -qx "$st" && { docker stack rm "$st"; log_success "stack $st removed (data volumes kept)"; }; done; true ;;
     addresses) do_addresses "$@" ;;
     verify)    do_verify "$@" ;;
+    profile)   do_profile "$@" ;;
     facts)     do_facts "$@" ;;
     providers) do_providers ;;
     bootstrap)

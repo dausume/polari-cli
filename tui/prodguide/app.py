@@ -23,6 +23,7 @@ from . import facts as F
 from .model import Answers
 
 STEPS = [
+    ("start", "Start from"),
     ("welcome", "Credentials & vault"),
     ("profile", "Profile & modules"),
     ("domain", "Domain & DNS host"),
@@ -63,6 +64,8 @@ class ProdGuide(App):
         self.answers_file: str = (facts or {}).get("answers_file", "")
         self.releases_mounted = False
         self.tags_mounted = False
+        self.start_mounted = False
+        self.profile_name = ""
 
     # ---------------------------------------------------------------- layout
     def compose(self) -> ComposeResult:
@@ -74,7 +77,8 @@ class ProdGuide(App):
                 yield Static("", id="side-facts")
             with VerticalScroll(id="main"):
                 yield Static("", id="problems-top")
-                with ContentSwitcher(initial="step-welcome", id="panels"):
+                with ContentSwitcher(initial="step-start", id="panels"):
+                    yield from self.panel_start()
                     yield from self.panel_welcome()
                     yield from self.panel_profile()
                     yield from self.panel_domain()
@@ -90,6 +94,15 @@ class ProdGuide(App):
             yield Button("Back", id="back")
             yield Button("Next", id="next", variant="primary")
         yield Footer()
+
+    def panel_start(self) -> ComposeResult:
+        with Vertical(id="step-start"):
+            yield Markdown("## Start from\n\nRe-use the answers of a prior run or a profile — you still see every step and can change any "
+                           "answer — or walk through everything again. At the end you can save your answers as a named profile for next time; "
+                           "`pol prod apply --profile <name> --yes` applies a profile without any questions.")
+            with RadioSet(id="rs-start"):
+                yield RadioButton("Walk through everything again", id="start-fresh", value=True)
+            yield Static("", id="start-note", classes="note")
 
     def panel_welcome(self) -> ComposeResult:
         with Vertical(id="step-welcome"):
@@ -224,6 +237,8 @@ class ProdGuide(App):
             yield Markdown("## Review\n\nEverything below is derived from your answers; the pairs that must match are shown together. Next applies.")
             yield DataTable(id="tbl-plan")
             yield Static("", id="review-warn", classes="note")
+            yield Label("Save these answers as a profile for next time (a name; empty = do not save)", classes="q")
+            yield Input(placeholder="my-server", id="in-profile")
 
     def panel_apply(self) -> ComposeResult:
         with Vertical(id="step-apply"):
@@ -247,7 +262,7 @@ class ProdGuide(App):
             await self.load_facts()
         else:
             await self.fill_from_answers()
-        self.goto("welcome")
+        self.goto("start")
         self.refresh_side()
 
     async def load_facts(self, domain: Optional[str] = None) -> None:
@@ -323,6 +338,17 @@ class ProdGuide(App):
             self.set_radio("rs-imgsrc", "imgsrc-pull"); self.set_radio("rs-imgreg", "imgreg-official")
         self.query_one("#in-imgrepo", Input).value = a.IMAGE_REPO if a.IMAGE_REPO not in official else ""
         self.query_one("#in-imgtag", Input).value = (a.IMAGE_TAG if a.IMAGE_REPO else "") or newest
+        if not self.start_mounted:
+            self.start_mounted = True
+            btns = []
+            lr = self.facts.get("last_run")
+            if lr:
+                btns.append(RadioButton(f"Continue from my last run ({lr.get('when','')}) — {lr.get('summary','')}", id="start-last", value=True))
+            for pr in (self.facts.get("profiles") or []):
+                btns.append(RadioButton(f"[{pr['kind']}] {pr['name']} — {pr['summary']}", id="start-" + pr["name"].replace(".", "_")))
+            btns.append(RadioButton("Walk through everything again", id="start-fresh", value=not lr))
+            await self.rebuild_radioset("rs-start", btns)
+            self.query_one("#start-note", Static).update("\n".join(f"{pr['name']}: {pr['comment']}" for pr in (self.facts.get("profiles") or []) if pr.get("comment")))
         rels = self.facts.get("releases", []) or []
         if rels and not self.releases_mounted:
             self.releases_mounted = True
@@ -514,14 +540,14 @@ class ProdGuide(App):
         self.query_one("#panels", ContentSwitcher).current = f"step-{sid}"
         self.query_one("#steps", ListView).index = [s for s, _ in STEPS].index(sid)
         self.query_one("#next", Button).label = "Apply" if sid == "review" else ("Close" if sid == "apply" else "Next")
-        self.query_one("#back", Button).disabled = sid in ("welcome", "apply")
+        self.query_one("#back", Button).disabled = sid in ("start", "apply")
         self.query_one("#problems", Static).update("")
         self.show_problems([])
         self.refresh_side()
 
     def step_problems(self, sid: str) -> List[str]:
         fields = {
-            "welcome": {"STASH"}, "domain": {"DOMAIN", "WWW", "ROUTE"}, "address": {"EXPOSURE_IP"}, "dns": set(),
+            "start": set(), "welcome": {"STASH"}, "domain": {"DOMAIN", "WWW", "ROUTE"}, "address": {"EXPOSURE_IP"}, "dns": set(),
             "cert": {"CERT_MODE", "LE_EMAIL", "LE_CHALLENGE"}, "profile": {"AUTH", "MODULES"},
             "images": {"IMAGE_TAG", "IMAGE_REPO"}, "extras": {"DEBS"}, "review": set(KEYS_ALL),
         }.get(sid, set())
@@ -530,6 +556,25 @@ class ProdGuide(App):
     async def action_next(self) -> None:
         if self.current == "apply":
             self.exit(0 if self.apply_done else 1)
+            return
+        if self.current == "start":
+            choice = radio(self.query_one("#rs-start", RadioSet))
+            if choice == "fresh":
+                self.a = Answers(); self.a.detected_ip = self.facts.get("detected_ip", "")
+            elif choice == "last":
+                pass
+            elif choice:
+                names = {pr["name"].replace(".", "_"): pr["name"] for pr in (self.facts.get("profiles") or [])}
+                try:
+                    await F.run(["prod", "profile", "use", names.get(choice, choice)], timeout=60)
+                    await self.load_facts(None)
+                    self.profile_name = names.get(choice, choice)
+                    self.notify(f"answers set from profile {self.profile_name} — review each step", timeout=6)
+                except Exception as e:  # noqa: BLE001
+                    self.show_problems([f"could not load profile {choice}: {e}"]); return
+            self.state["start"] = "done"
+            await self.fill_from_answers() if choice == "fresh" else None
+            self.goto("welcome")
             return
         self.collect()
         probs = self.step_problems(self.current)
@@ -653,6 +698,17 @@ class ProdGuide(App):
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(self.a.to_env())
         self.query_one("#log", RichLog).write(f"answers written: {path}")
+        name = self.query_one("#in-profile", Input).value.strip()
+        if name:
+            self.query_one("#log", RichLog).write(f"saving these answers as profile {name} …")
+            self.call_later(self._save_profile, name)
+
+    async def _save_profile(self, name: str) -> None:
+        try:
+            out = await F.run(["prod", "profile", "save", name], timeout=60)
+            self.query_one("#log", RichLog).write(out.strip().splitlines()[-1] if out.strip() else f"profile {name} saved")
+        except Exception as e:  # noqa: BLE001
+            self.query_one("#log", RichLog).write(f"could not save profile {name}: {e}")
 
     @work(exclusive=True)
     async def run_apply(self) -> None:
