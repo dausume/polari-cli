@@ -239,7 +239,11 @@ case "$COMMAND" in
             apply)       [ "$(id -u)" = 0 ] && bash "$OSD/apply.sh" --scenario "$SCN" "${REST[@]}" || sudo bash "$OSD/apply.sh" --scenario "$SCN" "${REST[@]}" ;;
             audit)       bash "$OSD/audit.sh" --scenario "$SCN" "${REST[@]}" ;;
             escape-test) [ "$(id -u)" = 0 ] && bash "$OSD/escape-test.sh" --scenario "$SCN" "${REST[@]}" || sudo bash "$OSD/escape-test.sh" --scenario "$SCN" "${REST[@]}" ;;
-            *) echo "pol security os render|apply [--complain|--enforce|--dry-run]|audit [--json]|escape-test [--profile P]   [--scenario isle|swarm-lean|swarm-full|dev]  (scenario auto-detected: $SCN)" ;;
+            allowed)     # what enforcing would break: the kernel's ALLOWED (complain) / DENIED (enforce) lines for our profiles, grouped
+                         if [ "$(id -u)" = 0 ] || id -nG | grep -qw adm; then python3 "$OSD/allowed.py" "${REST[@]}"; else sudo python3 "$OSD/allowed.py" "${REST[@]}"; fi ;;
+            revert)      [ "$(id -u)" = 0 ] && bash "$OSD/apply.sh" --scenario "$SCN" --revert-docker-default || sudo bash "$OSD/apply.sh" --scenario "$SCN" --revert-docker-default ;;
+            *) echo "pol security os render|apply [--complain|--enforce|--dry-run]|audit [--json]|escape-test [--profile P]|allowed [--since 1d] [--profile P] [--rules] [--json]|revert   [--scenario isle|swarm-lean|swarm-full|dev]  (scenario auto-detected: $SCN)"
+               echo "  warn-only by default: apply loads profiles in complain mode (an allow-list; everything outside it is permitted and logged), 'allowed' lists what enforcing would break, 'revert' puts docker's stock docker-default back (swarm route)" ;;
         esac ;;
     vault)      # prd-9: the credential vault — root-only, encrypted, the keystore for generated + stashed credentials
                 vault_cmd "$@" ;;

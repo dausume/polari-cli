@@ -27,6 +27,8 @@
 #  pol prod log [n]               print the n-th last run log (every run is logged: .generated/prod-log/)
 #  pol prod profile list|show|save|use <name> [--apply]|delete   saved answer sets: standard ones shipped (local-instance, public-server, demo-server, distribution-server) + yours; apply --profile <name> --yes
 #  pol prod verify [--module m] [--api URL]  after apply: modules/apps set up by every route (console fetch-admit, apps/downloads, interfaces, topology assign)
+#  pol prod harden [--enforce] [--dry-run]   the OS rings for the answered profile (os-security): render + apply WARN-ONLY (AppArmor in complain,
+#                                  firewall/host rings printed) + audit; `harden report [--rules]` = what enforcing would break; `harden revert` = stock docker-default back
 #  pol prod providers             which providers are in use for what (hosting, DNS, certificate, registry, code) and the pages to visit for each
 #  pol prod addresses [--use <ip>|--auto]  every address assigned to this machine (droplet metadata on DigitalOcean); the exposure IP the A records need (detected, or the one you answered)
 #  pol prod bootstrap             a fresh VM: install docker, swarm init, then the guide
@@ -896,6 +898,20 @@ do_apply() {
     do_status
     [ "${1:-}" = "--yes" ] || vault_prompt
 }
+do_harden() {   # sec-1a: the OS rings for the answered profile — warn-only unless --enforce (one piece at a time, SECURITY_ARC_HANDOFF §4/§6)
+    load_answers; local scn; scn=$([ "$(profile)" = full ] && echo swarm-full || echo swarm-lean)
+    case "${1:-}" in
+        report) shift; bash "$SCRIPT_DIR/security.sh" os allowed --scenario "$scn" "$@"; return $? ;;
+        revert) bash "$SCRIPT_DIR/security.sh" os revert --scenario "$scn"; return $? ;;
+    esac
+    pol_box "pol prod — harden ($scn, $(case " $* " in *" --enforce "*) echo ENFORCE ;; *) echo warn-only ;; esac))"
+    python3 "$SUITE/os-security/render.py" --scenario "$scn" --apps-from-manifests || return 1
+    bash "$SCRIPT_DIR/security.sh" os apply --scenario "$scn" "$@" || log_warn "os-security apply reported problems"
+    case " $* " in *" --dry-run "*) return 0 ;; esac
+    bash "$SCRIPT_DIR/security.sh" os audit --scenario "$scn" || true
+    log_info "swarm route: the MAC ring is the node-wide docker-default profile (services cannot carry security_opt); loaded in complain it denies nothing stock docker does not"
+    log_info "next: a normal day of use, then 'pol prod harden report --rules' — an empty list means enforcing would break nothing seen; 'pol prod verify' must still pass"
+}
 do_status() {
     load_answers
     pol_box "pol prod — status"
@@ -946,6 +962,7 @@ case "$COMMAND" in
              for st in polari-lean polari-prod; do docker stack ls --format '{{.Name}}' | grep -qx "$st" && { docker stack rm "$st"; log_success "stack $st removed (data volumes kept)"; }; done; true ;;
     addresses) do_addresses "$@" ;;
     verify)    do_verify "$@" ;;
+    harden)    do_harden "$@" ;;
     profile)   do_profile "$@" ;;
     facts)     do_facts "$@" ;;
     providers) do_providers ;;
