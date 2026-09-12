@@ -209,6 +209,8 @@ do_facts() {  # machine-readable facts for the Textual guide: pol prod facts [--
         echo "release_tags=$(git -C "$SUITE" tag -l 'polari-v*' 2>/dev/null | sort -r | head -8 | tr '\n' ' ')"
         echo "release_source=$(official_release_sources | head -1 | cut -f1)"
         echo "image_tags=$(official_image_tags | tr '\n' ' ')"
+        echo "core_modules=$(python3 -c "import json; r=json.load(open('$SUITE/polari-rf-node/polari-framework/modules/polari-modules.json'))['modules']; print(' '.join(sorted(m for m,e in r.items() if e.get('tier')=='core')))" 2>/dev/null)"
+        echo "optional_modules=$(python3 -c "import json; r=json.load(open('$SUITE/polari-rf-node/polari-framework/modules/polari-modules.json'))['modules']; print(' '.join(sorted(m for m,e in r.items() if e.get('tier')!='core')))" 2>/dev/null)"
         release_tags_with_debs "$(official_release_sources | head -1 | cut -f1)" | while IFS=$'\t' read -r t i; do echo "release=$t|$i"; done
         echo "staging_images=$(docker image inspect prf-backend:staging >/dev/null 2>&1 && echo 1 || echo 0)"
         echo "swarm=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || echo none)"
@@ -237,6 +239,7 @@ for line in sys.stdin.read().split("\n"):
     elif k.startswith("names."): out.setdefault("names", {})[k[6:]] = v.split()
     elif k == "release_tags": out[k] = v.split()
     elif k == "image_tags": out[k] = v.split()
+    elif k in ("core_modules", "optional_modules"): out[k] = v.split()
     elif k == "nameservers": out[k] = v.split()
     elif k.startswith("dns_page."): out.setdefault("dns_page", {})[k[9:]] = v
     elif k.startswith("dns_howto."): u, c = v.split("|", 1); out.setdefault("dns_howto", {})[k[10:]] = {"url": u, "clicks": c}

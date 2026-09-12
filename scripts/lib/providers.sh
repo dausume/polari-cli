@@ -129,9 +129,11 @@ registry_image_tags() {
 import sys, json, re
 try: tags = json.load(sys.stdin).get("tags") or []
 except Exception: tags = []
-def key(t):  # releases (polari-vYYYY.MM.DD[.n]) newest first, then the tier tags, then the rest
-    m = re.match(r"^polari-v(\d{4})\.(\d{2})\.(\d{2})(?:\.(\d+))?$", t)
-    return (0, -int(m.group(1)), -int(m.group(2)), -int(m.group(3)), -int(m.group(4) or 0)) if m else ((1, t) if t in ("staging", "prod", "latest") else (2, t))
+def key(t):  # releases newest first, -core before -all before the plain tag; then the tier tags; then the rest
+    m = re.match(r"^polari-v(\d{4})\.(\d{2})\.(\d{2})(?:\.(\d+))?(?:-(core|all))?$", t)
+    if m:
+        return (0, -int(m.group(1)), -int(m.group(2)), -int(m.group(3)), -int(m.group(4) or 0), {"core": 0, "all": 1, None: 2}[m.group(5)])
+    return (1, t) if t in ("staging", "prod", "latest") else (2, t)
 for t in sorted(tags, key=key)[:12]: print(t)'
 }
 official_image_tags() { registry_image_tags "$(official_image_sources | head -1 | cut -f1)" prf-backend; }

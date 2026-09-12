@@ -96,9 +96,14 @@ class Answers:
         return self.EXPOSURE_IP or self.detected_ip
 
     @property
+    def image_variant(self) -> str:
+        """core (only the core-tier modules baked in; optional ones fetched on admission) | all (every official module)."""
+        return "core" if self.IMAGE_TAG.endswith("-core") else "all"
+
+    @property
     def images_from(self) -> str:
         if self.IMAGE_REPO:
-            return f"pull from {self.IMAGE_REPO} at tag {self.IMAGE_TAG}"
+            return f"pull from {self.IMAGE_REPO} at tag {self.IMAGE_TAG} ({self.image_variant} variant: " + ("core modules only; optional modules are fetched on admission" if self.image_variant == "core" else "every official module") + ")"
         return f"build on this machine, tagged {self.IMAGE_TAG}"
 
     def modules(self) -> List[str]:
@@ -154,6 +159,11 @@ class Answers:
     def warnings(self, facts: dict) -> List[str]:
         """Things worth saying that do not stop an apply."""
         w: List[str] = []
+        core = set(facts.get("core_modules") or [])
+        if core and self.image_variant == "core":
+            extra = [m for m in self.modules() if m not in core]
+            if extra:
+                w.append("core image: " + ", ".join(extra) + " are optional modules not baked into it — they are fetched from their GitHub repositories on admission (their dependencies too)")
         dns = facts.get("dns", {}) or {}
         ours = {a["address"] for a in facts.get("addresses", []) if a["role"] in ("reserved", "public4")} | {self.exposure_ip}
         wildcard = facts.get("wildcard", "") in ours and facts.get("wildcard", "") != ""

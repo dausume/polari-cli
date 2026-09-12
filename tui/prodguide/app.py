@@ -182,6 +182,7 @@ class ProdGuide(App):
                 yield RadioButton("No user logins — open to everyone, no accounts (smaller: no Keycloak, scorecard or file store)", id="auth-off")
             yield Label("Modules the server runs (comma-separated; the four floor modules are always included)", classes="q")
             yield Input(placeholder="polariapps,appstore,islemesh,terms", id="in-modules")
+            yield Static("", id="modules-tiers", classes="note")
 
     def panel_images(self) -> ComposeResult:
         with Vertical(id="step-images"):
@@ -292,6 +293,11 @@ class ProdGuide(App):
         self.query_one("#in-email", Input).value = a.LE_EMAIL
         self.set_radio("rs-auth", "auth-" + a.AUTH)
         self.query_one("#in-modules", Input).value = a.MODULES
+        core = self.facts.get("core_modules") or []; opt = self.facts.get("optional_modules") or []
+        if core:
+            self.query_one("#modules-tiers", Static).update(
+                "Core modules (what makes Polari a networking and app system; in every image):\n  " + ", ".join(core) +
+                "\nOptional modules (only some users need them; baked into the all-official image, fetched from GitHub on admission with the core image):\n  " + ", ".join(opt))
         official = [s["prefix"] for s in self.facts.get("sources", [])] or ["ghcr.io/dausume/"]
         newest = (self.facts.get("release_tags") or [None])[0] or ((self.facts.get("releases") or [{}])[0].get("tag") or "")
         tags = self.facts.get("image_tags") or []
@@ -299,7 +305,10 @@ class ProdGuide(App):
             self.tags_mounted = True
             btns = []
             for i, t in enumerate(tags):
-                kind = "release" if t.startswith("polari-v") else ("moving tier tag" if t in ("staging", "prod", "latest") else "")
+                kind = (("release — core image: core modules only, optional ones fetched on admission (default)" if t.endswith("-core") else
+                         "release — all-official image: every official module baked in" if t.endswith("-all") else
+                         "release (same as the all-official image)") if t.startswith("polari-v")
+                        else ("moving tier tag" if t in ("staging", "prod", "latest") else ""))
                 btns.append(RadioButton(f"{t}" + (f"  — {kind}" if kind else ""), id="imgtag-" + t.replace(".", "_"), value=(i == 0)))
             btns.append(RadioButton("another tag (type it below)", id="imgtag-other"))
             await self.rebuild_radioset("rs-imgtag", btns)

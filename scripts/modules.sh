@@ -308,7 +308,7 @@ else:
 doc['modules'][mod] = entry
 save_registry(doc, root)
 fresh = load_registry(root)['modules'][mod]
-flag = 'downloaded' if fresh['downloaded'] else 'NOT downloaded (pol modules get)'
+flag = ('CORE ' if fresh.get('tier') == 'core' else 'optional ') + ('downloaded' if fresh['downloaded'] else 'NOT downloaded (pol modules get)')
 print(f"registered: {mod} kind={fresh['kind']} path={fresh['path']} "
       f"repo={fresh['repo'] or '(none)'} — {flag}")
 PYEOF
