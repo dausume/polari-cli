@@ -463,6 +463,7 @@ write_configs() {
 PROD_DOMAIN=$D
 BASE_DOMAIN=$D
 POLARI_IMAGE_TAG=$POL_PROD_IMAGE_TAG
+POLARI_IMAGE_REPO=$POL_PROD_IMAGE_REPO
 POLARI_LEAN_MODULES=$POL_PROD_MODULES
 POL_SUITE_ROOT=$SUITE
 DEPLOY_ENV=production
@@ -566,6 +567,8 @@ build_or_pull_images() {
     if [ -n "$POL_PROD_IMAGE_REPO" ]; then
         log_info "pulling images from $POL_PROD_IMAGE_REPO ($(image_source_title "$POL_PROD_IMAGE_REPO")), tag $POL_PROD_IMAGE_TAG: ${POL_PROD_IMAGE_REPO}prf-backend:$POL_PROD_IMAGE_TAG, ${POL_PROD_IMAGE_REPO}prf-frontend:$POL_PROD_IMAGE_TAG"
         docker compose -f "$(compose_file)" --env-file "$(env_file)" pull --ignore-buildable 2>&1 | tail -3 || die "pull failed"
+        for img in prf-backend prf-frontend pol-hub; do docker image inspect "${POL_PROD_IMAGE_REPO}$img:$POL_PROD_IMAGE_TAG" >/dev/null 2>&1 && log_success "pulled ${POL_PROD_IMAGE_REPO}$img:$POL_PROD_IMAGE_TAG" || die "${POL_PROD_IMAGE_REPO}$img:$POL_PROD_IMAGE_TAG did not pull — is it published and public?"; done
+        return 0   # the hub comes from the registry too — nothing to build
     else
         # the lean/prod compose files carry no build: (swarm-first rule) — the prf images are built from the
         # node's own staging definitions (context, dockerfile, args), then tagged for this profile
@@ -682,6 +685,7 @@ write_configs_full() {
 PROD_DOMAIN=$D
 BASE_DOMAIN=$D
 POLARI_IMAGE_TAG=$POL_PROD_IMAGE_TAG
+POLARI_IMAGE_REPO=$POL_PROD_IMAGE_REPO
 POLARI_IMAGE_REPO=$POL_PROD_IMAGE_REPO
 POLARI_PROD_MODULES=$POL_PROD_MODULES,scoring
 POL_SUITE_ROOT=$SUITE
