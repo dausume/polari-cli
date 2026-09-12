@@ -340,9 +340,9 @@ Nothing else to do here. (pol prod is the server route.)"
         local lemsg="Let's Encrypt — useful pages:\n"; while IFS=$'\t' read -r label url; do lemsg+="  $label\n    $url\n"; done < <(provider_links letsencrypt); tui_msg "Let's Encrypt" "$(printf "$lemsg")"
         [ "$POL_PROD_LE_CHALLENGE" = dns ] && tui_msg "DigitalOcean API token" "The DNS challenge needs a DigitalOcean API token with DNS write scope. Create it here and export DO_API_TOKEN in the shell that runs pol prod apply — it is never written into the answers:\n  $(provider_links digitalocean | awk -F'\t' '/API tokens/{print $2}')"
     fi
-    POL_PROD_AUTH=$(tui_menu "Logins" "A distribution server needs no accounts (D2 default). Keycloak adds ~1 GB and brings the scorecard + file store." "$POL_PROD_AUTH" \
-        off "No login server — the LEAN profile: site, docs, downloads, one Polari backend (4 services)" \
-        keycloak "Keycloak logins — the FULL profile: + scorecard, MariaDB, MinIO (11 names, ~7 GB of limits)")
+    POL_PROD_AUTH=$(tui_menu "User logins" "Keycloak handles authentication and user login: accounts, passwords and sign-in, and access control per user (who may see and change what). It is the default; with it the server also runs the scorecard and the file store, and its admin password is generated and kept in the vault. Without logins there are no accounts: anyone can browse, nothing is protected per user — fine for a plain distribution or demonstration server, about 1 GB lighter." "$POL_PROD_AUTH" \
+        keycloak "User logins with Keycloak — accounts, sign-in, per-user security and access control (default)" \
+        off      "No user logins — open to everyone, no accounts (smaller: no Keycloak, scorecard or file store)")
     [ "$POL_PROD_AUTH" = keycloak ] && { tui_yesno "Odoo" "Also deploy the Odoo ERP pair? (off unless you use it)" && POL_PROD_ODOO=on || POL_PROD_ODOO=off; }
     POL_PROD_MODULES=$(tui_input "Modules" "The floor set the server boots (comma-separated; more = more memory):" "$POL_PROD_MODULES")
     # Installers: skip | a PUBLISHED release (our official source, listed) | build here | manual pool (dir, release URL, github:owner/repo@tag)

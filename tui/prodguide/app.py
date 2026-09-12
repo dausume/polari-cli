@@ -167,13 +167,17 @@ class ProdGuide(App):
 
     def panel_profile(self) -> ComposeResult:
         with Vertical(id="step-profile"):
-            yield Markdown("## Profile and modules\n\nThe profile decides which services run and therefore which subdomains Polari defines (shown at the Names step). A distribution server needs no accounts. Keycloak adds about 1 GB and brings the scorecard and the file store; "
-                           "its credentials are generated at apply and recorded in the vault.")
+            yield Markdown("## User logins and modules\n\n"
+                           "**Keycloak** handles authentication and user login: accounts, passwords and sign-in, and access control per user "
+                           "(who may see and change what). It is the default. With it the server also runs the scorecard and the file store, "
+                           "and its admin password is generated for you and kept in the vault.\n\n"
+                           "**Without logins** there are no accounts: anyone can browse and nothing is protected per user. That suits a plain "
+                           "distribution or demonstration server, and it is about 1 GB lighter.")
             with RadioSet(id="rs-auth"):
-                yield RadioButton("No logins — the lean profile (docker-compose.lean.yml → stack polari-lean, 5 names)", id="auth-off", value=True)
-                yield RadioButton("Keycloak logins — the full profile (docker-compose.prod.yml → stack polari-prod, 11 names)", id="auth-keycloak")
-            yield Checkbox("Also deploy the Odoo ERP pair (full profile only)", id="cb-odoo")
-            yield Label("Modules the server boots (comma-separated; the floor set is required)", classes="q")
+                yield RadioButton("User logins with Keycloak — accounts, sign-in, per-user security and access control (default)", id="auth-keycloak", value=True)
+                yield RadioButton("No user logins — open to everyone, no accounts (smaller: no Keycloak, scorecard or file store)", id="auth-off")
+            yield Checkbox("Also run Odoo (business management / ERP) — needs user logins", id="cb-odoo")
+            yield Label("Modules the server runs (comma-separated; the four floor modules are always included)", classes="q")
             yield Input(placeholder="polariapps,appstore,islemesh,terms", id="in-modules")
 
     def panel_images(self) -> ComposeResult:

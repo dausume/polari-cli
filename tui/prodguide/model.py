@@ -53,7 +53,7 @@ class Answers:
     CERT_MODE: str = "letsencrypt"  # letsencrypt | self-signed
     LE_CHALLENGE: str = "http"     # http | dns
     LE_EMAIL: str = ""
-    AUTH: str = "off"              # off | keycloak
+    AUTH: str = "keycloak"         # keycloak (default: user logins) | off
     MODULES: str = ",".join(FLOOR_MODULES)
     DEBS: str = "skip"             # build | skip | copy:<dir>
     DEMO: str = "on"               # on | off
@@ -124,7 +124,7 @@ class Answers:
             if self.LE_CHALLENGE == "dns" and self.DNS_PROVIDER != "digitalocean":
                 p.append(("LE_CHALLENGE", "the DNS challenge is only implemented for DigitalOcean DNS — choose the HTTP challenge, or set DNS provider to DigitalOcean"))
         if self.ODOO == "on" and self.profile != "full":
-            p.append(("ODOO", "Odoo needs the full profile (logins = Keycloak)"))
+            p.append(("ODOO", "Odoo needs user logins (Keycloak)"))
         missing = [m for m in FLOOR_MODULES if m not in self.modules()]
         if missing:
             p.append(("MODULES", "the floor modules are required: " + ", ".join(missing)))
@@ -174,7 +174,7 @@ class Answers:
         if self.DEBS == "build" and (facts.get("piece.isle-mesh") != "1" or facts.get("piece.app-shell") != "1"):
             w.append("building the installers needs the Isle-Mesh and polari-app-shell pieces (get-polari.sh pulls them)")
         if self.profile == "full":
-            w.append("full profile: Keycloak + MariaDB + MinIO + scorecard — about 1 GB more memory; credentials are generated at apply and recorded in the vault")
+            w.append("user logins: Keycloak + its database + the file store + the scorecard run too — about 1 GB more memory; every credential is generated at apply and recorded in the vault")
         return w
 
     # ---- the file the bash side reads
@@ -205,7 +205,7 @@ class Answers:
             ("exposure address", f"{self.exposure_ip} ({'answered' if self.EXPOSURE_IP else 'detected'})"),
             ("DNS records at", self.DNS_PROVIDER),
             ("certificate", ("publicly trusted (Let's Encrypt, %s challenge, %s)" % (self.LE_CHALLENGE, self.LE_EMAIL)) if self.CERT_MODE == "letsencrypt" else "self-signed by the suite CA (browsers warn)"),
-            ("logins", "Keycloak" if self.AUTH == "keycloak" else "none"),
+            ("user logins", "Keycloak: accounts, sign-in, per-user access control" if self.AUTH == "keycloak" else "none — open to everyone"),
             ("odoo", self.ODOO),
             ("modules", self.MODULES),
             ("installers", {"skip": "none staged", "build": "built on this machine"}.get(self.DEBS, self.DEBS.replace("release:", "official release ").replace("copy:", "pool: "))),
