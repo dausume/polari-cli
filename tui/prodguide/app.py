@@ -176,7 +176,6 @@ class ProdGuide(App):
             with RadioSet(id="rs-auth"):
                 yield RadioButton("User logins with Keycloak — accounts, sign-in, per-user security and access control (default)", id="auth-keycloak", value=True)
                 yield RadioButton("No user logins — open to everyone, no accounts (smaller: no Keycloak, scorecard or file store)", id="auth-off")
-            yield Checkbox("Also run Odoo (business management / ERP) — needs user logins", id="cb-odoo")
             yield Label("Modules the server runs (comma-separated; the four floor modules are always included)", classes="q")
             yield Input(placeholder="polariapps,appstore,islemesh,terms", id="in-modules")
 
@@ -274,7 +273,6 @@ class ProdGuide(App):
         self.set_radio("rs-chal", "chal-" + a.LE_CHALLENGE)
         self.query_one("#in-email", Input).value = a.LE_EMAIL
         self.set_radio("rs-auth", "auth-" + a.AUTH)
-        self.query_one("#cb-odoo", Checkbox).value = a.ODOO == "on"
         self.query_one("#in-modules", Input).value = a.MODULES
         if a.IMAGE_REPO:
             self.set_radio("rs-imgsrc", "imgsrc-pull")
@@ -373,7 +371,7 @@ class ProdGuide(App):
         a.LE_CHALLENGE = radio(self.query_one("#rs-chal", RadioSet)) or a.LE_CHALLENGE
         a.LE_EMAIL = self.query_one("#in-email", Input).value.strip()
         a.AUTH = radio(self.query_one("#rs-auth", RadioSet)) or a.AUTH
-        a.ODOO = "on" if self.query_one("#cb-odoo", Checkbox).value else "off"
+        # Odoo is an add-on installed after the initial deployment (POL_PROD_ODOO=on + pol prod apply), never a first-run question
         a.MODULES = ",".join(m.strip() for m in self.query_one("#in-modules", Input).value.split(",") if m.strip())
         src = radio(self.query_one("#rs-imgsrc", RadioSet))
         if src == "build":
@@ -416,7 +414,7 @@ class ProdGuide(App):
     def step_problems(self, sid: str) -> List[str]:
         fields = {
             "welcome": {"STASH"}, "domain": {"DOMAIN", "WWW", "ROUTE"}, "address": {"EXPOSURE_IP"}, "dns": set(),
-            "cert": {"CERT_MODE", "LE_EMAIL", "LE_CHALLENGE"}, "profile": {"AUTH", "ODOO", "MODULES"},
+            "cert": {"CERT_MODE", "LE_EMAIL", "LE_CHALLENGE"}, "profile": {"AUTH", "MODULES"},
             "images": {"IMAGE_TAG", "IMAGE_REPO"}, "extras": {"DEBS"}, "review": set(KEYS_ALL),
         }.get(sid, set())
         return [m for f, m in self.a.problems() if f in fields]

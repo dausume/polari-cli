@@ -206,7 +206,6 @@ class Answers:
             ("DNS records at", self.DNS_PROVIDER),
             ("certificate", ("publicly trusted (Let's Encrypt, %s challenge, %s)" % (self.LE_CHALLENGE, self.LE_EMAIL)) if self.CERT_MODE == "letsencrypt" else "self-signed by the suite CA (browsers warn)"),
             ("user logins", "Keycloak: accounts, sign-in, per-user access control" if self.AUTH == "keycloak" else "none — open to everyone"),
-            ("odoo", self.ODOO),
             ("modules", self.MODULES),
             ("installers", {"skip": "none staged", "build": "built on this machine"}.get(self.DEBS, self.DEBS.replace("release:", "official release ").replace("copy:", "pool: "))),
             ("demo notice", self.DEMO),
