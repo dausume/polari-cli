@@ -358,12 +358,12 @@ Nothing else to do here. (pol prod is the server route.)"
     esac
     if tui_yesno "Demonstration notice" "Show the 'demonstration instance — no personal information' notice and terms gate on the apps? (Answer No for a plain distribution server.)"; then POL_PROD_DEMO=on; else POL_PROD_DEMO=off; fi
     # Images: ONE choice that sets registry + tag together (they must match; no free-text tag)
-    local items=() src cur="build"
-    [ -n "$POL_PROD_IMAGE_REPO" ] && cur="custom"; [ -z "$POL_PROD_IMAGE_REPO" ] && [ "$POL_PROD_IMAGE_TAG" = staging ] && cur="staging"
+    local items=() src cur="custom"
+    [ -z "$POL_PROD_IMAGE_REPO" ] && [ "$POL_PROD_IMAGE_TAG" = staging ] && cur="staging"; [ -z "$POL_PROD_IMAGE_REPO" ] && [ "$POL_PROD_IMAGE_TAG" = prod ] && [ -n "$(grep -s '^POL_PROD_IMAGE_TAG=' "$ANSWERS")" ] && cur="build"
+    local t; for t in $(git -C "$SUITE" tag -l 'polari-v*' 2>/dev/null | sort -r | head -5); do items+=("$t" "Pull the release $t from the official registry ghcr.io/dausume/"); done
+    items+=(custom "Pull published images from a registry: one of our official sources or one you type — then a tag (default)")
     items+=(build "Build the images on this machine from this checkout → tag 'prod' (needs ~3 GB RAM, 5–15 min)")
     docker image inspect prf-backend:staging >/dev/null 2>&1 && items+=(staging "Use the 'staging' images already present on this machine (a dev/staging box)")
-    local t; for t in $(git -C "$SUITE" tag -l 'polari-v*' 2>/dev/null | sort -r | head -5); do items+=("$t" "Pull the release $t from the official registry ghcr.io/dausume/"); done
-    items+=(custom "Pull from a registry: choose one of our official sources or type one — then a tag (example: polari-v2026.09.11)")
     src=$(tui_menu "Where do the images come from?" "Backend + frontend images for this deployment. Building here is the default; releases are pulled by tag." "$cur" "${items[@]}")
     case "$src" in
         build)   POL_PROD_IMAGE_REPO=""; POL_PROD_IMAGE_TAG="prod" ;;

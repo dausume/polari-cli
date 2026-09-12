@@ -183,15 +183,15 @@ class ProdGuide(App):
         with Vertical(id="step-images"):
             yield Markdown("## Images\n\nBackend and frontend images for this deployment. Registry and tag are **one** decision — they are set together and verified.")
             with RadioSet(id="rs-imgsrc"):
-                yield RadioButton("Build the images on this machine from this checkout → tag prod (needs ~3 GB RAM, 5–15 min)", id="imgsrc-build", value=True)
+                yield RadioButton("Pull published images from a registry — one of our official sources, or one you type — at a release tag (default)", id="imgsrc-pull", value=True)
+                yield RadioButton("Build the images on this machine from this checkout → tag prod (needs ~3 GB RAM, 5–15 min)", id="imgsrc-build")
                 yield RadioButton("Use the staging images already present on this machine", id="imgsrc-staging")
-                yield RadioButton("Pull from a registry: one of our official sources, or one I type — then a tag", id="imgsrc-pull")
-            yield Label("Source", classes="q")
+            yield Label("Source", classes="q", id="lbl-imgsrc")
             with RadioSet(id="rs-imgreg"):
                 yield RadioButton("official: ghcr.io/dausume/ — GitHub Container Registry, the Polari images", id="imgreg-official")
                 yield RadioButton("manual entry", id="imgreg-manual")
             yield Input(placeholder="registry prefix, ending in a slash — example: registry.example.org/polari/", id="in-imgrepo")
-            yield Label("Tag — example: polari-v2026.09.11 (a release) or staging (the moving tier tag)", classes="q")
+            yield Label("Tag — a release (example: polari-v2026.09.11) or staging (the moving tier tag)", classes="q", id="lbl-imgtag")
             yield Input(placeholder="polari-v2026.09.11", id="in-imgtag")
             yield Button("Verify the registry has this image", id="verify-image")
             yield Static("", id="img-note", classes="note")
@@ -274,14 +274,17 @@ class ProdGuide(App):
         self.query_one("#in-email", Input).value = a.LE_EMAIL
         self.set_radio("rs-auth", "auth-" + a.AUTH)
         self.query_one("#in-modules", Input).value = a.MODULES
+        official = [s["prefix"] for s in self.facts.get("sources", [])] or ["ghcr.io/dausume/"]
+        newest = (self.facts.get("release_tags") or [None])[0] or ((self.facts.get("releases") or [{}])[0].get("tag") or "")
         if a.IMAGE_REPO:
             self.set_radio("rs-imgsrc", "imgsrc-pull")
-            official = [s["prefix"] for s in self.facts.get("sources", [])]
             self.set_radio("rs-imgreg", "imgreg-official" if a.IMAGE_REPO in official else "imgreg-manual")
-        else:
+        elif a.IMAGE_TAG == "staging" or (a.IMAGE_TAG == "prod" and (self.facts.get("answers") or {}).get("IMAGE_TAG")):
             self.set_radio("rs-imgsrc", "imgsrc-staging" if a.IMAGE_TAG == "staging" else "imgsrc-build")
-        self.query_one("#in-imgrepo", Input).value = a.IMAGE_REPO
-        self.query_one("#in-imgtag", Input).value = a.IMAGE_TAG if a.IMAGE_REPO else ""
+        else:  # nothing answered yet: pull from the official source (his default)
+            self.set_radio("rs-imgsrc", "imgsrc-pull"); self.set_radio("rs-imgreg", "imgreg-official")
+        self.query_one("#in-imgrepo", Input).value = a.IMAGE_REPO if a.IMAGE_REPO not in official else ""
+        self.query_one("#in-imgtag", Input).value = (a.IMAGE_TAG if a.IMAGE_REPO else "") or newest
         rels = self.facts.get("releases", []) or []
         rs = self.query_one("#rs-rel", RadioSet)
         if rels and not self.releases_mounted:
@@ -306,6 +309,7 @@ class ProdGuide(App):
         self.fill_dns()
         self.fill_links()
         self.fill_plan()
+        self.sync_visibility()
 
     def fill_dns(self) -> None:
         tp = self.query_one("#tbl-dns-primary", DataTable); tp.clear()
@@ -350,6 +354,21 @@ class ProdGuide(App):
         self.query_one("#side-facts", Static).update(
             f"host {f.get('host', '?')}\n{'droplet' if f.get('on_droplet') == '1' else 'machine'} · swarm {f.get('swarm', '?')}\n"
             f"ports 80 {f.get('port.80', '?')} · 443 {f.get('port.443', '?')}\nmemory {f.get('mem_total_mb', '?')} MB\ncode {f.get('git', '?')}")
+
+    def sync_visibility(self) -> None:
+        """Conditional controls: shown only while the choice that needs them is selected."""
+        pull = radio(self.query_one("#rs-imgsrc", RadioSet)) == "pull"
+        for wid in ("#lbl-imgsrc", "#rs-imgreg", "#in-imgrepo", "#lbl-imgtag", "#in-imgtag", "#verify-image", "#img-note"):
+            try:
+                self.query_one(wid).display = pull
+            except Exception:  # noqa: BLE001
+                pass
+        if pull:
+            self.query_one("#in-imgrepo").display = radio(self.query_one("#rs-imgreg", RadioSet)) == "manual"
+        self.query_one("#in-addr").display = radio(self.query_one("#rs-addr", RadioSet)) == "other"
+        debs = radio(self.query_one("#rs-debs", RadioSet))
+        self.query_one("#in-debs").display = debs == "copy"
+        self.query_one("#rs-rel").display = debs == "release"; self.query_one("#lbl-rel").display = debs == "release"
 
     def set_radio(self, rs_id: str, btn_id: str) -> None:
         try:
@@ -487,18 +506,7 @@ class ProdGuide(App):
         rs = ev.radio_set.id or ""
         if rs in ("rs-dnsp", "rs-chal", "rs-cert"):
             self.collect(); self.fill_links()
-        if rs == "rs-imgsrc":
-            pull = radio(ev.radio_set) == "pull"
-            for wid in ("#rs-imgreg", "#in-imgrepo", "#in-imgtag", "#verify-image"):
-                self.query_one(wid).display = pull
-        if rs == "rs-imgreg":
-            self.query_one("#in-imgrepo").display = radio(ev.radio_set) == "manual"
-        if rs == "rs-addr":
-            self.query_one("#in-addr").display = radio(ev.radio_set) == "other"
-        if rs == "rs-debs":
-            v = radio(ev.radio_set)
-            self.query_one("#in-debs").display = v == "copy"
-            self.query_one("#rs-rel").display = v == "release"; self.query_one("#lbl-rel").display = v == "release"
+        self.sync_visibility()
 
     @on(Button.Pressed, "#verify-image")
     async def _verify(self) -> None:
