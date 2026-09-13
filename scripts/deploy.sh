@@ -44,6 +44,7 @@ ${BOLD}HOW IT STAYS SECURE${NC}
                 remote  ssh + swarm + AI-assisted setup — exactly the commands pol deploy sends
                 app     the app-setup route — what the store's doors run for a person
   ${CYAN}audit${NC} <node> [--json]   the os-security audit on that machine (every ring, pass/fail, verdict), over ssh
+  ${CYAN}inventory${NC} <node> [--post <core url>]   what Polari put on that machine and in what form, and its ssh surface (read-only; --post stores it as rows)
   ${CYAN}harden${NC} <node> [--scenario S] [--dry-run|--enforce] | --report [--rules] | --revert
                           the os-security rings on that machine, WARN-ONLY unless --enforce (renders here, ships, applies there, audits);
                           --report = what enforcing would break (kernel ALLOWED + seccomp-log lines); --revert = stock docker-default back
@@ -255,6 +256,30 @@ echo "  containers   $(docker ps --format "{{.Names}}" 2>/dev/null | wc -l) runn
         ssh -o ConnectTimeout=8 "$SSH" "bash /tmp/os-security-audit.sh $*"; RC=$?
         [ $RC = 0 ] && log_success "$NODE: hardened" || log_warn "$NODE: not yet hardened (verdict above) — os-security/README.md"
         exit $RC ;;
+    inventory)
+        # what Polari put on that machine and in what form + its ssh capabilities (read-only; os-security/inventory.sh);
+        # --post <core url> stores it as DeviceInventory + SshCapability rows (the isle topology shows the ssh surface)
+        NODE=${1:?node required}; shift || true
+        SSH=$(node_field "$NODE" ssh); POST=""; while [ $# -gt 0 ]; do case "$1" in --post) POST="$2"; shift 2 ;; *) shift ;; esac; done
+        INV="$SCRIPT_DIR/../../os-security/inventory.sh"
+        if [ -z "$SSH" ]; then OUT=$(bash "$INV" 2>/dev/null); else scp -q "$INV" "$SSH:/tmp/polari-inventory.sh" || die "scp failed"; OUT=$(ssh -o ConnectTimeout=8 "$SSH" "bash /tmp/polari-inventory.sh; rm -f /tmp/polari-inventory.sh" 2>/dev/null); fi
+        echo "$OUT" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null || die "$NODE: inventory did not produce JSON"
+        if [ -n "$POST" ]; then
+            echo "$OUT" | python3 -c "
+import json,sys,urllib.request
+inv=json.load(sys.stdin); body=json.dumps({'device': sys.argv[2], 'inventory': inv}).encode()
+req=urllib.request.Request(sys.argv[1].rstrip('/')+'/api/security/inventory', data=body, headers={'Content-Type':'application/json'}, method='POST')
+try:
+    r=json.load(urllib.request.urlopen(req, timeout=20)); print('%s: %s — formats: %s — ssh: %s (%s)' % (r.get('device'), r.get('role'), r.get('formats'), r['ssh']['verdict'], r['ssh']['vector']))
+except Exception as e: sys.exit('post failed: %s' % e)" "$POST" "$NODE"
+        else
+            echo "$OUT" | python3 -c "
+import json,sys; d=json.load(sys.stdin); s=d['ssh']; dk=d['docker']
+print('%s: %s · docker %s swarm %s · kvm %s' % (sys.argv[1], d['os'], dk['version'], dk['swarm'], d['kvm']))
+print('  formats: debs %s · containers %s · stacks %s · checkouts %s · guests %s' % ([x.split('|')[0] for x in d['debs']], [c['name'] for c in dk['containers']], dk['stacks'], [c.split('|')[0] for c in d['checkouts']], d['guests']))
+print('  rings: apparmor files %s · sudoers %s · /etc/isle-mesh %s · /etc/polari %s' % (d['apparmor_polari'], d['sudoers_polari'], d['etc_isle_mesh'], d['etc_polari']))
+print('  ssh: listen %s · password %s · root %s · keys %d (%s) · reaches %s · fail2ban %s · failed 24h %s' % (s['listen'] or 'none', s['password_auth'] or '?', s['permit_root'] or '?', len(s['authorized_keys']), ','.join(sorted({k['type'] for k in s['authorized_keys']})), [h.split('|')[-1] for h in s['ssh_config_hosts']], s['fail2ban'], s['recent_failed_logins_24h']))" "$NODE"
+        fi; exit 0 ;;
     harden)
         # sec-1a across the home machines: render here, ship the rendered scenario + scripts to the node, apply there WARN-ONLY
         # (complain profiles, node-wide docker-default in complain, the other rings printed) unless --enforce; --dry-run prints;
