@@ -237,12 +237,48 @@ case "$COMMAND" in
         case "$V" in
             render)      python3 "$OSD/render.py" --scenario "$SCN" "${REST[@]:---apps-from-manifests}" ;;
             apply)       [ "$(id -u)" = 0 ] && bash "$OSD/apply.sh" --scenario "$SCN" "${REST[@]}" || sudo bash "$OSD/apply.sh" --scenario "$SCN" "${REST[@]}" ;;
-            audit)       bash "$OSD/audit.sh" --scenario "$SCN" "${REST[@]}" ;;
+            audit)       # --post <core url>: the audit's JSON becomes a SecurityAuditRun row — what the security views read as "today"
+                         POST=""; A=(); i=0; while [ $i -lt ${#REST[@]} ]; do case "${REST[$i]}" in --post) POST="${REST[$((i+1))]}"; i=$((i+2)) ;; *) A+=("${REST[$i]}"); i=$((i+1)) ;; esac; done
+                         if [ -n "$POST" ]; then
+                             OUTJ=$(bash "$OSD/audit.sh" --scenario "$SCN" --json "${A[@]}" 2>/dev/null); RC=$?
+                             echo "$OUTJ" | python3 -c "
+import json,sys,time,urllib.request
+d=json.load(sys.stdin); d['ran_at']=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+req=urllib.request.Request(sys.argv[1].rstrip('/')+'/api/security/audit', data=json.dumps(d).encode(), headers={'Content-Type':'application/json'}, method='POST')
+try:
+    r=json.load(urllib.request.urlopen(req, timeout=20)); print(r.get('reading') or r)
+except Exception as e: sys.exit('post failed: %s' % e)" "$POST"; exit $RC
+                         else bash "$OSD/audit.sh" --scenario "$SCN" "${A[@]}"; fi ;;
+            propose)     # the write-back pass: harvest → a proposed stanza change for one app (never applied by itself); --accept writes it into the manifest
+                         PROF=""; APP=""; ACCEPT=false; SINCE="1d"; i=0; while [ $i -lt ${#REST[@]} ]; do case "${REST[$i]}" in --profile) PROF="${REST[$((i+1))]}"; i=$((i+2)) ;; --app) APP="${REST[$((i+1))]}"; i=$((i+2)) ;; --since) SINCE="${REST[$((i+1))]}"; i=$((i+2)) ;; --accept) ACCEPT=true; i=$((i+1)) ;; *) i=$((i+1)) ;; esac; done
+                         [ -n "$PROF" ] || { echo "pol security os propose --profile isle-app-<app> [--app <id>] [--since 1d] [--accept]"; exit 1; }
+                         [ -n "$APP" ] || APP="${PROF#isle-app-}"
+                         HARV=$( { [ "$(id -u)" = 0 ] || id -nG | grep -qw adm; } && python3 "$OSD/allowed.py" --since "$SINCE" --profile "$PROF" --json || sudo python3 "$OSD/allowed.py" --since "$SINCE" --profile "$PROF" --json)
+                         echo "$HARV" | PYTHONPATH="$POL_SUITE_ROOT/polari-rf-node/polari-framework:$POL_SUITE_ROOT/polari-rf-node/polari-framework/modules" python3 - "$APP" "$ACCEPT" <<'PY'
+import json, sys
+from security.custom.security_proposals import propose_from_groups, accept_into_manifest
+from moduleService.manifests import manifest_path
+app, accept = sys.argv[1], sys.argv[2] == 'true'
+groups = json.load(sys.stdin).get('groups', [])
+mp = manifest_path(app)
+stanza = json.load(open(mp)).get('security') if mp else {}
+p = propose_from_groups(app, stanza, groups)
+print(p['reading'])
+for k in ('add_writable', 'add_capabilities', 'add_syscalls'):
+    if p[k]: print('  +', k, ':', ', '.join(p[k]))
+for n in p['not_expressible']: print('  ! not expressible:', n)
+for l in p['apparmor_lines']: print('  apparmor:', l)
+if accept and p['changes'] and mp:
+    accept_into_manifest(mp, p['proposed_stanza']); print('accepted → written into', mp, '(run: pol modules conform', app, '; pol security os render)')
+elif accept: print('nothing to accept')
+else: print('(proposal only — add --accept to write the stanza into the manifest)')
+PY
+                         ;;
             escape-test) [ "$(id -u)" = 0 ] && bash "$OSD/escape-test.sh" --scenario "$SCN" "${REST[@]}" || sudo bash "$OSD/escape-test.sh" --scenario "$SCN" "${REST[@]}" ;;
             allowed)     # what enforcing would break: the kernel's ALLOWED (complain) / DENIED (enforce) lines for our profiles, grouped
                          if [ "$(id -u)" = 0 ] || id -nG | grep -qw adm; then python3 "$OSD/allowed.py" "${REST[@]}"; else sudo python3 "$OSD/allowed.py" "${REST[@]}"; fi ;;
             revert)      [ "$(id -u)" = 0 ] && bash "$OSD/apply.sh" --scenario "$SCN" --revert-docker-default || sudo bash "$OSD/apply.sh" --scenario "$SCN" --revert-docker-default ;;
-            *) echo "pol security os render|apply [--complain|--enforce|--dry-run]|audit [--json]|escape-test [--profile P]|allowed [--since 1d] [--profile P] [--rules] [--json]|revert   [--scenario isle|swarm-lean|swarm-full|dev]  (scenario auto-detected: $SCN)"
+            *) echo "pol security os render|apply [--complain|--enforce|--dry-run]|audit [--json] [--post <core url>]|escape-test [--profile P] [--alone]|allowed [--since 1d] [--profile P] [--rules] [--json]|propose --profile P [--accept]|revert   [--scenario isle|swarm-lean|swarm-full|dev]  (scenario auto-detected: $SCN)"
                echo "  warn-only by default: apply loads profiles in complain mode (an allow-list; everything outside it is permitted and logged), 'allowed' lists what enforcing would break, 'revert' puts docker's stock docker-default back (swarm route)" ;;
         esac ;;
     vault)      # prd-9: the credential vault — root-only, encrypted, the keystore for generated + stashed credentials
