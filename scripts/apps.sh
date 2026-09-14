@@ -18,6 +18,9 @@ usage() {
   ${CYAN}status|request|fetch <module> [--flavor online|offline] [--from <core url>] [-o file]${NC}
                         the app-deb API (an AI or a script's door): is the deb available, make it
                         available (fetches the module's repository if needed; answers on space), get it
+  ${CYAN}usb list | write <mountpoint> [--apps all|a,b] [--from <core>] | install [<mountpoint>]${NC}
+                        the USB app stick — Polari looks for a prepared stick (the advised install path);
+                        a stick is always the OFFLINE flavour: the installer + the apps with everything inside
   ${CYAN}list${NC}                  the apps this core knows
   ${CYAN}plan <app> [topo]${NC}     where each module stands on the topology
                         (already-placed / needs-assignment / missing)
@@ -89,15 +92,16 @@ CMD=${1:-help}; shift || true
 case "$CMD" in
     # ---- app debs through the API (2026-09-13): the same door an AI or a script uses -----------------------
     status|request|fetch)
-        VERB="$1"; shift; MOD="${1:?module id}"; shift || true; FLAVOR=online; FROM="${POLARI_API:-http://127.0.0.1:3300}"; OUT=""
-        while [ $# -gt 0 ]; do case "$1" in --flavor) FLAVOR="$2"; shift 2 ;; --from|--api) FROM="$2"; shift 2 ;; --output|-o) OUT="$2"; shift 2 ;; *) shift ;; esac; done
-        python3 - "$VERB" "$MOD" "$FLAVOR" "${FROM%/}" "$OUT" <<'PY'
-import json, sys, time, urllib.request, urllib.error
-verb, mod, flavor, base, out = sys.argv[1:6]
+        VERB="$CMD"; MOD="${1:?module id}"; shift || true; FLAVOR=online; FROM="${POLARI_API:-http://127.0.0.1:3300}"; OUT=""
+        INSECURE="${POLARI_INSECURE:-0}"; while [ $# -gt 0 ]; do case "$1" in --flavor) FLAVOR="$2"; shift 2 ;; --from|--api) FROM="$2"; shift 2 ;; --output|-o) OUT="$2"; shift 2 ;; --insecure) INSECURE=1; shift ;; *) shift ;; esac; done
+        python3 - "$VERB" "$MOD" "$FLAVOR" "${FROM%/}" "$OUT" "$INSECURE" <<'PY'
+import json, sys, time, urllib.request, urllib.error, ssl
+verb, mod, flavor, base, out, insecure = sys.argv[1:7]
+ctx = ssl._create_unverified_context() if insecure == '1' else None   # --insecure: a self-signed home core only
 def call(method, path):
     req = urllib.request.Request(base + path, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=120) as r:
+        with urllib.request.urlopen(req, timeout=120, context=ctx) as r:
             return r.status, r.headers, r.read()
     except urllib.error.HTTPError as e:
         return e.code, e.headers, e.read()
@@ -124,6 +128,9 @@ import hashlib; ok = hashlib.sha256(data).hexdigest() == d['sha256']
 print('saved %s (%d bytes) sha256 %s' % (name, len(data), 'verified' if ok else 'MISMATCH')); sys.exit(0 if ok else 1)
 PY
         exit $? ;;
+    # ---- the USB app stick (his rulings 2026-09-13): Polari LOOKS for a prepared stick, the stick is the ADVISED
+    #      path for app installs, and a stick is ALWAYS the offline flavour — lib/apps_usb.py + lib/install-apps.sh
+    usb)    python3 "$SCRIPT_DIR/lib/apps_usb.py" "$@"; exit $? ;;
     list)
         be_call GET /api/apps | pretty "
 [print(f\"{a['name']:24} {a['title']:32} modules: {', '.join(a['modules'])}\")
