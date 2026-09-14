@@ -91,12 +91,13 @@ bearer() {
 CMD=${1:-help}; shift || true
 case "$CMD" in
     # ---- app debs through the API (2026-09-13): the same door an AI or a script uses -----------------------
-    status|request|fetch)
-        VERB="$CMD"; MOD="${1:?module id}"; shift || true; FLAVOR=online; FROM="${POLARI_API:-http://127.0.0.1:3300}"; OUT=""
-        INSECURE="${POLARI_INSECURE:-0}"; while [ $# -gt 0 ]; do case "$1" in --flavor) FLAVOR="$2"; shift 2 ;; --from|--api) FROM="$2"; shift 2 ;; --output|-o) OUT="$2"; shift 2 ;; --insecure) INSECURE=1; shift ;; *) shift ;; esac; done
-        python3 - "$VERB" "$MOD" "$FLAVOR" "${FROM%/}" "$OUT" "$INSECURE" <<'PY'
+    status|request|fetch|access)
+        VERB="$CMD"; FORM=install; [ "$VERB" = access ] && { VERB=fetch; FORM=access; }
+        MOD="${1:?module id}"; shift || true; FLAVOR=online; FROM="${POLARI_API:-http://127.0.0.1:3300}"; OUT=""
+        INSECURE="${POLARI_INSECURE:-0}"; while [ $# -gt 0 ]; do case "$1" in --flavor) FLAVOR="$2"; shift 2 ;; --form) FORM="$2"; shift 2 ;; --from|--api) FROM="$2"; shift 2 ;; --output|-o) OUT="$2"; shift 2 ;; --insecure) INSECURE=1; shift ;; *) shift ;; esac; done
+        python3 - "$VERB" "$MOD" "$FLAVOR" "${FROM%/}" "$OUT" "$INSECURE" "$FORM" <<'PY'
 import json, sys, time, urllib.request, urllib.error, ssl
-verb, mod, flavor, base, out, insecure = sys.argv[1:7]
+verb, mod, flavor, base, out, insecure, form = sys.argv[1:8]
 ctx = ssl._create_unverified_context() if insecure == '1' else None   # --insecure: a self-signed home core only
 def call(method, path):
     req = urllib.request.Request(base + path, method=method)
@@ -110,18 +111,20 @@ def show(body):
     if d.get('differences'): print('  %s: carries %s; fetched at setup: %s; not inside: %s' % (flavor, d['differences']['carries'], d['differences']['fetched_at_setup'], d['differences']['not_inside']))
     if d.get('space') and not d['space'].get('ok', True): print('  space:', d['space']['note'])
     if d.get('hardware', {}).get('notice'): print('  hardware:', d['hardware']['notice'])
+    if d.get('refuses_at_install'): print('  at install:', d['refuses_at_install'])
+    if d.get('form') == 'access': print('  access form: the app\'s shell (%s) — opens %s hosted on the isle; installs nothing else' % (d.get('package'), d.get('title')))
     return d
 if verb == 'status':
-    code, _, body = call('GET', f'/api/apps/{mod}/status?flavor={flavor}'); show(body); sys.exit(0 if code < 400 else 1)
-code, _, body = call('POST', f'/api/apps/{mod}/request?flavor={flavor}'); d = show(body)
+    code, _, body = call('GET', f'/api/apps/{mod}/status?flavor={flavor}&form={form}'); show(body); sys.exit(0 if code < 400 else 1)
+code, _, body = call('POST', f'/api/apps/{mod}/request?flavor={flavor}&form={form}'); d = show(body)
 if code >= 400: sys.exit(1)
 if verb == 'request': sys.exit(0)
 for _ in range(600):
-    code, _, body = call('GET', f'/api/apps/{mod}/status?flavor={flavor}'); d = json.loads(body)
+    code, _, body = call('GET', f'/api/apps/{mod}/status?flavor={flavor}&form={form}'); d = json.loads(body)
     if d.get('state') in ('ready', 'refused'): break
     print('  generating: %s' % d.get('step', '?')); time.sleep(2)
 if d.get('state') != 'ready': sys.exit('refused: %s' % d.get('refusal'))
-code, headers, data = call('GET', f'/api/apps/{mod}/download?flavor={flavor}')
+code, headers, data = call('GET', f'/api/apps/{mod}/download?flavor={flavor}&form={form}')
 if code != 200: sys.exit('download failed: %s' % code)
 name = out or d['file']; open(name, 'wb').write(data)
 import hashlib; ok = hashlib.sha256(data).hexdigest() == d['sha256']

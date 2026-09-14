@@ -160,7 +160,7 @@ def deb_wheels(path):
     return sorted({line.rsplit('/', 1)[-1] for line in out.splitlines() if line.strip().endswith('.whl')})
 
 
-def cmd_write(mount, apps_arg, base, platform, platform_from, on_insert='ask', after_install='ask'):
+def cmd_write(mount, apps_arg, base, platform, platform_from, on_insert='ask', after_install='ask', forms=('install',)):
     if not os.path.isdir(mount):
         sys.exit(f'{mount} is not a mounted directory')
     dest = os.path.join(mount, 'polari-apps')
@@ -196,25 +196,25 @@ def cmd_write(mount, apps_arg, base, platform, platform_from, on_insert='ask', a
         cat = json.loads(body)
         wanted = [a['module'] for a in cat['apps']] if apps_arg == 'all' else [x.strip() for x in apps_arg.split(',') if x.strip()]
     wheels_by_app = {}
-    for mod in wanted:
-        code, _, body = call(base, 'POST', f'/api/apps/{mod}/request?flavor=offline')
+    for mod, form in [(m, f) for m in wanted for f in forms]:
+        code, _, body = call(base, 'POST', f'/api/apps/{mod}/request?flavor=offline&form={form}')
         d = json.loads(body) if code else {'refusal': body.decode('utf-8', 'replace')}
         if code >= 400 or code == 0:
             print('  skip', mod, ':', d.get('refusal')); index['apps'].append({'module': mod, 'skipped': d.get('refusal')}); continue
         for _ in range(900):
-            code, _, body = call(base, 'GET', f'/api/apps/{mod}/status?flavor=offline'); d = json.loads(body)
+            code, _, body = call(base, 'GET', f'/api/apps/{mod}/status?flavor=offline&form={form}'); d = json.loads(body)
             if d.get('state') in ('ready', 'refused'):
                 break
             time.sleep(2)
         if d.get('state') != 'ready':
             print('  skip', mod, ':', d.get('refusal')); index['apps'].append({'module': mod, 'skipped': d.get('refusal')}); continue
         path = os.path.join(dest, d['file'])
-        code, n, sha = fetch_to(base + f'/api/apps/{mod}/download?flavor=offline', path)
+        code, n, sha = fetch_to(base + f'/api/apps/{mod}/download?flavor=offline&form={form}', path)
         if code != 200:
             print('  skip', mod, ': download', code); continue
         ok = sha == d['sha256']
         wheels_by_app[mod] = deb_wheels(path)
-        index['apps'].append({'module': mod, 'file': d['file'], 'bytes': n, 'sha256': sha, 'flavor': 'offline', 'verified': ok,
+        index['apps'].append({'module': mod, 'form': form, 'file': d['file'], 'bytes': n, 'sha256': sha, 'flavor': 'offline', 'verified': ok,
                               'carries': d['differences']['carries'], 'engines': d['differences'].get('engines', {}),
                               'wheels': wheels_by_app[mod], 'hardware': (d.get('hardware') or {}).get('notice', '')})
         print('  app', mod, d['file'], n, 'bytes', 'verified' if ok else 'SHA MISMATCH')
@@ -346,11 +346,12 @@ def main(argv):
     if sub == 'write':
         mount = argv[1] if len(argv) > 1 else sys.exit('usage: write <mountpoint> [--apps all|a,b|none] [--platform auto|yes|no] [--from <core>]')
         apps = 'all'; base = os.environ.get('POLARI_API', 'http://127.0.0.1:3300'); platform = 'auto'; platform_from = DISTRIBUTION_POINT
-        on_insert = 'ask'; after_install = 'ask'
+        on_insert = 'ask'; after_install = 'ask'; forms = 'install'
         rest = argv[2:]
         while rest:
             if rest[0] == '--on-insert' and len(rest) > 1: on_insert = rest[1]; rest = rest[2:]; continue
             if rest[0] == '--after-install' and len(rest) > 1: after_install = rest[1]; rest = rest[2:]; continue
+            if rest[0] == '--forms' and len(rest) > 1: forms = rest[1]; rest = rest[2:]; continue
             if rest[0] == '--apps' and len(rest) > 1: apps = rest[1]; rest = rest[2:]
             elif rest[0] in ('--from', '--api') and len(rest) > 1: base = rest[1]; rest = rest[2:]
             elif rest[0] == '--platform' and len(rest) > 1: platform = rest[1]; rest = rest[2:]
@@ -361,7 +362,8 @@ def main(argv):
             sys.exit('--platform takes auto | yes | no')
         if on_insert not in ('ask', 'none') or after_install not in ('ask', 'wipe', 'keep'):
             sys.exit('--on-insert takes ask | none; --after-install takes ask | wipe | keep')
-        return cmd_write(mount, apps, base.rstrip('/'), platform, platform_from.rstrip('/') if platform_from else '', on_insert, after_install)
+        fl = tuple(x for x in ('install', 'access') if x in forms.split(',')) or ('install',)
+        return cmd_write(mount, apps, base.rstrip('/'), platform, platform_from.rstrip('/') if platform_from else '', on_insert, after_install, fl)
     first = argv[1] if len(argv) > 1 and not argv[1].startswith('-') else ''
     rest = argv[2:] if first else argv[1:]
     if sub == 'install':
@@ -377,7 +379,7 @@ def main(argv):
     if sub == 'config':
         return cmd_config(argv[1:])
     print('pol apps usb list | prepare /dev/sdX --fs ext4|vfat --yes | write <mountpoint> [--apps all|a,b|none] [--platform auto|yes|no] '
-          '[--from <core>] [--on-insert ask|none] [--after-install ask|wipe|keep] | prompt [<mountpoint>] | install [<mountpoint>] '
+          '[--from <core>] [--on-insert ask|none] [--after-install ask|wipe|keep] [--forms install,access] | prompt [<mountpoint>] | install [<mountpoint>] '
           '[--after ask|wipe|keep] [--no-platform] [app ...] | wipe [<mountpoint>|/dev/sdX] [--polari-only] --yes | watch [--enable|--disable|--once] '
           '| config [--on-insert ask|never] [--after-install ask|wipe|keep]   (a stick is always the OFFLINE flavour)')
     return 1
