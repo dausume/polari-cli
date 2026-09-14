@@ -271,6 +271,7 @@ inv=json.load(sys.stdin); body=json.dumps({'device': sys.argv[2], 'inventory': i
 req=urllib.request.Request(sys.argv[1].rstrip('/')+'/api/security/inventory', data=body, headers={'Content-Type':'application/json'}, method='POST')
 try:
     r=json.load(urllib.request.urlopen(req, timeout=20)); print('%s: %s — formats: %s — ssh: %s (%s)' % (r.get('device'), r.get('role'), r.get('formats'), r['ssh']['verdict'], r['ssh']['vector']))
+    a=r['ssh']; print('  assurance: %s — %s%s' % (a.get('assurance','?').upper(), a.get('reasons',''), (' — levels: ' + a['levels']) if a.get('levels') else ''))
 except Exception as e: sys.exit('post failed: %s' % e)" "$POST" "$NODE"
         else
             echo "$OUT" | python3 -c "
