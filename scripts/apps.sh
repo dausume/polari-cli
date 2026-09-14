@@ -15,6 +15,9 @@ source "$SCRIPT_DIR/lib/log.sh"
 usage() {
     pol_box "pol apps — use-case module configurations (Polari-Apps)"
     echo -e "
+  ${CYAN}status|request|fetch <module> [--flavor online|offline] [--from <core url>] [-o file]${NC}
+                        the app-deb API (an AI or a script's door): is the deb available, make it
+                        available (fetches the module's repository if needed; answers on space), get it
   ${CYAN}list${NC}                  the apps this core knows
   ${CYAN}plan <app> [topo]${NC}     where each module stands on the topology
                         (already-placed / needs-assignment / missing)
@@ -84,6 +87,43 @@ bearer() {
 
 CMD=${1:-help}; shift || true
 case "$CMD" in
+    # ---- app debs through the API (2026-09-13): the same door an AI or a script uses -----------------------
+    status|request|fetch)
+        VERB="$1"; shift; MOD="${1:?module id}"; shift || true; FLAVOR=online; FROM="${POLARI_API:-http://127.0.0.1:3300}"; OUT=""
+        while [ $# -gt 0 ]; do case "$1" in --flavor) FLAVOR="$2"; shift 2 ;; --from|--api) FROM="$2"; shift 2 ;; --output|-o) OUT="$2"; shift 2 ;; *) shift ;; esac; done
+        python3 - "$VERB" "$MOD" "$FLAVOR" "${FROM%/}" "$OUT" <<'PY'
+import json, sys, time, urllib.request, urllib.error
+verb, mod, flavor, base, out = sys.argv[1:6]
+def call(method, path):
+    req = urllib.request.Request(base + path, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return r.status, r.headers, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers, e.read()
+def show(body):
+    d = json.loads(body); print(d.get('reading') or d.get('refusal') or d)
+    if d.get('differences'): print('  %s: carries %s; fetched at setup: %s; not inside: %s' % (flavor, d['differences']['carries'], d['differences']['fetched_at_setup'], d['differences']['not_inside']))
+    if d.get('space') and not d['space'].get('ok', True): print('  space:', d['space']['note'])
+    if d.get('hardware', {}).get('notice'): print('  hardware:', d['hardware']['notice'])
+    return d
+if verb == 'status':
+    code, _, body = call('GET', f'/api/apps/{mod}/status?flavor={flavor}'); show(body); sys.exit(0 if code < 400 else 1)
+code, _, body = call('POST', f'/api/apps/{mod}/request?flavor={flavor}'); d = show(body)
+if code >= 400: sys.exit(1)
+if verb == 'request': sys.exit(0)
+for _ in range(600):
+    code, _, body = call('GET', f'/api/apps/{mod}/status?flavor={flavor}'); d = json.loads(body)
+    if d.get('state') in ('ready', 'refused'): break
+    print('  generating: %s' % d.get('step', '?')); time.sleep(2)
+if d.get('state') != 'ready': sys.exit('refused: %s' % d.get('refusal'))
+code, headers, data = call('GET', f'/api/apps/{mod}/download?flavor={flavor}')
+if code != 200: sys.exit('download failed: %s' % code)
+name = out or d['file']; open(name, 'wb').write(data)
+import hashlib; ok = hashlib.sha256(data).hexdigest() == d['sha256']
+print('saved %s (%d bytes) sha256 %s' % (name, len(data), 'verified' if ok else 'MISMATCH')); sys.exit(0 if ok else 1)
+PY
+        exit $? ;;
     list)
         be_call GET /api/apps | pretty "
 [print(f\"{a['name']:24} {a['title']:32} modules: {', '.join(a['modules'])}\")
