@@ -45,6 +45,7 @@ ${BOLD}HOW IT STAYS SECURE${NC}
                 app     the app-setup route — what the store's doors run for a person
   ${CYAN}audit${NC} <node> [--json]   the os-security audit on that machine (every ring, pass/fail, verdict), over ssh
   ${CYAN}inventory${NC} <node> [--post <core url>]   what Polari put on that machine and in what form, and its ssh surface (read-only; --post stores it as rows)
+  ${CYAN}posture${NC} <node> status|dev|production [--for 8h] [--relax a,b] [--cidr <isle cidr>]   the node's posture (plan §16): dev = named isle-scoped relaxations, time-boxed, reverted by a timer and on reboot; refused on a production route
   ${CYAN}harden${NC} <node> [--scenario S] [--dry-run|--enforce] | --report [--rules] | --revert
                           the os-security rings on that machine, WARN-ONLY unless --enforce (renders here, ships, applies there, audits);
                           --report = what enforcing would break (kernel ALLOWED + seccomp-log lines); --revert = stock docker-default back
@@ -281,6 +282,18 @@ print('  formats: debs %s · containers %s · stacks %s · checkouts %s · guest
 print('  rings: apparmor files %s · sudoers %s · /etc/isle-mesh %s · /etc/polari %s' % (d['apparmor_polari'], d['sudoers_polari'], d['etc_isle_mesh'], d['etc_polari']))
 print('  ssh: listen %s · password %s · root %s · keys %d (%s) · reaches %s · fail2ban %s · failed 24h %s' % (s['listen'] or 'none', s['password_auth'] or '?', s['permit_root'] or '?', len(s['authorized_keys']), ','.join(sorted({k['type'] for k in s['authorized_keys']})), [h.split('|')[-1] for h in s['ssh_config_hosts']], s['fail2ban'], s['recent_failed_logins_24h']))" "$NODE"
         fi; exit 0 ;;
+    posture)
+        # plan §16 (his rulings 2026-09-14): a DEV posture is a list of named, isle-scoped relaxations, time-boxed;
+        # production = every relaxation reverted. Runs os-security/posture.sh ON the node as root. Never on a production route.
+        NODE=${1:?node required}; shift || true
+        SSH=$(node_field "$NODE" ssh); PS="$SCRIPT_DIR/../../os-security/posture.sh"
+        if [ -z "$SSH" ]; then
+            if [ "${1:-status}" = status ]; then bash "$PS" status; else sudo bash "$PS" "$@"; fi
+        else
+            scp -q "$PS" "$SSH:/tmp/polari-posture.sh" || die "scp failed"
+            if [ "${1:-status}" = status ]; then ssh -o ConnectTimeout=8 "$SSH" "bash /tmp/polari-posture.sh status; rm -f /tmp/polari-posture.sh"
+            else ssh -t -o ConnectTimeout=8 "$SSH" "sudo bash /tmp/polari-posture.sh $*; rm -f /tmp/polari-posture.sh"; fi
+        fi; exit $? ;;
     harden)
         # sec-1a across the home machines: render here, ship the rendered scenario + scripts to the node, apply there WARN-ONLY
         # (complain profiles, node-wide docker-default in complain, the other rings printed) unless --enforce; --dry-run prints;

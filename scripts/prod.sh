@@ -721,6 +721,13 @@ deploy_stack() {
     docker stack deploy "${wra[@]}" -c "$GEN/stack-$(role).yml" "$(stack_name)"
     record_build swarm "$(role)" production
     log_success "stack $(stack_name) deployed (pol prod status)"
+    # plan §16 invariant 5: a machine serving a REAL domain is a production route — a dev posture is refused there
+    case "${POL_PROD_DOMAIN:-}" in
+        ""|*nip.io*|*localhost*|*.isle|*.local) rm -f "$GEN/production-route" 2>/dev/null ;;
+        *) echo "$POL_PROD_DOMAIN" > "$GEN/production-route"
+           if sudo -n true 2>/dev/null; then sudo -n mkdir -p /etc/polari && echo "$POL_PROD_DOMAIN" | sudo -n tee /etc/polari/production-route >/dev/null && log_info "production route recorded: /etc/polari/production-route ($POL_PROD_DOMAIN) — dev postures are refused on this machine"
+           else log_warn "production route: write /etc/polari/production-route by hand ($POL_PROD_DOMAIN) so dev postures are refused here"; fi ;;
+    esac
 }
 security_setup() {
     # the full profile's CA + Keycloak + DB/MinIO credentials — generated once, never weak defaults
