@@ -6,10 +6,22 @@
 #   sudo bash install-apps.sh --no-platform   apps only, never the platform
 # Nothing is installed twice: a package dpkg already knows is skipped; the libraries inside each app are installed
 # by the instance from the carried wheels with pip --no-index, which skips what is already present.
+#   bash install-apps.sh --verify             "confirmed finished": exit 0 only when EVERY package on the stick is present
 set -u
 cd "$(dirname "$0")" || exit 1
-platform=yes; want=""
-for a in "$@"; do case "$a" in --no-platform) platform=no ;; *) want="$want $a" ;; esac; done
+platform=yes; want=""; verify=no
+for a in "$@"; do case "$a" in --no-platform) platform=no ;; --verify) verify=yes ;; *) want="$want $a" ;; esac; done
+if [ "$verify" = yes ]; then
+    missing=""; total=0
+    for deb in polari-complete_*.deb polari-app-*.deb; do
+        [ -e "$deb" ] || continue
+        pkg=$(dpkg-deb -f "$deb" Package 2>/dev/null) || continue
+        total=$((total+1)); dpkg -s "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
+    done
+    [ "$total" -gt 0 ] || { echo "nothing to verify: no packages on this stick"; exit 1; }
+    if [ -z "$missing" ]; then echo "confirmed finished: all $total package(s) on this stick are present"; exit 0; fi
+    echo "not finished — missing:$missing"; exit 1
+fi
 [ "$(id -u)" = 0 ] || { echo "run with sudo (installing packages needs root)"; exit 1; }
 if [ "$platform" = yes ]; then
     inst=$(ls polari-complete_*.deb 2>/dev/null | head -1)

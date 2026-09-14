@@ -32,6 +32,29 @@ DISTRIBUTION_POINT = os.environ.get('POLARI_DISTRIBUTION_POINT', 'https://polari
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INSTALLER = os.path.join(HERE, 'install-apps.sh')
+STICK_SCRIPTS = {'install-apps.sh': 'install-apps.sh', 'on-insert.sh': 'stick-on-insert.sh', 'wipe-stick.sh': 'stick-wipe.sh'}
+AUTORUN = '#!/bin/bash\n# A Polari app stick: the desktop offers to run this when the stick is plugged in (ext4 sticks; FAT is mounted noexec).\nexec bash "$(dirname "$0")/polari-apps/on-insert.sh" "$@"\n'
+HOST_CONFIG = os.path.expanduser('~/.config/polari/usb.json')   # {"on_insert": "ask|never", "after_install": "ask|wipe|keep"}
+USER_UNIT = os.path.expanduser('~/.config/systemd/user/polari-app-stick.service')
+
+
+def host_config():
+    try:
+        return json.load(open(HOST_CONFIG))
+    except Exception:
+        return {}
+
+
+def write_stick_scripts(dest):
+    """The stick is self-contained: installer, the on-insert prompt, the guarded wipe, and autorun.sh at the root."""
+    for name, src in STICK_SCRIPTS.items():
+        with open(os.path.join(HERE, src)) as f, open(os.path.join(dest, name), 'w') as out:
+            out.write(f.read())
+        os.chmod(os.path.join(dest, name), 0o755)
+    root = os.path.dirname(dest)
+    with open(os.path.join(root, 'autorun.sh'), 'w') as out:
+        out.write(AUTORUN)
+    os.chmod(os.path.join(root, 'autorun.sh'), 0o755)
 
 
 def sticks():
@@ -137,7 +160,7 @@ def deb_wheels(path):
     return sorted({line.rsplit('/', 1)[-1] for line in out.splitlines() if line.strip().endswith('.whl')})
 
 
-def cmd_write(mount, apps_arg, base, platform, platform_from):
+def cmd_write(mount, apps_arg, base, platform, platform_from, on_insert='ask', after_install='ask'):
     if not os.path.isdir(mount):
         sys.exit(f'{mount} is not a mounted directory')
     dest = os.path.join(mount, 'polari-apps')
@@ -145,7 +168,8 @@ def cmd_write(mount, apps_arg, base, platform, platform_from):
     index = {'schema': 'polari-app-stick/1', 'created': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), 'source': base, 'flavor': 'offline',
              'note': 'A Polari app stick: every app here is the OFFLINE flavour and carries what it needs; installs need no internet. '
                      'The platform (when present) installs first, then the apps — each only if this computer lacks it. '
-                     'Plug it in and open the Isle App Store, or run install-apps.sh.', 'installers': [], 'apps': [], 'shared_wheels': {}}
+                     'Plug it in and open the Isle App Store, or run install-apps.sh.', 'installers': [], 'apps': [], 'shared_wheels': {},
+             'on_insert': on_insert, 'after_install': after_install}
     # 1. the platform as an app: from the core when it stages one, else from the distribution point
     if platform != 'no':
         found = platform_installers(base); origin = base
@@ -202,23 +226,115 @@ def cmd_write(mount, apps_arg, base, platform, platform_from):
             owners.setdefault(w, []).append(mod)
     index['shared_wheels'] = {w: mods for w, mods in owners.items() if len(mods) > 1}
     json.dump(index, open(os.path.join(dest, 'index.json'), 'w'), indent=1)
-    with open(INSTALLER) as src, open(os.path.join(dest, 'install-apps.sh'), 'w') as dst:
-        dst.write(src.read())
-    os.chmod(os.path.join(dest, 'install-apps.sh'), 0o755)
+    write_stick_scripts(dest)
     n = len([a for a in index['apps'] if 'file' in a])
     print(f"stick written: {dest} | {len(index['installers'])} platform installer(s), {n} app(s), "
           f"{len(index['shared_wheels'])} librar{'y' if len(index['shared_wheels']) == 1 else 'ies'} shared between apps (installed once) "
-          '— index.json + install-apps.sh (offline flavour)')
+          f'— on insert: {on_insert}; after a confirmed install: {after_install} (index.json, install-apps.sh, on-insert.sh, wipe-stick.sh, autorun.sh)')
+    try:
+        fs = subprocess.run(['findmnt', '-no', 'FSTYPE', mount], capture_output=True, text=True).stdout.strip()
+    except Exception:
+        fs = ''
+    if fs in ('vfat', 'exfat', 'ntfs'):
+        print(f'note: this stick is {fs} — the desktop cannot run autorun.sh from it (mounted with showexec); the prompt comes from '
+              'Polari\'s watcher on a computer that has Polari, or run polari-apps/on-insert.sh. For a self-prompting stick: pol apps usb prepare <device> --fs ext4')
     return 0
 
 
-def cmd_install(mount, args):
+def find_stick(mount):
     if not mount:
         mount = next((s['mount'] for s in sticks() if s['stick']), '')
-    script = os.path.join(mount or '', 'polari-apps', 'install-apps.sh')
-    if not mount or not os.path.isfile(script):
+    if not mount or not os.path.isfile(os.path.join(mount, 'polari-apps', 'on-insert.sh')):
         sys.exit('no Polari app stick found (pol apps usb list)')
-    return subprocess.call(['sudo', 'bash', script] + list(args))
+    return mount
+
+
+def cmd_prompt(mount, args):
+    """The stick's own prompt: Install / Not now / Wipe — then, after a CONFIRMED finished install, its after_install policy."""
+    mount = find_stick(mount)
+    return subprocess.call(['bash', os.path.join(mount, 'polari-apps', 'on-insert.sh')] + list(args))
+
+
+def cmd_install(mount, args):
+    """Install straight away (the prompt's Install answer): the platform if missing, then the apps, then --verify and
+    the after-install policy (ask = a human is asked; scripted installs never wipe unless --after wipe)."""
+    mount = find_stick(mount)
+    apps = [a for a in args if not a.startswith('-')]
+    if apps or '--no-platform' in args:
+        return subprocess.call(['sudo', 'bash', os.path.join(mount, 'polari-apps', 'install-apps.sh')] + list(args))
+    after = next((args[i + 1] for i, a in enumerate(args) if a == '--after' and i + 1 < len(args)), host_config().get('after_install', ''))
+    return subprocess.call(['bash', os.path.join(mount, 'polari-apps', 'on-insert.sh'), '--answer', 'install'] + (['--after', after] if after else []))
+
+
+def cmd_wipe(target, args):
+    """Erase the stick (guarded: removable/USB only, never a system disk, named before it happens, --yes required).
+    --polari-only removes just Polari's files."""
+    if not target:
+        target = find_stick('')
+    return subprocess.call(['sudo', 'bash', os.path.join(HERE, 'stick-wipe.sh'), target] + list(args))
+
+
+def cmd_prepare(device, args):
+    """Make a blank stick: erase the device and put one filesystem on it (--fs ext4 = self-prompting, Linux only;
+    --fs vfat = readable everywhere, Polari's watcher prompts), then mount it and say where to write."""
+    if not device.startswith('/dev/'):
+        sys.exit('usage: prepare /dev/sdX --fs ext4|vfat [--label NAME] --yes')
+    rc = subprocess.call(['sudo', 'bash', os.path.join(HERE, 'stick-wipe.sh'), device, '--owner', f'{os.getuid()}:{os.getgid()}'] + list(args))
+    if rc != 0:
+        return rc
+    out = subprocess.run(['udisksctl', 'mount', '-b', device], capture_output=True, text=True)
+    print(out.stdout.strip() or out.stderr.strip())
+    mp = subprocess.run(['findmnt', '-no', 'TARGET', device], capture_output=True, text=True).stdout.strip()
+    if mp:
+        print(f'now: pol apps usb write {mp} --apps all')
+    return 0
+
+
+def cmd_config(args):
+    cfg = host_config()
+    rest = list(args)
+    while rest:
+        if rest[0] == '--on-insert' and len(rest) > 1 and rest[1] in ('ask', 'never'): cfg['on_insert'] = rest[1]; rest = rest[2:]
+        elif rest[0] == '--after-install' and len(rest) > 1 and rest[1] in ('ask', 'wipe', 'keep'): cfg['after_install'] = rest[1]; rest = rest[2:]
+        else: sys.exit('config [--on-insert ask|never] [--after-install ask|wipe|keep]')
+    os.makedirs(os.path.dirname(HOST_CONFIG), exist_ok=True)
+    json.dump(cfg, open(HOST_CONFIG, 'w'), indent=1)
+    after = cfg.get('after_install', "the stick's own policy")
+    print(f"{HOST_CONFIG}: on insert = {cfg.get('on_insert', 'ask')}, after a confirmed install = {after}")
+    return 0
+
+
+def cmd_watch(args):
+    """Polari looks for a stick: every few seconds, a NEWLY mounted app stick raises the prompt (its on_insert and
+    the host config both say 'ask'). --enable installs this as a user service; --once checks a single time."""
+    if '--enable' in args or '--disable' in args:
+        if '--disable' in args:
+            subprocess.call(['systemctl', '--user', 'disable', '--now', 'polari-app-stick.service'], stderr=subprocess.DEVNULL)
+            print('watcher disabled'); return 0
+        os.makedirs(os.path.dirname(USER_UNIT), exist_ok=True)
+        with open(USER_UNIT, 'w') as f:
+            f.write('[Unit]\nDescription=Polari looks for a plugged-in app stick and offers to install from it\nAfter=graphical-session.target\n\n'
+                    f'[Service]\nExecStart=/usr/bin/python3 {os.path.abspath(__file__)} watch\nRestart=on-failure\n\n[Install]\nWantedBy=default.target\n')
+        subprocess.call(['systemctl', '--user', 'daemon-reload'])
+        rc = subprocess.call(['systemctl', '--user', 'enable', '--now', 'polari-app-stick.service'])
+        print('watcher enabled (systemd --user polari-app-stick.service)' if rc == 0 else 'could not enable the user service'); return rc
+    seen = set(s['mount'] for s in sticks()) if '--once' not in args else set()
+    while True:
+        for s in sticks():
+            if s['stick'] and s['mount'] not in seen:
+                seen.add(s['mount'])
+                if host_config().get('on_insert', 'ask') == 'never':
+                    print(f"app stick at {s['mount']} (prompt off: pol apps usb config --on-insert ask)"); continue
+                try:
+                    if json.load(open(os.path.join(s['mount'], 'polari-apps', 'index.json'))).get('on_insert', 'ask') == 'none':
+                        print(f"app stick at {s['mount']} (it asks not to prompt; pol apps usb install {s['mount']})"); continue
+                except Exception:
+                    pass
+                cmd_prompt(s['mount'], [])
+        seen &= set(s['mount'] for s in sticks())
+        if '--once' in args:
+            return 0
+        time.sleep(3)
 
 
 def main(argv):
@@ -230,8 +346,11 @@ def main(argv):
     if sub == 'write':
         mount = argv[1] if len(argv) > 1 else sys.exit('usage: write <mountpoint> [--apps all|a,b|none] [--platform auto|yes|no] [--from <core>]')
         apps = 'all'; base = os.environ.get('POLARI_API', 'http://127.0.0.1:3300'); platform = 'auto'; platform_from = DISTRIBUTION_POINT
+        on_insert = 'ask'; after_install = 'ask'
         rest = argv[2:]
         while rest:
+            if rest[0] == '--on-insert' and len(rest) > 1: on_insert = rest[1]; rest = rest[2:]; continue
+            if rest[0] == '--after-install' and len(rest) > 1: after_install = rest[1]; rest = rest[2:]; continue
             if rest[0] == '--apps' and len(rest) > 1: apps = rest[1]; rest = rest[2:]
             elif rest[0] in ('--from', '--api') and len(rest) > 1: base = rest[1]; rest = rest[2:]
             elif rest[0] == '--platform' and len(rest) > 1: platform = rest[1]; rest = rest[2:]
@@ -240,12 +359,27 @@ def main(argv):
             else: rest = rest[1:]
         if platform not in ('auto', 'yes', 'no'):
             sys.exit('--platform takes auto | yes | no')
-        return cmd_write(mount, apps, base.rstrip('/'), platform, platform_from.rstrip('/') if platform_from else '')
+        if on_insert not in ('ask', 'none') or after_install not in ('ask', 'wipe', 'keep'):
+            sys.exit('--on-insert takes ask | none; --after-install takes ask | wipe | keep')
+        return cmd_write(mount, apps, base.rstrip('/'), platform, platform_from.rstrip('/') if platform_from else '', on_insert, after_install)
+    first = argv[1] if len(argv) > 1 and not argv[1].startswith('-') else ''
+    rest = argv[2:] if first else argv[1:]
     if sub == 'install':
-        mount = argv[1] if len(argv) > 1 and not argv[1].startswith('-') else ''
-        return cmd_install(mount, argv[2:] if mount else argv[1:])
-    print('pol apps usb list | write <mountpoint> [--apps all|a,b|none] [--platform auto|yes|no] [--from <core>] '
-          '| install [<mountpoint>] [--no-platform] [app ...]   (always the OFFLINE flavour)')
+        return cmd_install(first, rest)
+    if sub == 'prompt':
+        return cmd_prompt(first, rest)
+    if sub == 'wipe':
+        return cmd_wipe(first, rest)
+    if sub == 'prepare':
+        return cmd_prepare(first, rest)
+    if sub == 'watch':
+        return cmd_watch(argv[1:])
+    if sub == 'config':
+        return cmd_config(argv[1:])
+    print('pol apps usb list | prepare /dev/sdX --fs ext4|vfat --yes | write <mountpoint> [--apps all|a,b|none] [--platform auto|yes|no] '
+          '[--from <core>] [--on-insert ask|none] [--after-install ask|wipe|keep] | prompt [<mountpoint>] | install [<mountpoint>] '
+          '[--after ask|wipe|keep] [--no-platform] [app ...] | wipe [<mountpoint>|/dev/sdX] [--polari-only] --yes | watch [--enable|--disable|--once] '
+          '| config [--on-insert ask|never] [--after-install ask|wipe|keep]   (a stick is always the OFFLINE flavour)')
     return 1
 
 
