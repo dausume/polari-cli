@@ -346,12 +346,13 @@ def main(argv):
     if sub == 'write':
         mount = argv[1] if len(argv) > 1 else sys.exit('usage: write <mountpoint> [--apps all|a,b|none] [--platform auto|yes|no] [--from <core>]')
         apps = 'all'; base = os.environ.get('POLARI_API', 'http://127.0.0.1:3300'); platform = 'auto'; platform_from = DISTRIBUTION_POINT
-        on_insert = 'ask'; after_install = 'ask'; forms = 'install'
+        on_insert = 'ask'; after_install = 'ask'; forms = 'install'; probe = False
         rest = argv[2:]
         while rest:
             if rest[0] == '--on-insert' and len(rest) > 1: on_insert = rest[1]; rest = rest[2:]; continue
             if rest[0] == '--after-install' and len(rest) > 1: after_install = rest[1]; rest = rest[2:]; continue
             if rest[0] == '--forms' and len(rest) > 1: forms = rest[1]; rest = rest[2:]; continue
+            if rest[0] == '--probe': probe = True; rest = rest[1:]; continue
             if rest[0] == '--apps' and len(rest) > 1: apps = rest[1]; rest = rest[2:]
             elif rest[0] in ('--from', '--api') and len(rest) > 1: base = rest[1]; rest = rest[2:]
             elif rest[0] == '--platform' and len(rest) > 1: platform = rest[1]; rest = rest[2:]
@@ -363,7 +364,17 @@ def main(argv):
         if on_insert not in ('ask', 'none') or after_install not in ('ask', 'wipe', 'keep'):
             sys.exit('--on-insert takes ask | none; --after-install takes ask | wipe | keep')
         fl = tuple(x for x in ('install', 'access') if x in forms.split(',')) or ('install',)
-        return cmd_write(mount, apps, base.rstrip('/'), platform, platform_from.rstrip('/') if platform_from else '', on_insert, after_install, fl)
+        rc = cmd_write(mount, apps, base.rstrip('/'), platform, platform_from.rstrip('/') if platform_from else '', on_insert, after_install, fl)
+        if probe:   # the probe kit at the stick's root (ISO plan §P): README.html + the three launchers + probe/cache
+            code, _, body = call(base.rstrip('/'), 'GET', '/api/iso/probe-kit')
+            if code == 200:
+                import io, zipfile
+                with zipfile.ZipFile(io.BytesIO(body)) as z:
+                    z.extractall(mount)
+                print(f'probe kit written to {mount}: README.html (Windows / Mac / Linux buttons), probe/cache/ for the reports')
+            else:
+                print(f'probe kit: the core answered {code} (the iso module is not on that core)')
+        return rc
     first = argv[1] if len(argv) > 1 and not argv[1].startswith('-') else ''
     rest = argv[2:] if first else argv[1:]
     if sub == 'install':
@@ -379,7 +390,7 @@ def main(argv):
     if sub == 'config':
         return cmd_config(argv[1:])
     print('pol apps usb list | prepare /dev/sdX --fs ext4|vfat --yes | write <mountpoint> [--apps all|a,b|none] [--platform auto|yes|no] '
-          '[--from <core>] [--on-insert ask|none] [--after-install ask|wipe|keep] [--forms install,access] | prompt [<mountpoint>] | install [<mountpoint>] '
+          '[--from <core>] [--on-insert ask|none] [--after-install ask|wipe|keep] [--forms install,access] [--probe] | prompt [<mountpoint>] | install [<mountpoint>] '
           '[--after ask|wipe|keep] [--no-platform] [app ...] | wipe [<mountpoint>|/dev/sdX] [--polari-only] --yes | watch [--enable|--disable|--once] '
           '| config [--on-insert ask|never] [--after-install ask|wipe|keep]   (a stick is always the OFFLINE flavour)')
     return 1
