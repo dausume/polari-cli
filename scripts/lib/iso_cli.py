@@ -41,6 +41,8 @@ def opts(argv):
     out = {'_': []}; i = 0
     while i < len(argv):
         a = argv[i]
+        if a == '--':                      # everything after -- is the remote command (pol iso ssh <dev> -- cmd …)
+            out['_'] += argv[i + 1:]; break
         if a.startswith('--'):
             k = a[2:].replace('-', '_')
             if i + 1 < len(argv) and not argv[i + 1].startswith('--'):

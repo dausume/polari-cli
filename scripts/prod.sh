@@ -68,11 +68,13 @@ load_answers() {
     : "${POL_PROD_ROUTE:=swarm}"; : "${POL_PROD_CERT_MODE:=self-signed}"; : "${POL_PROD_LE_CHALLENGE:=http}"
     : "${POL_PROD_AUTH:=off}"; : "${POL_PROD_MODULES:=polariapps,appstore,islemesh,terms}"; : "${POL_PROD_DEBS:=skip}"
     : "${POL_PROD_DEMO:=on}"; : "${POL_PROD_IMAGE_TAG:=prod}"; : "${POL_PROD_ODOO:=off}"
+    # ISLE_HARDENING_PLAN §17: the stack's posture — production (controls enforce) or dev (OBSERVE: warn, never block; a test window on your own isle)
+    : "${POL_PROD_POSTURE:=production}"; case "$POL_PROD_POSTURE" in dev|production) ;; *) POL_PROD_POSTURE=production ;; esac
 }
 save_answers() {
     {
         echo "# pol prod answers — $(date -Is). Edit and re-run: pol prod apply. Env vars POL_PROD_* override."
-        for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO; do
+        for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE; do
             v="POL_PROD_$k"; echo "$v=${!v}"
         done
     } > "$ANSWERS"
@@ -108,7 +110,7 @@ profile_load() {  # name → sets POL_PROD_* from the file, expanding ${LAN_IP} 
 }
 profile_save() {  # name → the current answers, with a comment
     mkdir -p "$USER_PROFILES"; load_answers
-    { echo "# saved $(date -Is) on $(hostname) — pol prod profile use $1"; for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO; do v="POL_PROD_$k"; echo "$v=${!v}"; done; } > "$USER_PROFILES/$1.env"
+    { echo "# saved $(date -Is) on $(hostname) — pol prod profile use $1"; for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE; do v="POL_PROD_$k"; echo "$v=${!v}"; done; } > "$USER_PROFILES/$1.env"
     log_success "profile saved: $USER_PROFILES/$1.env — pol prod profile use $1 [--apply]"
 }
 do_profile() {
@@ -242,7 +244,7 @@ do_facts() {  # machine-readable facts for the Textual guide: pol prod facts [--
     POL_PROD_DOMAIN="${dom:-$POL_PROD_DOMAIN}"   # the links and names follow the domain being asked about
     {
         echo "suite=$SUITE"; echo "git=$(git -C "$SUITE" rev-parse --short HEAD 2>/dev/null)"; echo "host=$(hostname)"; echo "user=$(id -un)"
-        for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO; do v="POL_PROD_$k"; echo "answer.$k=${!v}"; done
+        for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE; do v="POL_PROD_$k"; echo "answer.$k=${!v}"; done
         echo "on_droplet=$(on_droplet && echo 1 || echo 0)"; echo "detected_ip=$(detected_ip)"; echo "ipv6=$(exposure_ip6)"
         server_addresses | while IFS=$'\t' read -r r a n; do echo "address=$r|$a|$n"; done
         echo "names.lean=$(lean_names "${dom:-example.org}")"; echo "names.full=$(full_names "${dom:-example.org}")"
@@ -402,7 +404,7 @@ do_guide() {
     while IFS=$'\t' read -r n k sm c; do start+=("$n" "[$k] $sm — $c"); done < <(profile_list)
     start+=(fresh "Walk through everything again")
     local pick; pick=$(tui_menu "Start from" "Re-use the answers of a prior run or a profile (you still see every step and can change any answer), or start fresh:" "${start[0]}" "${start[@]}")
-    case "$pick" in last) : ;; fresh) rm -f "$ANSWERS"; for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO; do unset "POL_PROD_$k"; done; load_answers ;; *) profile_load "$pick" ;; esac
+    case "$pick" in last) : ;; fresh) rm -f "$ANSWERS"; for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE; do unset "POL_PROD_$k"; done; load_answers ;; *) profile_load "$pick" ;; esac
     tui_msg "Credentials and the vault" "Everything this guide generates (Keycloak admin, database and file-store passwords on the full profile) is written ONCE into an encrypted, root-only vault at /etc/polari/vault and nowhere else you have to protect. Read it later with:  sudo pol security vault show\n\nProvider credentials you give along the way (a DigitalOcean API token for the DNS challenge, a registry pull token) CAN be stashed in the same vault so the next run does not ask again. Advice: record them in your own password manager and remove them from the vault afterwards (sudo pol security vault forget 'provider <name>'). The next question sets the rule; you can still answer per item."
     POL_PROD_STASH=$(tui_menu "Stash provider credentials in the vault?" "Generated Polari credentials are always vaulted. For PROVIDER credentials choose:" "${POL_PROD_STASH:-some}" \
         all "Stash every provider credential I enter (convenient; move them out later)" \
