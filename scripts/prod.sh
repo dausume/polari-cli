@@ -580,6 +580,8 @@ POLARI_IMAGE_REPO=$POL_PROD_IMAGE_REPO
 POLARI_LEAN_MODULES=$POL_PROD_MODULES
 POL_SUITE_ROOT=$SUITE
 DEPLOY_ENV=production
+# ISLE_HARDENING_PLAN §17: dev = OBSERVE MODE (security warns, never blocks; /api/security/events counts). Answer POL_PROD_POSTURE=dev in prod-answers.env for a test window; production is the default
+POLARI_POSTURE=${POL_PROD_POSTURE:-production}
 EOF
     local demo_enabled=false; [ "$POL_PROD_DEMO" = on ] && demo_enabled=true
     cat > "$GEN/prf-runtime-config.lean.json" <<EOF
@@ -840,6 +842,7 @@ MINIO_ROOT_PASSWORD=$mpass
 MINIO_ACCESS_KEY=$muser
 MINIO_SECRET_KEY=$mpass
 DEPLOY_ENV=production
+POLARI_POSTURE=${POL_PROD_POSTURE:-production}   # §17: dev = observe mode for a test window
 EOF
     chmod 600 "$GEN/.env.prod"
     local demo_enabled=false; [ "$POL_PROD_DEMO" = on ] && demo_enabled=true
