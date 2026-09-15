@@ -130,7 +130,7 @@ def choices(o):
     b = {'role': o.get('role'), 'shape': o.get('shape'), 'base': o.get('base'), 'posture': o.get('posture'), 'look': o.get('look'), 'hostname': o.get('hostname'),
          'target_hash': o.get('target'), 'join_core': o.get('join_core'), 'join_fingerprint': o.get('fingerprint'), 'ssh_keys': o.get('ssh_key'), 'apps': o.get('apps'),
          'encryption': bool(o.get('encryption')), 'secure_boot': o.get('secure_boot') or 'on'}
-    return {k: v for k, v in b.items() if v not in (None, False, '')} | {'encryption': bool(o.get('encryption'))}
+    return {k: v for k, v in b.items() if v not in (None, False, '')}   # encryption rides only when chosen (a query string "False" is not false)
 
 
 def cmd_preview(o):
@@ -253,6 +253,17 @@ def cmd_keys(o):
     print(f"the core instance reports: {'a key placed on every image' if d.get('placed_on_every_image') else 'no key (redeploy after keys init)'}")
 
 
+def cmd_forget(o):
+    bid = (o['_'][1:] or [''])[0]
+    if not bid:
+        sys.exit('usage: pol iso forget <build id>')
+    code, _, raw = call('DELETE', f'/api/iso/builds/{bid}'); d = j(raw)
+    if code >= 400 or not d.get('ok'):
+        sys.exit(f"refused: {d.get('refusal')}")
+    p = d.get('pool') or {}
+    print(f"forgot {bid}: removed {d.get('removed_file') or 'nothing (no file in the pool)'}; pool {p.get('used_bytes', 0) >> 20} MB of {p.get('max_bytes', 0) >> 20} MB")
+
+
 def cmd_ssh(o):
     """Open a session on a device the core built: the address first boot reported, the install user, the core key."""
     target = o['_'][0] if o['_'] else sys.exit('ssh <hash | hostname> [-- command]')
@@ -272,7 +283,7 @@ def main(argv):
     if not argv:
         sys.exit('verb required')
     verb, o = argv[0], opts(argv[1:])
-    fn = {'kit': cmd_kit, 'probe': cmd_probe, 'probes': cmd_probes, 'bases': cmd_bases, 'fetch-base': cmd_fetch_base, 'preview': cmd_preview, 'build': cmd_build, 'status': cmd_status, 'fetch': cmd_fetch, 'ventoy': cmd_ventoy, 'keys': cmd_keys, 'ssh': cmd_ssh}.get(verb)
+    fn = {'kit': cmd_kit, 'probe': cmd_probe, 'probes': cmd_probes, 'bases': cmd_bases, 'fetch-base': cmd_fetch_base, 'preview': cmd_preview, 'build': cmd_build, 'status': cmd_status, 'fetch': cmd_fetch, 'forget': cmd_forget, 'ventoy': cmd_ventoy, 'keys': cmd_keys, 'ssh': cmd_ssh}.get(verb)
     if fn is None:
         sys.exit(f'unknown verb {verb}')
     fn(o)

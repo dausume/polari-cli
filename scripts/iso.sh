@@ -9,6 +9,7 @@
 #                 [--look preset] [--encryption] [--secure-boot off] [--hostname H] [--target <probe hash>] [--join-core A] [--fingerprint F]
 #                 [--ssh-key "<pubkey>"] [--apps a,b] [--wait]
 #   pol iso status <build id> | fetch <build id> -o file.iso   the build; the image (sha256 verified)
+#   pol iso forget <build id>                               drop an image from the pool (the owner's call; holds protect the public, not the owner)
 #   pol iso ventoy /dev/sdX                                 make a stick a Ventoy stick (his decision D-P1) — erases it; needs sudo
 #   pol iso keys init|show                                  the core's outward ssh key: placed on every image built afterwards
 #   pol iso ssh <hash|hostname> [--jump host] [--port n] [-- cmd]   a session on a device the core built (the address it reported at first boot)
@@ -31,8 +32,9 @@ case "$CMD" in
     build)       py build "$@" ;;
     status)      py status "$@" ;;
     fetch)       py fetch "$@" ;;
+    forget)      py forget "$@" ;;
     ventoy)      py ventoy "$@" ;;
     keys)        py keys "$@" ;;
     ssh)         py ssh "$@" ;;
-    help|*)      sed -n '2,15p' "$0" ;;
+    help|*)      sed -n '2,16p' "$0" ;;
 esac
