@@ -719,6 +719,13 @@ deploy_stack() {
     set -a; source "$(env_file)"; set +a
     local wra=(); [ -n "$POL_PROD_IMAGE_REPO" ] && wra+=(--with-registry-auth)
     docker stack deploy "${wra[@]}" -c "$GEN/stack-$(role).yml" "$(stack_name)"
+    # LOCAL image tags (no registry): swarm cannot see that prf-backend:lean is a NEW build behind the same tag and keeps the
+    # old task running (seen 2026-09-14: a redeploy that changed nothing live). Force each service whose image is a local tag.
+    if [ -z "$POL_PROD_IMAGE_REPO" ]; then
+        for svc in $(docker stack services --format '{{.Name}}' "$(stack_name)" 2>/dev/null); do
+            docker service update --force --quiet "$svc" >/dev/null 2>&1 && log_info "service $svc moved onto the newly built image"
+        done
+    fi
     record_build swarm "$(role)" production
     log_success "stack $(stack_name) deployed (pol prod status)"
     # plan §16 invariant 5: a machine serving a REAL domain is a production route — a dev posture is refused there
