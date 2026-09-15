@@ -254,9 +254,7 @@ def cmd_keys(o):
 
 
 def cmd_forget(o):
-    bid = (o['_'][1:] or [''])[0]
-    if not bid:
-        sys.exit('usage: pol iso forget <build id>')
+    bid = o['_'][0] if o['_'] else sys.exit('usage: pol iso forget <build id>')
     code, _, raw = call('DELETE', f'/api/iso/builds/{bid}'); d = j(raw)
     if code >= 400 or not d.get('ok'):
         sys.exit(f"refused: {d.get('refusal')}")
