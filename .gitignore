@@ -5,3 +5,4 @@ CLAUDE.local.md
 
 # WireGuard remote-access artifacts (private keys)
 .remote-wg/
+__pycache__/
