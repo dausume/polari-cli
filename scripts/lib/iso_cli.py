@@ -223,11 +223,56 @@ def cmd_ventoy(o):
     sys.exit(rc)
 
 
+def _suite_root():
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.abspath(os.path.join(here, '..', '..', '..'))
+
+
+def cmd_keys(o):
+    """The core's outward key (his ask 2026-09-15): an ed25519 pair under .polari/keys (untracked); the public half is
+    staged under .generated/keys/core.pub, which the lean/prod stacks mount at /app/data/keys — every image built
+    afterwards authorises it."""
+    sub = o['_'][0] if o['_'] else 'show'
+    root = _suite_root(); kdir = os.path.join(root, '.polari', 'keys'); priv = os.path.join(kdir, 'core'); pub = priv + '.pub'
+    staged = os.path.join(root, '.generated', 'keys', 'core.pub')
+    if sub == 'init':
+        os.makedirs(kdir, exist_ok=True)
+        if not os.path.isfile(priv):
+            subprocess.check_call(['ssh-keygen', '-t', 'ed25519', '-N', '', '-C', 'polari-core', '-f', priv, '-q'])
+            print(f'generated {priv} (keep it here; never committed)')
+        else:
+            print(f'{priv} exists')
+        os.makedirs(os.path.dirname(staged), exist_ok=True); shutil.copy2(pub, staged)
+        print(f'staged the public half at {staged} — redeploy once (pol prod apply) so the instance places it on every image')
+        return
+    if os.path.isfile(pub):
+        print(open(pub).read().strip()); print(f"staged for the instance: {'yes' if os.path.isfile(staged) else 'NO — run: pol iso keys init'}")
+    else:
+        print('no core key yet — pol iso keys init')
+    code, _, raw = call('GET', '/api/iso/core-key'); d = j(raw)
+    print(f"the core instance reports: {'a key placed on every image' if d.get('placed_on_every_image') else 'no key (redeploy after keys init)'}")
+
+
+def cmd_ssh(o):
+    """Open a session on a device the core built: the address first boot reported, the install user, the core key."""
+    target = o['_'][0] if o['_'] else sys.exit('ssh <hash | hostname> [-- command]')
+    d = j(call('GET', '/api/iso/probes')[2])
+    rows = [p for p in d.get('probes', []) if target in (p.get('hw_hash'), p.get('joined_hostname'), p.get('label'))]
+    if not rows:
+        sys.exit(f'no device {target} among the probed/joined devices (pol iso probes)')
+    p = rows[0]; addrs = [a for a in (p.get('joined_addresses') or '').split(', ') if a]
+    if not addrs:
+        sys.exit(f"{target} has not reported an address yet (first boot posts to /api/iso/joined)")
+    priv = os.path.join(_suite_root(), '.polari', 'keys', 'core')
+    cmd = ['ssh', '-i', priv, '-o', 'IdentitiesOnly=yes', '-o', 'StrictHostKeyChecking=accept-new'] + (['-J', o['jump']] if o.get('jump') else []) + (['-p', str(o['port'])] if o.get('port') else []) + [f"{p.get('ssh_user') or 'polari'}@{o.get('host') or addrs[0]}"] + o['_'][1:]
+    print('+ ' + ' '.join(cmd)); sys.exit(subprocess.call(cmd))
+
+
 def main(argv):
     if not argv:
         sys.exit('verb required')
     verb, o = argv[0], opts(argv[1:])
-    fn = {'kit': cmd_kit, 'probe': cmd_probe, 'probes': cmd_probes, 'bases': cmd_bases, 'fetch-base': cmd_fetch_base, 'preview': cmd_preview, 'build': cmd_build, 'status': cmd_status, 'fetch': cmd_fetch, 'ventoy': cmd_ventoy}.get(verb)
+    fn = {'kit': cmd_kit, 'probe': cmd_probe, 'probes': cmd_probes, 'bases': cmd_bases, 'fetch-base': cmd_fetch_base, 'preview': cmd_preview, 'build': cmd_build, 'status': cmd_status, 'fetch': cmd_fetch, 'ventoy': cmd_ventoy, 'keys': cmd_keys, 'ssh': cmd_ssh}.get(verb)
     if fn is None:
         sys.exit(f'unknown verb {verb}')
     fn(o)

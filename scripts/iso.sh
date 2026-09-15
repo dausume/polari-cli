@@ -10,6 +10,8 @@
 #                 [--ssh-key "<pubkey>"] [--apps a,b] [--wait]
 #   pol iso status <build id> | fetch <build id> -o file.iso   the build; the image (sha256 verified)
 #   pol iso ventoy /dev/sdX                                 make a stick a Ventoy stick (his decision D-P1) — erases it; needs sudo
+#   pol iso keys init|show                                  the core's outward ssh key: placed on every image built afterwards
+#   pol iso ssh <hash|hostname> [--jump host] [--port n] [-- cmd]   a session on a device the core built (the address it reported at first boot)
 # --from <core url> (default $POLARI_API or http://127.0.0.1:3300); --insecure for a self-signed home core.
 set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,5 +32,7 @@ case "$CMD" in
     status)      py status "$@" ;;
     fetch)       py fetch "$@" ;;
     ventoy)      py ventoy "$@" ;;
-    help|*)      sed -n '2,13p' "$0" ;;
+    keys)        py keys "$@" ;;
+    ssh)         py ssh "$@" ;;
+    help|*)      sed -n '2,15p' "$0" ;;
 esac
