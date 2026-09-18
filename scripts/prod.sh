@@ -64,6 +64,7 @@ POL_PROD_LE_CHALLENGE="${POL_PROD_LE_CHALLENGE:-}"; POL_PROD_LE_EMAIL="${POL_PRO
 POL_PROD_MODULES="${POL_PROD_MODULES:-}"; POL_PROD_DEBS="${POL_PROD_DEBS:-}"; POL_PROD_DEMO="${POL_PROD_DEMO:-}"; POL_PROD_IMAGE_TAG="${POL_PROD_IMAGE_TAG:-}"
 POL_PROD_IMAGE_REPO="${POL_PROD_IMAGE_REPO:-}"; POL_PROD_ODOO="${POL_PROD_ODOO:-}"
 POL_PROD_PROFILE="${POL_PROD_PROFILE:-}"; POL_PROD_DEMO_USERS="${POL_PROD_DEMO_USERS:-}"
+POL_PROD_APP_PERMISSIONS="${POL_PROD_APP_PERMISSIONS:-}"
 load_answers() {
     if [ -f "$ANSWERS" ]; then
         while IFS='=' read -r k v; do
@@ -84,11 +85,21 @@ load_answers() {
     # demo accounts in Keycloak (dev/demo only): default on for a dev posture, off for production
     : "${POL_PROD_DEMO_USERS:=$([ "$POL_PROD_POSTURE" = dev ] && echo on || echo off)}"
     case "$POL_PROD_DEMO_USERS" in on|off) ;; *) POL_PROD_DEMO_USERS=off ;; esac
+    # THE CRUDE APP-PERMISSION GATE (accessControl/app_permissions_gate.py, env POLARI_APP_PERMISSIONS).
+    #   off       the gate does nothing (the default — an instance with no AppPermissionProfile rows
+    #             concreted yet must not start refusing reads because it was deployed)
+    #   advisory  every verb is resolved against the published profiles; a would-deny rides the response
+    #             header X-Polari-Permission-Advisory and the act STILL PROCEEDS — the warn-only rung
+    #   enforce   a disallowed verb gets a 403 carrying the verdict (a DEV-posture build observes it
+    #             instead: the act runs and is counted as a SecurityEvent)
+    # Deliberately defaulted off: security is warn-only in deployments until the profiles are proven.
+    : "${POL_PROD_APP_PERMISSIONS:=off}"
+    case "$POL_PROD_APP_PERMISSIONS" in off|advisory|enforce) ;; *) POL_PROD_APP_PERMISSIONS=off ;; esac
 }
 save_answers() {
     {
         echo "# pol prod answers — $(date -Is). Edit and re-run: pol prod apply. Env vars POL_PROD_* override."
-        for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE PROFILE DEMO_USERS; do
+        for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE PROFILE DEMO_USERS APP_PERMISSIONS; do
             v="POL_PROD_$k"; echo "$v=${!v}"
         done
     } > "$ANSWERS"
@@ -124,7 +135,7 @@ profile_load() {  # name → sets POL_PROD_* from the file, expanding ${LAN_IP} 
 }
 profile_save() {  # name → the current answers, with a comment
     mkdir -p "$USER_PROFILES"; load_answers
-    { echo "# saved $(date -Is) on $(hostname) — pol prod profile use $1"; for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE PROFILE DEMO_USERS; do v="POL_PROD_$k"; echo "$v=${!v}"; done; } > "$USER_PROFILES/$1.env"
+    { echo "# saved $(date -Is) on $(hostname) — pol prod profile use $1"; for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE PROFILE DEMO_USERS APP_PERMISSIONS; do v="POL_PROD_$k"; echo "$v=${!v}"; done; } > "$USER_PROFILES/$1.env"
     log_success "profile saved: $USER_PROFILES/$1.env — pol prod profile use $1 [--apply]"
 }
 do_profile() {
@@ -258,7 +269,7 @@ do_facts() {  # machine-readable facts for the Textual guide: pol prod facts [--
     POL_PROD_DOMAIN="${dom:-$POL_PROD_DOMAIN}"   # the links and names follow the domain being asked about
     {
         echo "suite=$SUITE"; echo "git=$(git -C "$SUITE" rev-parse --short HEAD 2>/dev/null)"; echo "host=$(hostname)"; echo "user=$(id -un)"
-        for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE PROFILE DEMO_USERS; do v="POL_PROD_$k"; echo "answer.$k=${!v}"; done
+        for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE PROFILE DEMO_USERS APP_PERMISSIONS; do v="POL_PROD_$k"; echo "answer.$k=${!v}"; done
         echo "on_droplet=$(on_droplet && echo 1 || echo 0)"; echo "detected_ip=$(detected_ip)"; echo "ipv6=$(exposure_ip6)"
         server_addresses | while IFS=$'\t' read -r r a n; do echo "address=$r|$a|$n"; done
         echo "names.lean=$(lean_names "${dom:-example.org}")"; echo "names.full=$(full_names "${dom:-example.org}")"
@@ -420,7 +431,7 @@ do_guide() {
     while IFS=$'\t' read -r n k sm c; do start+=("$n" "[$k] $sm — $c"); done < <(profile_list)
     start+=(fresh "Walk through everything again")
     local pick; pick=$(tui_menu "Start from" "Re-use the answers of a prior run or a profile (you still see every step and can change any answer), or start fresh:" "${start[0]}" "${start[@]}")
-    case "$pick" in last) : ;; fresh) rm -f "$ANSWERS"; for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE PROFILE DEMO_USERS; do unset "POL_PROD_$k"; done; load_answers ;; *) profile_load "$pick" ;; esac
+    case "$pick" in last) : ;; fresh) rm -f "$ANSWERS"; for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE PROFILE DEMO_USERS APP_PERMISSIONS; do unset "POL_PROD_$k"; done; load_answers ;; *) profile_load "$pick" ;; esac
     tui_msg "Credentials and the vault" "Everything this guide generates (Keycloak admin, database and file-store passwords on the full profile) is written ONCE into an encrypted, root-only vault at /etc/polari/vault and nowhere else you have to protect. Read it later with:  sudo pol security vault show\n\nProvider credentials you give along the way (a DigitalOcean API token for the DNS challenge, a registry pull token) CAN be stashed in the same vault so the next run does not ask again. Advice: record them in your own password manager and remove them from the vault afterwards (sudo pol security vault forget 'provider <name>'). The next question sets the rule; you can still answer per item."
     POL_PROD_STASH=$(tui_menu "Stash provider credentials in the vault?" "Generated Polari credentials are always vaulted. For PROVIDER credentials choose:" "${POL_PROD_STASH:-some}" \
         all "Stash every provider credential I enter (convenient; move them out later)" \
@@ -694,6 +705,8 @@ DEPLOY_ENV=production
 CORS_ORIGINS=$cors
 # ISLE_HARDENING_PLAN §17: dev = OBSERVE MODE (security warns, never blocks; /api/security/events counts). Answer POL_PROD_POSTURE=dev in prod-answers.env for a test window; production is the default
 POLARI_POSTURE=${POL_PROD_POSTURE:-production}
+# The CRUDE app-permission gate: off (nothing) | advisory (would-deny rides X-Polari-Permission-Advisory, the act proceeds) | enforce (403). Answer POL_PROD_APP_PERMISSIONS; off is the default — security is warn-only in deployments until the profiles are proven
+POLARI_APP_PERMISSIONS=${POL_PROD_APP_PERMISSIONS:-off}
 $kc_env
 EOF
     logins_on_lean && chmod 600 "$GEN/.env.lean"
@@ -985,6 +998,7 @@ MINIO_ACCESS_KEY=$muser
 MINIO_SECRET_KEY=$mpass
 DEPLOY_ENV=production
 POLARI_POSTURE=${POL_PROD_POSTURE:-production}   # §17: dev = observe mode for a test window
+POLARI_APP_PERMISSIONS=${POL_PROD_APP_PERMISSIONS:-off}   # the CRUDE app-permission gate: off | advisory (header only) | enforce (403)
 EOF
     chmod 600 "$GEN/.env.prod"
     local demo_enabled=false; [ "$POL_PROD_DEMO" = on ] && demo_enabled=true
