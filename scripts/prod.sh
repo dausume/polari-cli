@@ -32,9 +32,13 @@
 #  pol prod providers             which providers are in use for what (hosting, DNS, certificate, registry, code) and the pages to visit for each
 #  pol prod addresses [--use <ip>|--auto]  every address assigned to this machine (droplet metadata on DigitalOcean); the exposure IP the A records need (detected, or the one you answered)
 #  pol prod bootstrap             a fresh VM: install docker, swarm init, then the guide
-# Profiles: logins=off → the LEAN stack (docker-compose.lean.yml, stack polari-lean);
-# logins=keycloak → the FULL stack (docker-compose.prod.yml, stack polari-prod: Keycloak,
-# MariaDB, MinIO, the scorecard; odoo with POL_PROD_ODOO=on). Both deploy the same way.
+# Profiles: POL_PROD_PROFILE=lean → docker-compose.lean.yml, stack polari-lean;
+# POL_PROD_PROFILE=full → docker-compose.prod.yml, stack polari-prod (Keycloak, MariaDB,
+# MinIO, the scorecard; odoo with POL_PROD_ODOO=on). Unanswered it follows the logins
+# answer (keycloak → full, off → lean) — the behaviour before the answer existed.
+# lean + POL_PROD_AUTH=keycloak = REAL LOGINS ON THE LEAN STACK: the four lean services
+# plus pol-keycloak and pol-kc-mariadb (the `logins` compose profile), ~1.4 GB more,
+# no file store and no scorecard. Demo accounts: POL_PROD_DEMO_USERS=on|off.
 # Images: POL_PROD_IMAGE_REPO=ghcr.io/dausume/ pulls the release images; empty = build locally.
 # Answers: .generated/prod-answers.env (POL_PROD_ROUTE, DOMAIN, CERT_MODE,
 # LE_CHALLENGE, LE_EMAIL, AUTH, MODULES, DEBS, DEMO). Any of them may also be
@@ -59,6 +63,7 @@ POL_PROD_ROUTE="${POL_PROD_ROUTE:-}"; POL_PROD_DOMAIN="${POL_PROD_DOMAIN:-}"; PO
 POL_PROD_LE_CHALLENGE="${POL_PROD_LE_CHALLENGE:-}"; POL_PROD_LE_EMAIL="${POL_PROD_LE_EMAIL:-}"; POL_PROD_AUTH="${POL_PROD_AUTH:-}"; POL_PROD_EXPOSURE_IP="${POL_PROD_EXPOSURE_IP:-}"; POL_PROD_DNS_PROVIDER="${POL_PROD_DNS_PROVIDER:-}"; POL_PROD_STASH="${POL_PROD_STASH:-}"; POL_PROD_WWW="${POL_PROD_WWW:-off}"
 POL_PROD_MODULES="${POL_PROD_MODULES:-}"; POL_PROD_DEBS="${POL_PROD_DEBS:-}"; POL_PROD_DEMO="${POL_PROD_DEMO:-}"; POL_PROD_IMAGE_TAG="${POL_PROD_IMAGE_TAG:-}"
 POL_PROD_IMAGE_REPO="${POL_PROD_IMAGE_REPO:-}"; POL_PROD_ODOO="${POL_PROD_ODOO:-}"
+POL_PROD_PROFILE="${POL_PROD_PROFILE:-}"; POL_PROD_DEMO_USERS="${POL_PROD_DEMO_USERS:-}"
 load_answers() {
     if [ -f "$ANSWERS" ]; then
         while IFS='=' read -r k v; do
@@ -70,11 +75,20 @@ load_answers() {
     : "${POL_PROD_DEMO:=on}"; : "${POL_PROD_IMAGE_TAG:=prod}"; : "${POL_PROD_ODOO:=off}"
     # ISLE_HARDENING_PLAN §17: the stack's posture — production (controls enforce) or dev (OBSERVE: warn, never block; a test window on your own isle)
     : "${POL_PROD_POSTURE:=production}"; case "$POL_PROD_POSTURE" in dev|production) ;; *) POL_PROD_POSTURE=production ;; esac
+    # STACK SIZE (his ask 2026-09-17: real logins on the home demo). Until now the profile FOLLOWED the
+    # logins answer — keycloak meant the whole full stack (Keycloak + MariaDB + MinIO + the scorecard, ~3 GB).
+    # The two are now separate answers: lean+keycloak = the four lean services PLUS Keycloak and its own
+    # small MariaDB (the `logins` compose profile). Unset keeps the old behaviour exactly.
+    : "${POL_PROD_PROFILE:=$([ "$POL_PROD_AUTH" = keycloak ] && echo full || echo lean)}"
+    case "$POL_PROD_PROFILE" in lean|full) ;; *) POL_PROD_PROFILE=$([ "$POL_PROD_AUTH" = keycloak ] && echo full || echo lean) ;; esac
+    # demo accounts in Keycloak (dev/demo only): default on for a dev posture, off for production
+    : "${POL_PROD_DEMO_USERS:=$([ "$POL_PROD_POSTURE" = dev ] && echo on || echo off)}"
+    case "$POL_PROD_DEMO_USERS" in on|off) ;; *) POL_PROD_DEMO_USERS=off ;; esac
 }
 save_answers() {
     {
         echo "# pol prod answers — $(date -Is). Edit and re-run: pol prod apply. Env vars POL_PROD_* override."
-        for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE; do
+        for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE PROFILE DEMO_USERS; do
             v="POL_PROD_$k"; echo "$v=${!v}"
         done
     } > "$ANSWERS"
@@ -106,11 +120,11 @@ profile_load() {  # name → sets POL_PROD_* from the file, expanding ${LAN_IP} 
     local k v; while IFS='=' read -r k v; do
         case "$k" in POL_PROD_*) v=${v//\$\{LAN_IP\}/$lan}; v=${v//\$\{PUBLIC_IP\}/$pub}; v=${v//\$\{HOSTNAME\}/$(hostname)}; printf -v "$k" '%s' "$v" ;; esac
     done < <(grep -v '^#' "$f")
-    POL_PROD_PROFILE="$1"
+    POL_PROD_PROFILE_NAME="$1"   # the SAVED-ANSWERS profile name (pol prod profile use <name>) — not POL_PROD_PROFILE, which is the stack size lean|full
 }
 profile_save() {  # name → the current answers, with a comment
     mkdir -p "$USER_PROFILES"; load_answers
-    { echo "# saved $(date -Is) on $(hostname) — pol prod profile use $1"; for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE; do v="POL_PROD_$k"; echo "$v=${!v}"; done; } > "$USER_PROFILES/$1.env"
+    { echo "# saved $(date -Is) on $(hostname) — pol prod profile use $1"; for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE PROFILE DEMO_USERS; do v="POL_PROD_$k"; echo "$v=${!v}"; done; } > "$USER_PROFILES/$1.env"
     log_success "profile saved: $USER_PROFILES/$1.env — pol prod profile use $1 [--apply]"
 }
 do_profile() {
@@ -244,7 +258,7 @@ do_facts() {  # machine-readable facts for the Textual guide: pol prod facts [--
     POL_PROD_DOMAIN="${dom:-$POL_PROD_DOMAIN}"   # the links and names follow the domain being asked about
     {
         echo "suite=$SUITE"; echo "git=$(git -C "$SUITE" rev-parse --short HEAD 2>/dev/null)"; echo "host=$(hostname)"; echo "user=$(id -un)"
-        for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE; do v="POL_PROD_$k"; echo "answer.$k=${!v}"; done
+        for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE PROFILE DEMO_USERS; do v="POL_PROD_$k"; echo "answer.$k=${!v}"; done
         echo "on_droplet=$(on_droplet && echo 1 || echo 0)"; echo "detected_ip=$(detected_ip)"; echo "ipv6=$(exposure_ip6)"
         server_addresses | while IFS=$'\t' read -r r a n; do echo "address=$r|$a|$n"; done
         echo "names.lean=$(lean_names "${dom:-example.org}")"; echo "names.full=$(full_names "${dom:-example.org}")"
@@ -377,17 +391,19 @@ name_rows() {
     printf '%s\tprimary\tthe site (hub, documentation, downloads)\talways\n' "$D"
     [ "$POL_PROD_WWW" = on ] && printf 'www.%s\tsubdomain\tthe site under the www. convention\twww answer\n' "$D"
     [ "$POL_PROD_AUTH" = keycloak ] && printf 'auth.%s\tsubdomain\tKeycloak (logins)\tlogins = keycloak\n' "$D"
-    [ "$POL_PROD_AUTH" = keycloak ] && { printf 'psc.%s\tsubdomain\tthe scorecard frontend\tfull profile\n' "$D"; printf 'api.psc.%s\tsubdomain\tthe scorecard API\tfull profile\n' "$D"; }
+    # the scorecard and the file store belong to the FULL stack only — a lean stack with logins serves neither
+    [ "$POL_PROD_AUTH" = keycloak ] && [ "$POL_PROD_PROFILE" = full ] && { printf 'psc.%s\tsubdomain\tthe scorecard frontend\tfull profile\n' "$D"; printf 'api.psc.%s\tsubdomain\tthe scorecard API\tfull profile\n' "$D"; }
     printf 'prf.%s\tsubdomain\tthe Polari frontend\talways\n' "$D"
     printf 'api.prf.%s\tsubdomain\tthe Polari backend API\talways\n' "$D"
-    [ "$POL_PROD_AUTH" = keycloak ] && { printf 'files.%s\tsubdomain\tthe file store (web)\tfull profile\n' "$D"; printf 's3.%s\tsubdomain\tthe file store (S3 API)\tfull profile\n' "$D"; }
+    [ "$POL_PROD_AUTH" = keycloak ] && [ "$POL_PROD_PROFILE" = full ] && { printf 'files.%s\tsubdomain\tthe file store (web)\tfull profile\n' "$D"; printf 's3.%s\tsubdomain\tthe file store (S3 API)\tfull profile\n' "$D"; }
     [ "$POL_PROD_ODOO" = on ] && printf 'odoo.%s\tsubdomain\tOdoo ERP\todoo = on\n' "$D"
     [ "${POL_PROD_DEBS:-skip}" != skip ] && printf 'apt.%s\tsubdomain\tthe apt repository of installers\tinstallers handed out\n' "$D"
     return 0
 }
 lean_names() { name_rows "$1" | cut -f1 | tr '\n' ' '; }
 full_names() { name_rows "$1" | cut -f1 | tr '\n' ' '; }
-profile() { load_answers; [ "$POL_PROD_AUTH" = keycloak ] && echo full || echo lean; }
+profile() { load_answers; echo "$POL_PROD_PROFILE"; }   # the STACK SIZE answer (lean|full); load_answers defaults it from the logins answer
+logins_on_lean() { load_answers; [ "$POL_PROD_AUTH" = keycloak ] && [ "$POL_PROD_PROFILE" = lean ]; }   # the lean stack WITH Keycloak (the `logins` compose profile)
 stack_name() { [ "$(profile)" = full ] && echo polari-prod || echo polari-lean; }
 names() { name_rows "$1" | cut -f1 | tr '\n' ' '; }
 cert_row() { [ "$(profile)" = full ] && echo pol-proxy-public || echo pol-proxy-lean; }
@@ -404,7 +420,7 @@ do_guide() {
     while IFS=$'\t' read -r n k sm c; do start+=("$n" "[$k] $sm — $c"); done < <(profile_list)
     start+=(fresh "Walk through everything again")
     local pick; pick=$(tui_menu "Start from" "Re-use the answers of a prior run or a profile (you still see every step and can change any answer), or start fresh:" "${start[0]}" "${start[@]}")
-    case "$pick" in last) : ;; fresh) rm -f "$ANSWERS"; for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE; do unset "POL_PROD_$k"; done; load_answers ;; *) profile_load "$pick" ;; esac
+    case "$pick" in last) : ;; fresh) rm -f "$ANSWERS"; for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE PROFILE DEMO_USERS; do unset "POL_PROD_$k"; done; load_answers ;; *) profile_load "$pick" ;; esac
     tui_msg "Credentials and the vault" "Everything this guide generates (Keycloak admin, database and file-store passwords on the full profile) is written ONCE into an encrypted, root-only vault at /etc/polari/vault and nowhere else you have to protect. Read it later with:  sudo pol security vault show\n\nProvider credentials you give along the way (a DigitalOcean API token for the DNS challenge, a registry pull token) CAN be stashed in the same vault so the next run does not ask again. Advice: record them in your own password manager and remove them from the vault afterwards (sudo pol security vault forget 'provider <name>'). The next question sets the rule; you can still answer per item."
     POL_PROD_STASH=$(tui_menu "Stash provider credentials in the vault?" "Generated Polari credentials are always vaulted. For PROVIDER credentials choose:" "${POL_PROD_STASH:-some}" \
         all "Stash every provider credential I enter (convenient; move them out later)" \
@@ -472,6 +488,12 @@ Nothing else to do here. (pol prod is the server route.)"
     POL_PROD_AUTH=$(tui_menu "User logins" "Keycloak handles authentication and user login: accounts, passwords and sign-in, and access control per user (who may see and change what). It is the default; with it the server also runs the scorecard and the file store, and its admin password is generated and kept in the vault. Without logins there are no accounts: anyone can browse, nothing is protected per user — fine for a plain distribution or demonstration server, about 1 GB lighter." "$POL_PROD_AUTH" \
         keycloak "User logins with Keycloak — accounts, sign-in, per-user security and access control (default)" \
         off      "No user logins — open to everyone, no accounts (smaller: no Keycloak, scorecard or file store)")
+    if [ "$POL_PROD_AUTH" = keycloak ]; then
+        POL_PROD_PROFILE=$(tui_menu "Stack size" "With logins on, how much of the suite should run? Keycloak itself needs about 1.5 GB with its database; the rest of the full stack (the file store and the scorecard) another 1.5 GB." "$POL_PROD_PROFILE" \
+            lean "Lean + logins — the four lean services plus Keycloak and its own small database (a home or demo server)" \
+            full "Full — Keycloak, the shared MariaDB, the file store and the scorecard (the public server)")
+        if tui_yesno "Demonstration accounts" "Create demonstration accounts in Keycloak (demo-admin, demo-journalist, demo-scientist, demo-viewer, one shared generated password in .generated/demo-users.env)? Answer No for anything real — they are sign-ins anyone who reads that file can use."; then POL_PROD_DEMO_USERS=on; else POL_PROD_DEMO_USERS=off; fi
+    fi
     # Odoo is an add-on installed after the initial deployment (POL_PROD_ODOO=on pol prod apply), not a first-run question
     POL_PROD_MODULES=$(tui_input "Modules" "The floor set the server boots (comma-separated; more = more memory):" "$POL_PROD_MODULES")
     # Installers: skip | a PUBLISHED release (our official source, listed) | build here | manual pool (dir, release URL, github:owner/repo@tag)
@@ -523,7 +545,7 @@ Nothing else to do here. (pol prod is the server route.)"
     fi
     save_answers
     do_plan
-    local pname; pname=$(tui_input "Save as a profile?" "A name to save these answers under for next time (empty = do not save). Re-use with: pol prod profile use <name> [--apply]" "${POL_PROD_PROFILE:-}")
+    local pname; pname=$(tui_input "Save as a profile?" "A name to save these answers under for next time (empty = do not save). Re-use with: pol prod profile use <name> [--apply]" "${POL_PROD_PROFILE_NAME:-}")
     [ -n "$pname" ] && profile_save "$pname"
     if tui_yesno "Apply now?" "Render the configuration, stage the certificate and debs, and deploy stack $(stack_name) on this swarm?"; then do_apply --yes; else log_info "Not applied. Later: pol prod apply"; fi
 }
@@ -535,7 +557,7 @@ do_plan() {
     echo "  route        $POL_PROD_ROUTE   profile: $(profile) ($([ "$(profile)" = full ] && echo 'docker-compose.prod.yml → stack polari-prod' || echo 'docker-compose.lean.yml → stack polari-lean'))"
     echo "  domain       $POL_PROD_DOMAIN   names: $(names "$POL_PROD_DOMAIN")"
     echo "  certificate  $POL_PROD_CERT_MODE$([ "$POL_PROD_CERT_MODE" = letsencrypt ] && echo " ($POL_PROD_LE_CHALLENGE challenge, $POL_PROD_LE_EMAIL)")   now: $(edge_cert_issuer) (expires $(edge_cert_expiry))"
-    echo "  logins       $POL_PROD_AUTH$([ "$POL_PROD_AUTH" = keycloak ] && echo "   odoo: $POL_PROD_ODOO")"
+    echo "  logins       $POL_PROD_AUTH$(logins_on_lean && echo "   (on the LEAN stack: + pol-keycloak + pol-kc-mariadb, compose profile 'logins'; demo accounts: $POL_PROD_DEMO_USERS)" || { [ "$POL_PROD_AUTH" = keycloak ] && echo "   odoo: $POL_PROD_ODOO"; })"
     echo "  modules      $POL_PROD_MODULES"
     echo "  installers   $POL_PROD_DEBS   staged now: $(ls "$GEN"/debs/*.deb 2>/dev/null | wc -l)"
     echo "  demo notice  $POL_PROD_DEMO"
@@ -554,6 +576,7 @@ do_check() {
     case "$st" in active/true) log_success "swarm manager on this node" ;; active/false) log_error "this node is a swarm WORKER — run pol prod on the manager"; fail=1 ;; *) log_warn "no swarm yet — apply will run: docker swarm init" ;; esac
     for p in 80 443; do if ss -ltn 2>/dev/null | grep -q ":$p "; then log_error "port $p is in use (a compose stack? pol suite down)"; fail=1; else log_success "port $p free"; fi; done
     local imgs="prf-backend prf-frontend"; [ "$(profile)" = full ] && imgs="prf-backend prf-frontend pol-mariadb pol-file-store psc-redis pol-keycloak psc-frontend psc-backend"
+    logins_on_lean && imgs="$imgs pol-keycloak pol-mariadb"   # the lean stack's logins pair
     for img in $imgs; do docker image inspect "${POL_PROD_IMAGE_REPO}$img:$POL_PROD_IMAGE_TAG" >/dev/null 2>&1 && log_success "image ${POL_PROD_IMAGE_REPO}$img:$POL_PROD_IMAGE_TAG present" || log_warn "image ${POL_PROD_IMAGE_REPO}$img:$POL_PROD_IMAGE_TAG absent — apply will $([ -n "$POL_PROD_IMAGE_REPO" ] && echo pull || echo build) it"; done
     if [ -n "$POL_PROD_DOMAIN" ]; then
         local ip ip6 ours; ip=$(public_ip); ip6=$(exposure_ip6); ours="$ip $(server_addresses | awk -F'\t' '$1=="reserved"||$1=="public4"{print $2}' | tr '\n' ' ')"; local bad=0
@@ -565,14 +588,100 @@ do_check() {
     if [ -s "$GEN/certs/edge/fullchain.pem" ]; then edge_cert_is_public && log_success "edge certificate: publicly trusted ($(edge_cert_issuer))" || log_warn "edge certificate: self-signed — browsers will warn (pol prod cert)"; else log_warn "no edge certificate staged yet (apply stages one)"; fi
     local n; n=$(ls "$GEN"/debs/*.deb 2>/dev/null | wc -l); [ "$n" -gt 0 ] && log_success "$n platform deb(s) staged" || log_warn "no platform debs staged (pol prod debs build|copy)"
     [ -f "$SUITE/polari-jenkins/secrets/signing/apt_signing_keyid" ] && log_success "apt signing key present" || log_warn "apt repo signing key absent (polari-jenkins/secrets) — apt.$POL_PROD_DOMAIN will serve an unsigned/empty tree"
-    [ "$POL_PROD_AUTH" = keycloak ] && log_info "full profile: Keycloak + MariaDB + MinIO + scorecard (credentials generated at apply; rotate later with pol security rotate prod)"
+    [ "$POL_PROD_AUTH" = keycloak ] && [ "$(profile)" = full ] && log_info "full profile: Keycloak + MariaDB + MinIO + scorecard (credentials generated at apply; rotate later with pol security rotate prod)"
+    logins_on_lean && log_info "lean profile WITH logins: + pol-keycloak + pol-kc-mariadb (about 1.4 GB); credentials generated at apply into pol-keycloak/keycloak-admin.env and the vault"
     return $fail
 }
 
 # ---------------------------------------------------------------- steps
+pw() { openssl rand -base64 24 | tr -d '/+=' | cut -c1-24; }   # one idiom for every generated password (also used by security_setup/write_configs_full)
+prev_env_lean() {  # a value from the PREVIOUS .env.lean — passwords are baked into the DB volume on first boot and must survive every re-apply
+    grep -s "^$1=" "$GEN/.env.lean" 2>/dev/null | head -1 | cut -d= -f2-
+}
+ensure_kc_admin_env() {
+    # pol-keycloak/keycloak-admin.env — gitignored, generated from the example, NEVER the dev default 'admin'
+    # (pol security refuses a running Keycloak whose admin password is 'admin'). The full profile gets this
+    # file from setup-polari-security.sh; the lean profile does not run that, so write it here.
+    local f="$SUITE/pol-keycloak/keycloak-admin.env"
+    if [ -s "$f" ] && ! grep -q 'REPLACE_ME' "$f" && [ "$(grep -s '^KEYCLOAK_ADMIN_PASSWORD=' "$f" | cut -d= -f2-)" != admin ]; then
+        log_info "Keycloak admin credentials already present: $f (sudo pol security vault show, or pol security rotate)"
+        return 0
+    fi
+    [ -s "$f" ] && mv "$f" "$f.replaced-$(date -u +%Y%m%dT%H%M%SZ)" && log_warn "keycloak-admin.env held a placeholder/default password — moved aside; a Keycloak volume created with it must be recreated"
+    { echo "# generated by pol prod (lean + logins) — $(date -Is). Gitignored; the values are also in the vault."
+      echo "KEYCLOAK_ADMIN=${POLARI_KC_ADMIN_USER:-admin}"
+      echo "KEYCLOAK_ADMIN_PASSWORD=$(pw)"
+      echo "KEYCLOAK_ADMIN_CLIENT_SECRET=$(pw)"
+      echo "KEYCLOAK_POLARI_BACKEND_CLIENT_SECRET=$(pw)"; } > "$f"
+    chmod 600 "$f"
+    log_success "Keycloak admin credentials generated: $f"
+}
+ensure_kc_certs() {
+    # Dockerfile.pol-kc COPYs ./certs/pol-kc.{crt,key} unconditionally, so the image cannot build without them.
+    # The lean edge reaches Keycloak over PLAIN HTTP inside the encrypted overlay (no mTLS hop, unlike the full
+    # profile) — these exist only to satisfy the build and the image's baked https listener.
+    local d="$SUITE/pol-keycloak/certs"
+    [ -s "$d/pol-kc.crt" ] && [ -s "$d/pol-kc.key" ] && return 0
+    mkdir -p "$d"
+    openssl req -x509 -newkey rsa:2048 -nodes -keyout "$d/pol-kc.key" -out "$d/pol-kc.crt" -days 825 \
+        -subj "/CN=pol-keycloak" -addext "subjectAltName=DNS:pol-keycloak,DNS:localhost" >/dev/null 2>&1 \
+        || die "could not generate the pol-keycloak service certificate"
+    chmod 600 "$d/pol-kc.key"
+    log_info "generated pol-keycloak/certs/pol-kc.{crt,key} (service certificate; the lean edge talks plain HTTP to Keycloak over the encrypted overlay)"
+}
+ensure_demo_users_env() {
+    # ONE shared password for every demonstration account, generated once and kept. Gitignored (.generated/).
+    local f="$GEN/demo-users.env"
+    if [ ! -s "$f" ] || ! grep -q '^DEMO_USER_PASSWORD=..' "$f"; then
+        { echo "# generated by pol prod — the shared password of the DEMONSTRATION accounts (demo-admin, demo-journalist,"
+          echo "# demo-scientist, demo-viewer) seeded into Keycloak when POL_PROD_DEMO_USERS=on. Anyone who reads this file"
+          echo "# can sign in as any of them: demonstration stacks only. Delete the users in Keycloak to revoke."
+          echo "DEMO_USER_PASSWORD=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-12)"; } > "$f"
+        chmod 600 "$f"
+    fi
+    grep -s '^DEMO_USER_PASSWORD=' "$f" | head -1 | cut -d= -f2-
+}
 write_configs() {
     load_answers; [ -n "$POL_PROD_DOMAIN" ] || die "no domain — pol prod guide (or POL_PROD_DOMAIN=…)"
     local D=$POL_PROD_DOMAIN
+    # ---- logins on the lean stack: the credentials and the Keycloak env the `logins` compose profile needs ----
+    local kc_env="" kc_stanza="" demo_pw="" kcdb root
+    if logins_on_lean; then
+        ensure_kc_admin_env; ensure_kc_certs
+        # the two database passwords are baked into the KC MariaDB volume on FIRST boot — read the previous
+        # .env.lean before generating, so a re-apply never locks Keycloak out of its own database
+        kcdb=$(prev_env_lean KC_DB_PASSWORD); root=$(prev_env_lean MARIADB_ROOT_PASSWORD)
+        : "${kcdb:=$(pw)}"; : "${root:=$(pw)}"
+        [ "$POL_PROD_DEMO_USERS" = on ] && demo_pw=$(ensure_demo_users_env)
+        kc_env=$(cat <<EOF
+# ---- logins (POL_PROD_AUTH=keycloak with POL_PROD_PROFILE=lean): the \`logins\` compose profile ----
+COMPOSE_PROFILES=logins
+POLARI_AUTH=keycloak
+AUTH_URL=https://auth.$D
+PRF_URL=https://prf.$D
+PRF_API_URL=https://api.prf.$D
+KC_HOSTNAME=auth.$D
+KEYCLOAK_MODE=production
+KC_DB_PASSWORD=$kcdb
+MARIADB_ROOT_PASSWORD=$root
+POLARI_KEYCLOAK_ISSUER_URI=https://auth.$D/realms/Polari
+POLARI_KEYCLOAK_JWKS_URI=http://pol-keycloak:8080/realms/Polari/protocol/openid-connect/certs
+POLARI_KEYCLOAK_ADMIN_URL=http://pol-keycloak:8080
+POLARI_KEYCLOAK_REALM=Polari
+POLARI_KEYCLOAK_ADMIN_CLIENT_ID=admin-cli
+POLARI_KEYCLOAK_FRONTEND_CLIENT_ID=polari-frontend
+POLARI_DEMO_USERS=$POL_PROD_DEMO_USERS
+DEMO_USER_PASSWORD=$demo_pw
+$(grep -sE '^(KEYCLOAK_ADMIN|KEYCLOAK_ADMIN_PASSWORD|KEYCLOAK_ADMIN_CLIENT_SECRET|KEYCLOAK_POLARI_BACKEND_CLIENT_SECRET)=' "$SUITE/pol-keycloak/keycloak-admin.env")
+EOF
+)
+        kc_stanza="
+  \"keycloak\": { \"authority\": \"https://auth.$D/realms/Polari\", \"clientId\": \"polari-frontend\", \"realm\": \"Polari\",
+                \"redirectUri\": \"https://prf.$D/callback\", \"postLogoutRedirectUri\": \"https://prf.$D/\",
+                \"responseType\": \"code\", \"scope\": \"openid profile email roles\",
+                \"silentRedirectUri\": \"https://prf.$D/assets/silent-refresh.html\" },"
+    fi
+    local cors="https://$D,https://www.$D,https://prf.$D"; logins_on_lean && cors="$cors,https://auth.$D"
     cat > "$GEN/.env.lean" <<EOF
 # generated by pol prod — the lean profile's inputs (docker-compose.lean.yml)
 PROD_DOMAIN=$D
@@ -582,9 +691,12 @@ POLARI_IMAGE_REPO=$POL_PROD_IMAGE_REPO
 POLARI_LEAN_MODULES=$POL_PROD_MODULES
 POL_SUITE_ROOT=$SUITE
 DEPLOY_ENV=production
+CORS_ORIGINS=$cors
 # ISLE_HARDENING_PLAN §17: dev = OBSERVE MODE (security warns, never blocks; /api/security/events counts). Answer POL_PROD_POSTURE=dev in prod-answers.env for a test window; production is the default
 POLARI_POSTURE=${POL_PROD_POSTURE:-production}
+$kc_env
 EOF
+    logins_on_lean && chmod 600 "$GEN/.env.lean"
     local demo_enabled=false; [ "$POL_PROD_DEMO" = on ] && demo_enabled=true
     cat > "$GEN/prf-runtime-config.lean.json" <<EOF
 {
@@ -597,7 +709,7 @@ EOF
                 "ws": { "protocol": "wss", "url": "api.prf.$D", "port": "443" }, "preferHttps": true },
   "frontend": { "http": { "protocol": "http", "url": "prf.$D", "port": "80" },
                 "https": { "protocol": "https", "url": "prf.$D", "port": "443" } },
-  "connection": { "retryInterval": 3000, "maxRetryTime": 60000, "timeout": 30000 },
+  "connection": { "retryInterval": 3000, "maxRetryTime": 60000, "timeout": 30000 },$kc_stanza
   "features": { "enableHttps": true, "enableRuntimeConfig": false, "allowBackendChange": false }
 }
 EOF
@@ -605,9 +717,14 @@ EOF
 { "_comment": "LEAN PRODUCTION: generated by pol prod", "_generated": "$(date -Is)",
   "links": { "prf": "https://prf.$D", "dps": "https://$D/docs.html", "mesh": "${ISLE_MESH_URL:-https://$D/docs/networking-model.html}", "oseb": "https://$D/docs.html" } }
 EOF
-    bash "$SCRIPT_DIR/proxy.sh" template lean --domain "$D" --topology swarm >/dev/null || die "proxy template failed"
+    local pargs=(); logins_on_lean && pargs=(--auth keycloak)
+    bash "$SCRIPT_DIR/proxy.sh" template lean --domain "$D" --topology swarm "${pargs[@]}" >/dev/null || die "proxy template failed"
     mkdir -p "$GEN/debs" "$GEN/apt" "$GEN/certbot-www" "$GEN/certs/edge"
     log_success "configs written: .env.lean, prf/pol-hub runtime configs, nginx.lean.conf"
+    if logins_on_lean; then
+        log_success "logins: Keycloak at https://auth.$D (realm Polari) — admin credentials in $SUITE/pol-keycloak/keycloak-admin.env and the vault (sudo pol security vault show)"
+        [ "$POL_PROD_DEMO_USERS" = on ] && log_warn "demonstration accounts ON: demo-admin / demo-journalist / demo-scientist / demo-viewer, shared password in $GEN/demo-users.env — answer POL_PROD_DEMO_USERS=off for anything real"
+    fi
 }
 stage_cert() {
     load_answers
@@ -665,6 +782,9 @@ render_stack() {
     load_answers
     set -a; source "$(env_file)"; set +a
     local extra=(); [ "$(profile)" = full ] && [ "$POL_PROD_ODOO" = on ] && extra+=(--with-profile odoo)
+    # swarm has no profiles: `docker compose config` keeps a profile-gated service only when COMPOSE_PROFILES
+    # selects it (.env.lean carries COMPOSE_PROFILES=logins), and stackify keeps it only when NAMED here.
+    logins_on_lean && extra+=(--with-profile logins)
     # multi-computer: with a registry every node can pull, so services may spread
     # (pol allocate / POL_STACK_CONSTRAINTS place them); with LOCAL builds only the
     # manager has the images — pin every service there or tasks fail elsewhere.
@@ -673,6 +793,7 @@ render_stack() {
     fi
     for c in ${POL_STACK_CONSTRAINTS:-}; do extra+=(--constraint "$c"); done
     local pargs=""; [ "$(profile)" = full ] && [ "$POL_PROD_ODOO" = on ] && pargs="--profile odoo"
+    logins_on_lean && pargs="$pargs --profile logins"
     docker compose -f "$(compose_file)" --env-file "$(env_file)" $pargs config 2>"$GEN/compose-config.err" \
         | python3 "$SUITE/pol-build/tools/stackify.py" "${extra[@]}" > "$GEN/stack-$(role).yml" || { cat "$GEN/compose-config.err" >&2; die "stack render failed"; }
     [ -s "$GEN/stack-$(role).yml" ] || { cat "$GEN/compose-config.err" >&2; die "stack render produced nothing"; }
@@ -693,6 +814,15 @@ build_or_pull_images() {
         build_prf_images
     fi
     build_hub
+    build_logins_images
+}
+build_logins_images() {  # the lean stack's `logins` pair, built from the tree (there is no published lean-tagged pol-keycloak)
+    logins_on_lean || return 0
+    [ -z "$POL_PROD_IMAGE_REPO" ] || { log_info "logins images come from $POL_PROD_IMAGE_REPO (pulled with the rest)"; return 0; }
+    ensure_kc_certs
+    local tag="$POL_PROD_IMAGE_TAG"
+    docker build -q -t "pol-mariadb:$tag" "$SUITE/pol-mariadb" >/dev/null && log_success "image pol-mariadb:$tag built (Keycloak's database)" || die "pol-mariadb image did not build"
+    docker build -q -t "pol-keycloak:$tag" -f "$SUITE/pol-keycloak/Dockerfile.pol-kc" "$SUITE/pol-keycloak" >/dev/null && log_success "image pol-keycloak:$tag built (realm imports + client configuration + demo accounts)" || die "pol-keycloak image did not build"
 }
 prf_build_spec() {  # service → "context<TAB>dockerfile<TAB>arg=val …" from polari-rf-node/docker-compose.staging-nip.yml
     python3 - "$SUITE/polari-rf-node/docker-compose.staging-nip.yml" "$1" <<'PY'
@@ -786,6 +916,16 @@ pol-file-store/client.env|MINIO_ACCESS_KEY|MinIO client access key
 pol-file-store/client.env|MINIO_SECRET_KEY|MinIO client secret key
 LIST
     [ "$n" -gt 0 ] && log_success "$n generated credential(s) recorded in the vault ($VAULT_FILE) — sudo pol security vault show" || true
+}
+vault_lean_logins() {  # the lean+logins credentials into the vault: the admin file (via vault_generated) + the two DB passwords living in .env.lean
+    logins_on_lean || return 0
+    vault_generated
+    local sec="polari ${POL_PROD_DOMAIN:-local}" k v
+    for k in KC_DB_PASSWORD MARIADB_ROOT_PASSWORD; do
+        v=$(prev_env_lean "$k"); [ -n "$v" ] && vault_put "$sec" "$k" "$v" "lean profile: Keycloak's own MariaDB (from .generated/.env.lean)" || true
+    done
+    [ "$POL_PROD_DEMO_USERS" = on ] && { v=$(grep -s '^DEMO_USER_PASSWORD=' "$GEN/demo-users.env" | cut -d= -f2-); [ -n "$v" ] && vault_put "$sec" "DEMO_USER_PASSWORD" "$v" "shared password of the DEMONSTRATION accounts (demo-*) — demonstration stacks only" || true; }
+    return 0
 }
 vault_prompt() {  # the end-of-apply choice (TUI only; unattended keeps)
     vault_exists || return 0
@@ -905,7 +1045,7 @@ do_apply() {
     pol_box "pol prod — apply ($(profile) profile)"
     save_answers   # what applied is what later verbs (status/cert/down) act on
     do_check || log_warn "preflight reported problems — continuing (fix and re-run apply; every step is idempotent)"
-    if [ "$(profile)" = full ]; then security_setup; write_configs_full; else write_configs; fi
+    if [ "$(profile)" = full ]; then security_setup; write_configs_full; else write_configs; vault_lean_logins; fi
     stage_cert; stage_debs; build_or_pull_images; render_stack; deploy_stack
     # the DAC + MAC controls for this profile (os-security): render always; apply only when asked (root, changes the host)
     local scn; scn=$([ "$(profile)" = full ] && echo swarm-full || echo swarm-lean)

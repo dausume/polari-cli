@@ -20,8 +20,10 @@ ${BOLD}COMMANDS${NC}   (--project suite|node|all, default all)
   ${CYAN}mode${NC}        which nginx world THIS machine is in: isle (the isle
               agent's nginx, generated from its registry — untouched by
               the suite) or suite (pol-proxy, one template per env)
-  ${CYAN}template${NC} <env> [--domain D] [--topology single|swarm]
+  ${CYAN}template${NC} <env> [--domain D] [--topology single|swarm] [--auth keycloak]
               render pol-proxy/nginx.<env>.conf.template (staging|prod|lean)
+              --auth keycloak (lean only) adds the auth.<domain> server block
+              that fronts pol-keycloak — omit it and the marker is dropped
               into .generated/nginx.<env>.conf — the file the compose AND
               the swarm stack use. Refuses static upstream{} blocks: the
               one config must boot before every service exists (swarm)
@@ -97,8 +99,8 @@ template_render() {
     # docker network either way, resolved lazily (set $up_x; proxy_pass $up_x)
     # so nginx boots before every task runs. What differs per topology is
     # not nginx but the stack: ports mode + placement (pol prod / pol swarm).
-    local env=$1 domain="" topology="${POL_PROXY_TOPOLOGY:-single}"; shift
-    while [ $# -gt 0 ]; do case "$1" in --domain) domain="$2"; shift 2 ;; --topology) topology="$2"; shift 2 ;; *) shift ;; esac; done
+    local env=$1 domain="" topology="${POL_PROXY_TOPOLOGY:-single}" auth="${POL_PROXY_AUTH:-off}"; shift
+    while [ $# -gt 0 ]; do case "$1" in --domain) domain="$2"; shift 2 ;; --topology) topology="$2"; shift 2 ;; --auth) auth="$2"; shift 2 ;; *) shift ;; esac; done
     local tpl="$POL_SUITE_ROOT/pol-proxy/nginx.$env.conf.template" out="$POL_SUITE_ROOT/.generated/nginx.$env.conf"
     [ -f "$tpl" ] || die "no template for env '$env' (staging|prod|lean)"
     if grep -qE '^\s*upstream [a-z0-9-]+ \{' "$tpl"; then
@@ -110,10 +112,48 @@ template_render() {
     if [ -s "$POL_SUITE_ROOT/.generated/certs/edge/fullchain.pem" ] && openssl x509 -in "$POL_SUITE_ROOT/.generated/certs/edge/fullchain.pem" -noout -issuer 2>/dev/null | grep -qiE "let's encrypt|ISRG|R1[0-9]|E[0-9]|ZeroSSL|DigiCert|Sectigo|GlobalSign|Google Trust"; then
         hsts='add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;'
     fi
+    # ---- the logins edge (lean only): auth.<domain> -> pol-keycloak ----------------------------------
+    # PLAIN HTTP over the encrypted overlay (the full profile's mTLS hop to :8443 needs certificates the
+    # lean path never generates). Lazy variable upstream + resolver, so nginx boots before Keycloak exists.
+    # Keycloak's cookies and its admin console's headers are large — the stock 4k/8k buffers give 502s.
+    local authblock=""
+    if [ "$env" = lean ] && [ "$auth" = keycloak ]; then
+        authblock=$(cat <<'AUTHEOF'
+    # ---- Keycloak (logins) ---------------------------------------------------
+    server {
+        listen 443 ssl;
+        http2 on;
+        server_name auth.__PROD_DOMAIN__;
+        ssl_certificate     /etc/nginx/certs/pol-proxy.crt;
+        ssl_certificate_key /etc/nginx/certs/pol-proxy.key;
+        location / {
+            set $up_keycloak http://pol-keycloak:8080;   # resolved lazily (swarm DNS appears when the task runs)
+            proxy_pass $up_keycloak;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_set_header X-Forwarded-Host $host;
+            proxy_set_header X-Forwarded-Port 443;
+            # Keycloak's session cookies and console headers overflow the stock buffers
+            proxy_buffer_size 128k;
+            proxy_buffers 4 256k;
+            proxy_busy_buffers_size 256k;
+            proxy_read_timeout 120s;
+        }
+    }
+AUTHEOF
+)
+    fi
     case "$env" in
         staging) local ip="${LOCAL_IP:-$(lan_ip)}"; sed -e "s/\${LOCAL_IP}/$ip/g" -e "s|\${HSTS_HEADER}|$hsts|" "$tpl" > "$out"; log_success "rendered $out (LOCAL_IP=$ip, topology $topology)" ;;
         prod|lean) [ -n "$domain" ] || domain="${PROD_DOMAIN:-${POL_PROD_DOMAIN:-}}"; [ -n "$domain" ] || die "--domain <public domain> (or PROD_DOMAIN) required for $env"
-                   sed -e "s/\${PROD_DOMAIN}/$domain/g" -e "s|\${HSTS_HEADER}|$hsts|" "$tpl" > "$out"; log_success "rendered $out (domain $domain, topology $topology, ${hsts:0:9})" ;;
+                   [ "$env" = lean ] && [ "$auth" = keycloak ] && authblock=${authblock//__PROD_DOMAIN__/$domain}
+                   local blockfile; blockfile=$(mktemp); printf '%s\n' "$authblock" > "$blockfile"
+                   sed -e "s/\${PROD_DOMAIN}/$domain/g" -e "s|\${HSTS_HEADER}|$hsts|" \
+                       -e "/\${AUTH_SERVER_BLOCK}/r $blockfile" -e "/\${AUTH_SERVER_BLOCK}/d" "$tpl" > "$out"
+                   rm -f "$blockfile"
+                   log_success "rendered $out (domain $domain, topology $topology, logins $auth, ${hsts:0:9})" ;;
     esac
     [ "$topology" = swarm ] && log_info "swarm: the stack pins the proxy to the manager with host-mode 80/443 (pol prod); every other service is reached over the overlay by name"
 }
