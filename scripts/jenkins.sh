@@ -41,6 +41,20 @@ ${BOLD}pol jenkins${NC} — the host-tier build + publish pipeline (polari-jenki
     stages                            CI_ISLE_STAGES — what each throwaway isle tests, and so what may
                                       ever be released (pol jenkins setup --step stages to change it)
 
+  ${CYAN}wiping between stages, and proving it${NC} — deploy a new isle each time (ci-10)
+    isle uninstall [--stage N] [--json <f>]
+                                      run the PRODUCT'S OWN \`isle uninstall --everything\` inside the
+                                      guest as a TEST, then its verify + the hand-back proof.
+                                      clean|dirty|failed|skipped — a dirty hand-back blocks the release.
+    isle wipe [--dry-run]             remove everything this pipeline made on the target and NOTHING
+                                      else (the \`polari-ci-\` tag). It prints both lists: what it
+                                      removed, and what it found and left alone.
+    isle leakcheck baseline           the reading every stage is diffed against (before stage 1)
+    isle leakcheck check [--stage N]  after a \`down\`: anything NEW that survived the wipe is a LEAK,
+                                      and so is RAM or disk that did not come back. exit 5 = leaked.
+    isle leakcheck report [--stage N] the table: kind | item | baseline | now | verdict
+    isle leakcheck snapshot           the raw reading of the target, to stdout, writing nothing
+
   ${CYAN}the offline cache${NC} — build once, reuse (ci-9)
     cache status                      what is cached, per area, against CI_CACHE_MAX_GB, and the hit
                                       rate of the last run (pool/<version>/cache-report.json)
@@ -105,7 +119,11 @@ case "${1:-help}" in
     cache)   shift; jd_cache "$@" ;;
     core-artifacts) shift; jd_export_for_compose; bash "$J/isle/core-artifacts.sh" "${1:-status}" "${2:-}" ;;
     preflight) shift; jd_export_for_compose; bash "$J/isle/preflight.sh" "$@" ;;
-    isle)    shift; jd_export_for_compose; bash "$J/isle/throwaway.sh" "${1:-status}" ;;
+    isle)    shift; jd_export_for_compose
+             # ci-10: leakcheck is its own script (it reads the target and never
+             # changes it); everything else is the throwaway VM's own verbs.
+             if [ "${1:-}" = leakcheck ]; then shift; exec bash "$J/isle/leakcheck.sh" "${1:-report}" "${@:2}"; fi
+             bash "$J/isle/throwaway.sh" "${1:-status}" "${@:2}" ;;
 
     # ---- configuration + secrets
     doctor)  shift; bash "$J/doctor.sh" "$@" ;;
