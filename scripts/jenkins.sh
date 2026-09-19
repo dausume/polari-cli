@@ -41,6 +41,17 @@ ${BOLD}pol jenkins${NC} — the host-tier build + publish pipeline (polari-jenki
     stages                            CI_ISLE_STAGES — what each throwaway isle tests, and so what may
                                       ever be released (pol jenkins setup --step stages to change it)
 
+  ${CYAN}the offline cache${NC} — build once, reuse (ci-9)
+    cache status                      what is cached, per area, against CI_CACHE_MAX_GB, and the hit
+                                      rate of the last run (pool/<version>/cache-report.json)
+    cache prune [--older-than N]      the ONE deleter: entries nothing has used for > N days
+                                      (default 30). retention.sh prune never touches the cache.
+    cache proxies up|down|status      TIER TWO, opt-in (CI_CACHE_PROXIES=on): a docker pull-through
+                                      registry + devpi + verdaccio + apt-cacher-ng on 127.0.0.1.
+                                      A pipeline never starts them; it uses them only if they answer.
+    core-artifacts resolve|fetch      app mode: which official release the core comes from, and pull
+                                      its debs once into the cache (CI_CORE_SOURCE=release:<tag>)
+
   ${CYAN}the settings, in Polari${NC} — the cicd app owns them; device.env follows (ci-8)
     sync pull                         rewrite device.env from the core (\$CI_CORE_URL/api/cicd). Never
                                       fatal: no answer = keep this device.env and say so
@@ -90,6 +101,9 @@ case "${1:-help}" in
     stages)  jd_source; stages_print; echo "CI_ISLE_STAGES=$CI_ISLE_STAGES   (change it: pol jenkins setup --step stages)" ;;
     target)  shift; jd_target "${1:-}" "${2:-}" ;;
     sync)    shift; jd_sync "${1:-status}" ;;   # ci-8: Polari holds these settings; device.env follows
+    # ---- ci-9: the offline-first cache, and app mode's pulled core
+    cache)   shift; jd_cache "$@" ;;
+    core-artifacts) shift; jd_export_for_compose; bash "$J/isle/core-artifacts.sh" "${1:-status}" "${2:-}" ;;
     preflight) shift; jd_export_for_compose; bash "$J/isle/preflight.sh" "$@" ;;
     isle)    shift; jd_export_for_compose; bash "$J/isle/throwaway.sh" "${1:-status}" ;;
 

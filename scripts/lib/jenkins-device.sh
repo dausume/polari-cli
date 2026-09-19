@@ -53,6 +53,29 @@ jd_sync() {
     esac
 }
 
+# ---------------------------------------------------------------- the cache
+# ci-9: the offline-first cache — one directory the builders read first, and
+# (opt-in) four caching proxies beside the controller. `status` and `proxies
+# status` read; `prune` is the ONE deleter and it removes only entries nothing
+# has used for longer than the knob.
+jd_cache() {
+    jd_source
+    case "${1:-status}" in
+        status)  bash "$J/cache.sh" status ;;
+        prune)   shift; bash "$J/cache.sh" prune "$@" ;;
+        proxies) shift; bash "$J/cache-proxies.sh" "${1:-status}" ;;
+        dir)     shift; bash "$J/cache.sh" dir "${1:-wheels}" ;;
+        report)  shift
+                 local pool ver f
+                 pool="${POLARI_POOL:-$J/pool}"
+                 ver="${1:-$(ls -1 "$pool" 2>/dev/null | grep -E '^[0-9]{4}\.[0-9]{2}\.[0-9]{2}' | sort -V | tail -1)}"
+                 f="$pool/$ver/cache-report.json"
+                 [ -n "$ver" ] && [ -f "$f" ] || die "no cache report yet (looked for $f) — a build writes one per version"
+                 echo "cache report — pool version $ver"; bash "$J/cache.sh" report-show "$f" ;;
+        *)       die "pol jenkins cache status | prune [--older-than DAYS] | proxies up|down|status | dir <area> | report [version]" ;;
+    esac
+}
+
 # ------------------------------------------------------------------- setup
 # `pol jenkins setup` — THE entry point (ci-7b). The walkthrough itself
 # lives in polari-jenkins/setup.sh + setup/steps/*.sh, beside the doctor and

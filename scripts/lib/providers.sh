@@ -104,13 +104,20 @@ for r in rels if isinstance(rels, list) else []:
         print("%s\t%d deb(s), %s" % (r.get("tag_name"), len(debs), (r.get("published_at") or "")[:10])); n += 1
     if n >= 8: break'
 }
-release_deb_urls() {  # owner/repo tag → download URLs of the .deb assets
+release_asset_urls() {  # owner/repo tag [name-suffix] → download URLs of matching release assets
+    # ONE reader for "what does this release carry": `pol prod` asks for .deb,
+    # ci-9's core-artifacts.sh asks for .deb and for SHA256SUMS. An empty suffix
+    # lists every asset. Unauthenticated GitHub API (60 calls/h on a public repo).
     curl -fsSL --max-time 15 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$1/releases/tags/$2" 2>/dev/null | python3 -c '
 import sys, json
+suffix = sys.argv[1] if len(sys.argv) > 1 else ""
 try: r = json.load(sys.stdin)
 except Exception: r = {}
 for a in r.get("assets", []):
-    if a.get("name", "").endswith(".deb"): print(a["browser_download_url"])'
+    if not suffix or a.get("name", "").endswith(suffix): print(a["browser_download_url"])' "${3:-}"
+}
+release_deb_urls() {  # owner/repo tag → download URLs of the .deb assets
+    release_asset_urls "$1" "$2" .deb
 }
 
 # ---- tags a registry actually has for an image (public images, anonymous) ----------
