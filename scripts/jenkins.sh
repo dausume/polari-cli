@@ -41,6 +41,12 @@ ${BOLD}pol jenkins${NC} — the host-tier build + publish pipeline (polari-jenki
     stages                            CI_ISLE_STAGES — what each throwaway isle tests, and so what may
                                       ever be released (pol jenkins setup --step stages to change it)
 
+  ${CYAN}the settings, in Polari${NC} — the cicd app owns them; device.env follows (ci-8)
+    sync pull                         rewrite device.env from the core (\$CI_CORE_URL/api/cicd). Never
+                                      fatal: no answer = keep this device.env and say so
+    sync push                         report readiness, the routes armed and secret PRESENCE back
+    sync status                       what it would do, and whether the core answers
+
   ${CYAN}configuration + secrets${NC}
     doctor [--strict]                 (B) what is set up, what is not, and what to do about it
     init-device                       (C) create the polari-ci user + /etc/polari-jenkins/secrets (needs sudo)
@@ -83,6 +89,7 @@ case "${1:-help}" in
     config)  jd_config ;;
     stages)  jd_source; stages_print; echo "CI_ISLE_STAGES=$CI_ISLE_STAGES   (change it: pol jenkins setup --step stages)" ;;
     target)  shift; jd_target "${1:-}" "${2:-}" ;;
+    sync)    shift; jd_sync "${1:-status}" ;;   # ci-8: Polari holds these settings; device.env follows
     preflight) shift; jd_export_for_compose; bash "$J/isle/preflight.sh" "$@" ;;
     isle)    shift; jd_export_for_compose; bash "$J/isle/throwaway.sh" "${1:-status}" ;;
 

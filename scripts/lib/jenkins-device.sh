@@ -40,6 +40,19 @@ jd_set() { jd_source; device_env_set "$1" "${2:-}"; }
 # the jobs) sees CI_ROUTES / CI_EXECUTORS / the isle target.
 jd_export_for_compose() { jd_source; device_export; }
 
+# --------------------------------------------------------------------- sync
+# ci-8: the `cicd` Polari app owns these settings; device.env is the fallback.
+# `pull` before reading (the top of every Jenkinsfile, and `pol jenkins doctor`),
+# `push` after a change (`pol jenkins setup`). Neither is ever fatal.
+jd_sync() {
+    case "${1:-status}" in
+        pull)   bash "$J/cicd-sync.sh" pull ;;
+        push)   bash "$J/cicd-sync.sh" push; bash "$J/cicd-sync.sh" push-secrets ;;
+        status) bash "$J/cicd-sync.sh" status ;;
+        *)      die "pol jenkins sync pull|push|status" ;;
+    esac
+}
+
 # ------------------------------------------------------------------- setup
 # `pol jenkins setup` — THE entry point (ci-7b). The walkthrough itself
 # lives in polari-jenkins/setup.sh + setup/steps/*.sh, beside the doctor and
