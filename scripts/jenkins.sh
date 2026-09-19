@@ -36,6 +36,25 @@ ${BOLD}pol jenkins${NC} — the host-tier build + publish pipeline (polari-jenki
     verbs                             the ALLOWLIST any front end runs through (shell-verbs.json)
     setup --step <name>               re-run one step: role checkout network secrets isle stages controller
 
+  ${CYAN}THE BRANCH MODEL${NC} — dev iterate · test decide · main release (ci-12)
+    promote test [--dry-run]          fast-forward EVERY repo in the forest from dev to test and push,
+                                      innermost-first, ff-only. It refuses — naming the repo — if any
+                                      repo is not fast-forwardable, and stops there so nothing outside
+                                      it has moved. Pushing to test kicks off polari-test: wipe, build,
+                                      scan, test, ONE verdict.
+    promote main [--dry-run]          the same, test → main — but it REFUSES unless the superproject sha
+         [--force-untested]           on test has a PASSED test verdict. --force-untested overrides it
+                                      with a line naming the sha and the verdict it is overriding.
+    promote status                    where dev, test and main are, and each one's verdict
+    test-status [<sha>]               the verdict for a sha (default: the tip of test) — what was built,
+                                      what the selftests said, what the isle stages said, and the
+                                      advisory scan counts that changed none of it
+    queue [--json]                    both poll queues: pending / newest sha / since / running.
+                                      ONE item deep, latest wins — a newer change REPLACES the pending
+                                      one, nothing ever queues behind it, and the run always takes the
+                                      branch TIP rather than the sha that triggered it.
+    scan …                            the advisory scanners — see \`pol scan help\`
+
   ${CYAN}the pipeline device${NC} — where the throwaway isle goes (ci-7)
     config                            print the device configuration + the testing stages in force
     target local                      the throwaway isle VM is created on THIS machine
@@ -112,6 +131,14 @@ case "${1:-help}" in
              C=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${JENKINS_PORT:-8080}/login" || true); echo "UI: HTTP $C"
              jd_setup_line
              echo; jd_secrets_status; echo; bash "$J/doctor.sh" || true ;;
+
+    # ---- ci-12: the branch model. promote.sh owns the gate and the marker;
+    # polari-cli/shells/push-all-dev.sh owns the forest sweep (ONE sweep, given a
+    # --branch / --promote-from parameter rather than copied).
+    promote) shift; jd_export_for_compose; exec bash "$J/promote.sh" "${1:-status}" "${@:2}" ;;
+    test-status) shift; jd_export_for_compose; jd_test_status "${1:-}" ;;
+    queue)   shift; jd_export_for_compose; exec bash "$J/quiet.sh" queue "${1:-}" ;;
+    scan)    shift; jd_export_for_compose; exec bash "$J/scan/scan.sh" "$@" ;;
 
     # ---- the pipeline device (ci-7)
     setup|guide) shift; jd_setup "$@" ;;     # `guide` is the old name, kept as an alias

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# push-all-dev.sh — push every repo's dev branch, innermost-first,
+# push-all-dev.sh — push every repo's branch, innermost-first,
 # with the safety checks a submodule forest needs.
 #
 #   ./push-all-dev.sh              dry run: report what WOULD push
@@ -15,12 +15,30 @@
 #                                 with --push to actually push it;
 #                                 alone it dry-runs the isle side too.
 #
+# ci-12 — THE BRANCH MODEL (his ruling 2026-09-19: dev → test → main).
+# ONE sweep, parameterised; there is no second copy of this walk.
+#
+#   --branch <b>                   the branch being published (default dev)
+#   --promote-from <src>           PROMOTION: fast-forward <branch> to
+#                                  origin/<src> in every repo, innermost-first,
+#                                  and push it. FF-ONLY: a repo whose <branch>
+#                                  is not a fast-forward of origin/<src> stops
+#                                  the sweep and is NAMED. The working tree is
+#                                  never switched — `git fetch . <src>:<branch>`
+#                                  moves the ref, so a promotion can run while
+#                                  the checkout sits on dev.
+#   --summary-json <path>          write {branch, from, repos:{repo: sha}} —
+#                                  the promotion marker polari-jenkins reads
+#
+# A promotion reads origin/<src>, not the local <src>: promoting what is
+# PUBLISHED is the only thing a poller on another machine can ever see.
+#
 # Env: ISLE_HOST (default isle-core), ISLE_REPO (default ~/Isle-Mesh).
 #
 # Checks per repo, before anything pushes:
-#   - repo is ON dev with a CLEAN tree (no silent leftovers)
+#   - CLEAN tree (no silent leftovers); on <branch> when not promoting
 #   - superproject submodule pointers all resolve to commits
-#     CONTAINED IN that submodule's dev (pointer coherence — a
+#     CONTAINED IN that submodule's branch (pointer coherence — a
 #     pushed superproject must never reference an unpushed SHA)
 # The dry run prints ahead-counts so the push is a decision made
 # on numbers, not vibes.
@@ -50,13 +68,25 @@ REPOS=(
 DO_PUSH=0
 WITH_ISLE=0
 SKIP_MODULES=0
-for arg in "$@"; do
-  case "$arg" in
+BRANCH=dev          # ci-12: the branch being published
+PROMOTE_FROM=""     # ci-12: ff <BRANCH> to origin/<PROMOTE_FROM> first
+SUMMARY_JSON=""     # ci-12: the promotion marker polari-jenkins reads
+while [ $# -gt 0 ]; do
+  case "$1" in
     --push) DO_PUSH=1 ;;
     --with-isle) WITH_ISLE=1 ;;
     --skip-modules) SKIP_MODULES=1 ;;
+    --branch) BRANCH="${2:-dev}"; shift ;;
+    --promote-from) PROMOTE_FROM="${2:-}"; shift ;;
+    --summary-json) SUMMARY_JSON="${2:-}"; shift ;;
+    --help|-h) sed -n '2,45p' "${BASH_SOURCE[0]}"; exit 0 ;;
   esac
+  shift
 done
+[ -n "$PROMOTE_FROM" ] && SKIP_MODULES=1   # a promotion republishes no module subtree: the
+                                           # polari-module-* repos follow polari-framework's
+                                           # own branch model, not the suite's promotion.
+declare -A PROMOTED_SHA=()
 ISLE_HOST="${ISLE_HOST:-isle-core}"
 ISLE_REPO="${ISLE_REPO:-Isle-Mesh}"   # relative to the SSH login home
 
@@ -143,7 +173,7 @@ PYEOF
 }
 
 find_artifacts() {
-  git -C "$1" ls-tree -r -l HEAD 2>/dev/null \
+  git -C "$1" ls-tree -r -l "${2:-HEAD}" 2>/dev/null \
     | awk -v max="$ARTIFACT_MAX_BYTES" '$4 ~ /^[0-9]+$/ && $4 > max {print $4, $5}' \
     | grep -E "$ARTIFACT_RE" \
     | grep -vE "$ARTIFACT_ALLOW_RE" || true
@@ -151,7 +181,7 @@ find_artifacts() {
 
 check_artifacts() {
   local path="$1" found
-  found=$(find_artifacts "$path")
+  found=$(find_artifacts "$path" "${2:-HEAD}")
   [ -z "$found" ] && return 0
   fail "build artifacts tracked in git (>$((ARTIFACT_MAX_BYTES / 1024))KB) — refusing to push:"
   printf '%s\n' "$found" | while read -r size file; do
@@ -162,30 +192,75 @@ check_artifacts() {
   return 1
 }
 
+# ci-12 — PROMOTION, ff-only, without touching the working tree.
+# `git fetch . <src>:<dst>` updates a ref that is NOT checked out and refuses
+# anything but a fast-forward unless the refspec is forced — which is exactly
+# the rule his model wants: "refuse if any repo is not ff-able and say which".
+promote_repo() {
+  local rel="$1" path="$SUITE/$1" src="origin/$PROMOTE_FROM" head behind
+  git -C "$path" fetch -q origin "$PROMOTE_FROM" 2>/dev/null || {
+    fail "cannot fetch origin/$PROMOTE_FROM — is the branch published?"; return 1; }
+  git -C "$path" fetch -q origin "$BRANCH" 2>/dev/null || true
+  head=$(git -C "$path" rev-parse "$src" 2>/dev/null) || {
+    fail "no $src in this repo — promote $PROMOTE_FROM first"; return 1; }
+  # already there?
+  if [ "$(git -C "$path" rev-parse "refs/heads/$BRANCH" 2>/dev/null || echo none)" = "$head" ] \
+     && [ "$(git -C "$path" rev-parse "origin/$BRANCH" 2>/dev/null || echo none)" = "$head" ]; then
+    ok "$BRANCH already == $src (${head:0:8}) — nothing to promote"
+    PROMOTED_SHA["$rel"]="$head"
+    return 0
+  fi
+  # ff-ability: the existing <branch> (local or remote) must be an ANCESTOR of src
+  local existing=""
+  existing=$(git -C "$path" rev-parse "refs/heads/$BRANCH" 2>/dev/null \
+             || git -C "$path" rev-parse "origin/$BRANCH" 2>/dev/null || true)
+  if [ -n "$existing" ] && ! git -C "$path" merge-base --is-ancestor "$existing" "$head"; then
+    behind=$(git -C "$path" rev-list --count "$head..$existing" 2>/dev/null || echo '?')
+    fail "NOT fast-forwardable: $BRANCH (${existing:0:8}) has $behind commit(s) that $PROMOTE_FROM does not"
+    fail "    this repo must be reconciled by hand — the promotion stops here, innermost-first, so"
+    fail "    nothing outside it has moved"
+    return 1
+  fi
+  if ! check_artifacts "$path" "$head"; then return 1; fi
+  if [ $DO_PUSH -eq 1 ]; then
+    git -C "$path" fetch -q . "$PROMOTE_FROM:$BRANCH" 2>/dev/null \
+      || git -C "$path" fetch -q origin "$PROMOTE_FROM:$BRANCH" || {
+        fail "the local ref $BRANCH would not fast-forward to ${head:0:8}"; return 1; }
+  fi
+  PROMOTED_SHA["$rel"]="$head"
+  ok "$BRANCH → ${head:0:8} (ff from $PROMOTE_FROM)$([ $DO_PUSH -eq 1 ] || echo '  [dry run]')"
+  return 0
+}
+
 check_repo() {
   local rel="$1" path="$SUITE/$1"
   local branch dirty ahead
-  branch=$(git -C "$path" branch --show-current)
-  if [ "$branch" != "dev" ]; then
-    fail "NOT on dev (on '$branch') — checkout/ff dev first"
-    errors=$((errors + 1))
-    return 1
-  fi
   dirty=$(git -C "$path" status --porcelain | wc -l)
   if [ "$dirty" -ne 0 ]; then
     fail "tree not clean ($dirty entries) — commit or stash first"
     errors=$((errors + 1))
     return 1
   fi
-  ahead=$(git -C "$path" rev-list --count origin/dev..dev \
+  if [ -n "$PROMOTE_FROM" ]; then
+    # a promotion never switches the checkout: the ref moves, the worktree does not.
+    if ! promote_repo "$rel"; then errors=$((errors + 1)); return 1; fi
+    return 0
+  fi
+  branch=$(git -C "$path" branch --show-current)
+  if [ "$branch" != "$BRANCH" ]; then
+    fail "NOT on $BRANCH (on '$branch') — checkout/ff $BRANCH first"
+    errors=$((errors + 1))
+    return 1
+  fi
+  ahead=$(git -C "$path" rev-list --count "origin/$BRANCH..$BRANCH" \
           2>/dev/null || echo '?')
-  ok "on dev, clean, $ahead commit(s) ahead of origin/dev"
+  ok "on $BRANCH, clean, $ahead commit(s) ahead of origin/$BRANCH"
   if ! check_artifacts "$path"; then
     errors=$((errors + 1))
     return 1
   fi
   # pointer coherence: every submodule pointer must be contained
-  # in that submodule's dev. (Process substitution, not a pipe —
+  # in that submodule's $BRANCH. (Process substitution, not a pipe —
   # a piped while runs in a subshell and its failure exit would
   # be silently lost.)
   local bad=0 sha sub _rest
@@ -200,13 +275,13 @@ check_repo() {
       continue
     fi
     if ! git -C "$path/$sub" merge-base --is-ancestor \
-         "$sha" dev 2>/dev/null; then
+         "$sha" "$BRANCH" 2>/dev/null; then
       # historic pointers may live on OTHER published branches — that
-      # is still public/resolvable, just not this repo's dev tip.
+      # is still public/resolvable, just not this repo's $BRANCH tip.
       if [ -n "$(git -C "$path/$sub" branch -r --contains "$sha" 2>/dev/null | head -1)" ]; then
-        warn "pointer $sub@${sha:0:8} is on a non-dev origin branch (published — ok)"
+        warn "pointer $sub@${sha:0:8} is on a non-$BRANCH origin branch (published — ok)"
       else
-        fail "pointer $sub@${sha:0:8} NOT contained in $sub's dev or any origin branch"
+        fail "pointer $sub@${sha:0:8} NOT contained in $sub's $BRANCH or any origin branch"
         bad=1
       fi
     fi
@@ -218,7 +293,7 @@ check_repo() {
   return 0
 }
 
-bold "== dev push sweep ($([ $DO_PUSH -eq 1 ] \
+bold "== ${PROMOTE_FROM:+promotion $PROMOTE_FROM → }$BRANCH push sweep ($([ $DO_PUSH -eq 1 ] \
      && echo PUSHING || echo DRY RUN)) =="
 
 # ---- Isle-Mesh FIRST (innermost-first now applies to it too) -----
@@ -226,26 +301,26 @@ bold "== dev push sweep ($([ $DO_PUSH -eq 1 ] \
 # repo must publish BEFORE the suite does — same rule as every other
 # submodule, just pushed over SSH from its home box.
 if [ $WITH_ISLE -eq 1 ]; then
-  bold "Isle-Mesh @ $ISLE_HOST:~/$ISLE_REPO (dev) — pushes before the suite"
+  bold "Isle-Mesh @ $ISLE_HOST:~/$ISLE_REPO ($BRANCH) — pushes before the suite"
   isle_state=$(ssh "$ISLE_HOST" "cd \"$ISLE_REPO\" 2>/dev/null && \
     printf '%s|%s|%s' \
       \"\$(git branch --show-current)\" \
       \"\$(git status --porcelain | wc -l | tr -d ' ')\" \
-      \"\$(git rev-list --count origin/dev..dev 2>/dev/null || echo new)\"" \
+      \"\$(git rev-list --count origin/$BRANCH..$BRANCH 2>/dev/null || echo new)\"" \
     2>/dev/null)
   ibranch="${isle_state%%|*}"; irest="${isle_state#*|}"
   idirty="${irest%%|*}"; iahead="${irest#*|}"
   if [ -z "$isle_state" ]; then
     fail "could not reach $ISLE_HOST or ~/$ISLE_REPO"
     exit 1
-  elif [ "$ibranch" != "dev" ]; then
-    fail "isle-core NOT on dev (on '$ibranch') — fix there first"
+  elif [ "$ibranch" != "$BRANCH" ]; then
+    fail "isle-core NOT on $BRANCH (on '$ibranch') — fix there first"
     exit 1
   elif [ "$idirty" != "0" ]; then
     fail "isle-core tree not clean ($idirty entries) — commit there first"
     exit 1
   fi
-  ok "on dev, clean, $iahead ahead of origin/dev (new = branch not yet on origin)"
+  ok "on $BRANCH, clean, $iahead ahead of origin/$BRANCH (new = branch not yet on origin)"
   isle_artifacts=$(ssh "$ISLE_HOST" "cd \"$ISLE_REPO\" && \
     git ls-tree -r -l HEAD 2>/dev/null \
     | awk -v max=$ARTIFACT_MAX_BYTES '\$4 ~ /^[0-9]+\$/ && \$4 > max {print \$4, \$5}' \
@@ -259,9 +334,9 @@ if [ $WITH_ISLE -eq 1 ]; then
   fi
   ok "no tracked build artifacts"
   if [ $DO_PUSH -eq 1 ]; then
-    if ssh "$ISLE_HOST" "cd \"$ISLE_REPO\" && git push -u origin dev"; then
+    if ssh "$ISLE_HOST" "cd \"$ISLE_REPO\" && git push -u origin $BRANCH"; then
       ok "pushed (isle-core)"
-      git -C "$SUITE/Isle-Mesh" fetch -q origin dev 2>/dev/null || true
+      git -C "$SUITE/Isle-Mesh" fetch -q origin "$BRANCH" 2>/dev/null || true
     else
       fail "isle-core push FAILED"
       exit 1
@@ -272,21 +347,26 @@ fi
 for rel in "${REPOS[@]}"; do
   bold "$rel"
   if ! check_repo "$rel"; then
+    # ci-12: a PROMOTION stops at the first repo that will not fast-forward.
+    # Innermost-first means nothing outside it has moved yet, so stopping here
+    # leaves the forest coherent; carrying on would publish a superproject
+    # pointer at a submodule branch that never got the commit.
+    [ -z "$PROMOTE_FROM" ] || { fail "promotion STOPPED at $rel — nothing after it was touched"; exit 1; }
     continue
   fi
   # the suite's Isle-Mesh pointer must be PUBLIC before the suite is.
   # Isle-Mesh sits first in REPOS, so by the time "." pushes its
-  # origin/dev already carries the pointer — this check catches a
+  # origin/$BRANCH already carries the pointer — this check catches a
   # sweep that skipped it (or a dry run against a stale origin).
   if [ "$rel" = "." ] && [ -e "$SUITE/Isle-Mesh/.git" ]; then
     isle_ptr=$(git -C "$SUITE" submodule status Isle-Mesh 2>/dev/null \
                | awk '{print $1}' | tr -d '+-')
     if ! git -C "$SUITE/Isle-Mesh" merge-base --is-ancestor \
-         "$isle_ptr" origin/dev 2>/dev/null; then
+         "$isle_ptr" "origin/$BRANCH" 2>/dev/null; then
       if [ $DO_PUSH -eq 0 ]; then
-        warn "suite Isle-Mesh pointer ${isle_ptr:0:8} not on its origin/dev yet — the sweep pushes Isle-Mesh first, so this resolves during --push"
+        warn "suite Isle-Mesh pointer ${isle_ptr:0:8} not on its origin/$BRANCH yet — the sweep pushes Isle-Mesh first, so this resolves during --push"
       else
-        fail "suite Isle-Mesh pointer ${isle_ptr:0:8} is NOT on its origin/dev — did the Isle-Mesh push fail above?"
+        fail "suite Isle-Mesh pointer ${isle_ptr:0:8} is NOT on its origin/$BRANCH — did the Isle-Mesh push fail above?"
         errors=$((errors + 1))
         continue
       fi
@@ -296,7 +376,7 @@ for rel in "${REPOS[@]}"; do
     publish_module_subtrees
   fi
   if [ $DO_PUSH -eq 1 ]; then
-    if git -C "$SUITE/$rel" push origin dev; then
+    if git -C "$SUITE/$rel" push origin "$BRANCH"; then
       ok "pushed"
       if [ "$rel" = "polari-rf-node/polari-framework" ] && [ $SKIP_MODULES -eq 0 ]; then
         publish_module_subtrees || { fail "module subtree publish failed — stopping"; exit 1; }
@@ -313,6 +393,29 @@ if [ $errors -gt 0 ]; then
   fail "$errors repo(s) not ready — nothing should push until \
 they are"
   exit 1
+fi
+
+# ci-12 — THE PROMOTION MARKER. The superproject is pushed LAST, so the sha set
+# below is the complete, coherent forest state of <branch>. polari-jenkins reads
+# it (pool/promotions/<branch>/<sha>.json) and treats a matching marker as
+# "the promotion is finished" — which is what lets a poller start its quiet
+# window immediately instead of waiting to see whether more commits are coming.
+if [ -n "$SUMMARY_JSON" ]; then
+  mkdir -p "$(dirname "$SUMMARY_JSON")"
+  {
+    printf '{\n  "branch": "%s",\n  "from": "%s",\n  "pushed": %s,\n' \
+           "$BRANCH" "$PROMOTE_FROM" "$([ $DO_PUSH -eq 1 ] && echo true || echo false)"
+    printf '  "at": "%s",\n  "repos": {' "$(date -Is)"
+    sep=""
+    for rel in "${REPOS[@]}"; do
+      sha="${PROMOTED_SHA[$rel]:-$(git -C "$SUITE/$rel" rev-parse "$BRANCH" 2>/dev/null || true)}"
+      [ -n "$sha" ] || continue
+      printf '%s\n    "%s": "%s"' "$sep" "$rel" "$sha"; sep=","
+    done
+    printf '\n  },\n  "superproject": "%s"\n}\n' \
+           "${PROMOTED_SHA[.]:-$(git -C "$SUITE" rev-parse "$BRANCH" 2>/dev/null || true)}"
+  } > "$SUMMARY_JSON"
+  ok "marker: $SUMMARY_JSON"
 fi
 
 [ $DO_PUSH -eq 0 ] \

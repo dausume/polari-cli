@@ -82,7 +82,8 @@ const commands = {
   remote:   { script: 'remote.sh',   desc: 'Remote staging access over WireGuard (init/apply/up/down/status)', aliases: ['wg'] },
   hwmap:    { script: 'hwmap.sh',    desc: 'Hardware map: scan this device (usb/pci/iommu/serial/nics/kvm), push, and ask what can be mapped to a KVM', aliases: ['hw'] },
   project:  { script: 'project.sh',  desc: 'ONE module/app as its own project: init/lint/test/up/build/deploy/update/remove (the Polari Developer loop)', aliases: ['proj'] },
-  jenkins:  { script: 'jenkins.sh',  desc: 'Host-tier build + publish controller (polari-jenkins/): SETUP walkthrough, up/status/doctor/preflight/target/stages/secrets', aliases: ['ci'] },
+  jenkins:  { script: 'jenkins.sh',  desc: 'Host-tier build + publish controller (polari-jenkins/): SETUP walkthrough, the dev\u2192test\u2192main promote/test-status/queue verbs, up/status/doctor/preflight/target/stages/secrets', aliases: ['ci'] },
+  scan:     { script: 'scan.sh',     desc: 'ADVISORY scanners (scn-0): source/deps/images/debs through pinned Trivy + gitleaks + pip-audit + npm audit. Nothing it finds ever gates a build, a test verdict or a release.', aliases: ['scans'] },
   vpn:      { script: 'vpn.sh',      desc: 'Isle VPN (isle-vpn: Isle Link / Isle Bridge) — mirror, proposals, conf render, qr, demo', aliases: ['islevpn'] },
 };
 

@@ -148,3 +148,38 @@ jd_secrets_rm() {
     else shred -u "$f" 2>/dev/null || rm -f "$f"; fi
     log_success "removed $rel — the routes that needed it go DRY again (pol jenkins doctor)"
 }
+
+# ci-12 — `pol jenkins test-status [<sha>]`: THE VERDICT, printed.
+#
+# It reads the file the pipeline wrote, and derives nothing. That is deliberate:
+# the verdict is the ONE answer a test run reached, and a CLI that recomputed it
+# from the parts would be a second implementation of the arithmetic — the two
+# would drift, and the day they did, the one a person read would not be the one
+# `promote main` obeyed.
+jd_test_status() {
+    jd_source
+    local sha="${1:-}" pool="${POLARI_POOL:-$J/pool}"
+    if [ -z "$sha" ]; then
+        sha="$(git -C "$ROOT" ls-remote origin refs/heads/test 2>/dev/null | awk '{print $1}' | head -1)"
+        [ -n "$sha" ] || { log_warn "there is no origin/test yet — pol jenkins promote test creates it"; return 1; }
+        log_info "the tip of origin/test is ${sha:0:12}"
+    fi
+    # a short sha is enough: the pool directory is named by the full one
+    if [ ! -d "$pool/test/$sha" ]; then
+        local hit; hit="$(ls -1d "$pool/test/$sha"* 2>/dev/null | head -1 || true)"
+        [ -n "$hit" ] && sha="$(basename "$hit")"
+    fi
+    local f="$pool/test/$sha/verdict.json"
+    if [ ! -f "$f" ]; then
+        log_warn "no verdict for ${sha:0:12} on this device"
+        echo "  polari-test polls the test branch every 5 minutes and records one verdict per sha."
+        echo "  If this sha has never been on test:   pol jenkins promote test"
+        echo "  If a run is pending or deferring:     pol jenkins queue"
+        return 1
+    fi
+    python3 "$J/verdict.py" show "$f"
+    echo "  file       $f"
+    if [ -f "$pool/test/$sha/scan/SCAN_SUMMARY.md" ]; then
+        echo "  scan report $pool/test/$sha/scan/SCAN_SUMMARY.md  (advisory)"
+    fi
+}
