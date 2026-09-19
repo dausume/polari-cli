@@ -203,17 +203,22 @@ promote_repo() {
   git -C "$path" fetch -q origin "$BRANCH" 2>/dev/null || true
   head=$(git -C "$path" rev-parse "$src" 2>/dev/null) || {
     fail "no $src in this repo — promote $PROMOTE_FROM first"; return 1; }
+  # `rev-parse` without --verify PRINTS the ref it could not resolve and still
+  # fails, so `$(… || echo none)` captures "refs/heads/test" and every later
+  # comparison is against a string that looks like a sha but is not one.
+  # --verify -q is the only form that is silent on a missing ref.
+  local local_ref remote_ref
+  local_ref=$(git -C "$path" rev-parse --verify -q "refs/heads/$BRANCH" 2>/dev/null || true)
+  remote_ref=$(git -C "$path" rev-parse --verify -q "refs/remotes/origin/$BRANCH" 2>/dev/null || true)
   # already there?
-  if [ "$(git -C "$path" rev-parse "refs/heads/$BRANCH" 2>/dev/null || echo none)" = "$head" ] \
-     && [ "$(git -C "$path" rev-parse "origin/$BRANCH" 2>/dev/null || echo none)" = "$head" ]; then
+  if [ "$local_ref" = "$head" ] && [ "$remote_ref" = "$head" ]; then
     ok "$BRANCH already == $src (${head:0:8}) — nothing to promote"
     PROMOTED_SHA["$rel"]="$head"
     return 0
   fi
-  # ff-ability: the existing <branch> (local or remote) must be an ANCESTOR of src
-  local existing=""
-  existing=$(git -C "$path" rev-parse "refs/heads/$BRANCH" 2>/dev/null \
-             || git -C "$path" rev-parse "origin/$BRANCH" 2>/dev/null || true)
+  # ff-ability: the existing <branch> (local or remote) must be an ANCESTOR of src.
+  # No branch at all is the CREATION case — a new branch is trivially a fast-forward.
+  local existing="${local_ref:-$remote_ref}"
   if [ -n "$existing" ] && ! git -C "$path" merge-base --is-ancestor "$existing" "$head"; then
     behind=$(git -C "$path" rev-list --count "$head..$existing" 2>/dev/null || echo '?')
     fail "NOT fast-forwardable: $BRANCH (${existing:0:8}) has $behind commit(s) that $PROMOTE_FROM does not"
