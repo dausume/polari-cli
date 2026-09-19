@@ -32,62 +32,28 @@ jd_target() {   # jd_target local | ssh <alias>
     log_info "next: pol jenkins doctor   then: pol jenkins preflight --isle"
 }
 
-jd_set() {   # jd_set KEY VALUE — rewrite one key in device.env, in place
-    local k="$1" v="${2:-}"
-    if grep -qE "^$k=" "$J/device.env"; then
-        python3 - "$J/device.env" "$k" "$v" <<'PY'
-import sys
-path, key, val = sys.argv[1:4]
-out = []
-for line in open(path):
-    out.append('%s=%s\n' % (key, val) if line.split('=', 1)[0] == key else line)
-open(path, 'w').writelines(out)
-PY
-    else
-        printf '%s=%s\n' "$k" "$v" >> "$J/device.env"
-    fi
-}
+# ONE writer: polari-jenkins/device.sh owns "rewrite a key in device.env"
+# (the setup walkthrough writes through the same function).
+jd_set() { jd_source; device_env_set "$1" "${2:-}"; }
 
 # Export the device configuration so docker-compose (and through it casc and
 # the jobs) sees CI_ROUTES / CI_EXECUTORS / the isle target.
 jd_export_for_compose() { jd_source; device_export; }
 
-# ------------------------------------------------------------------- guide
-# A SHORT walkthrough — whiptail when there is a terminal and whiptail is
-# installed, plain prompts otherwise. (Deliberately not the Textual guide
-# `pol prod guide` uses: those tui_* helpers live inside prod.sh, not in
-# lib/, and copying a thousand-line guide framework for six questions would
-# be worse than these twelve lines.)
-JD_TUI=0; [ -t 0 ] && [ -t 1 ] && command -v whiptail >/dev/null 2>&1 && JD_TUI=1
-jd_menu()  { local t=$1 x=$2 d=$3; shift 3
-             if [ "$JD_TUI" = 1 ]; then whiptail --title "$t" --default-item "$d" --menu "$x" 18 76 6 "$@" 3>&1 1>&2 2>&3
-             else echo >&2; echo "== $t" >&2; echo "$x" >&2; local i=1 it=("$@")
-                  while [ $i -le $# ]; do printf '  %s — %s\n' "${it[$((i-1))]}" "${it[$i]}" >&2; i=$((i+2)); done
-                  read -r -p "choice [$d]: " c; echo "${c:-$d}"; fi; }
-jd_input() { if [ "$JD_TUI" = 1 ]; then whiptail --title "$1" --inputbox "$2" 12 76 "$3" 3>&1 1>&2 2>&3
-             else echo >&2; echo "== $1" >&2; read -r -p "$2 [$3]: " c; echo "${c:-$3}"; fi; }
+# ------------------------------------------------------------------- setup
+# `pol jenkins setup` — THE entry point (ci-7b). The walkthrough itself
+# lives in polari-jenkins/setup.sh + setup/steps/*.sh, beside the doctor and
+# the preflight it reuses; this is only the door. `guide` is kept as an
+# alias because the README and the ledger name it.
+jd_setup() { exec bash "$J/setup.sh" "$@"; }   # setup.sh loads device.env itself — exporting CI_* here would shadow what it writes
 
-jd_guide() {
-    jd_source
-    pol_box "pol jenkins — the pipeline device"
-    local where alias_="" ram disk routes
-    where=$(jd_menu "Where does the throwaway isle go?" \
-"The pipeline builds an isle in a VM and destroys it. That VM needs /dev/kvm, libvirt and room; the machine running Jenkins does not have to be the one that provides them." \
-        "$CI_ISLE_TARGET" \
-        local "this machine — it needs KVM + libvirt + RAM for controller, build AND the VM" \
-        ssh   "another device over ssh — this machine then only needs docker")
-    if [ "$where" = ssh ]; then
-        alias_=$(jd_input "ssh alias" "The Host alias from ~/.ssh/config for the isle device. An ALIAS, never an address — device.env is gitignored but habits are not:" "$CI_ISLE_SSH_HOST")
-        [ -n "$alias_" ] || die "an alias is required for the ssh target"
-    fi
-    ram=$(jd_input "VM memory (GB)" "How much memory the throwaway isle VM gets. The preflight refuses a run when the device cannot spare it:" "$CI_ISLE_VM_RAM_GB")
-    disk=$(jd_input "VM disk (GB)" "The overlay disk for the throwaway isle (an isle install wants 30 GB or more):" "$CI_ISLE_VM_DISK_GB")
-    routes=$(jd_input "Routes that may publish" "Comma list of ACTIVE routes allowed to publish FOR REAL when their secret is present. A route left out stays DRY even with its secret in place:" "$CI_ROUTES")
-    jd_target "$where" "$alias_"
-    jd_set CI_ISLE_VM_RAM_GB "$ram"; jd_set CI_ISLE_VM_DISK_GB "$disk"; jd_set CI_ROUTES "$routes"
-    echo; log_info "written to polari-jenkins/device.env:"; jd_config | sed 's/^/  /'
-    echo; log_info "now:  sudo pol jenkins init-device   (the secrets posture)"
-    log_info "then: pol jenkins doctor  ·  pol jenkins preflight --isle"
+# One line for `pol jenkins status`, read from the file setup writes.
+jd_setup_line() {
+    local f="$J/SETUP_STATUS.md" n v
+    if [ ! -f "$f" ]; then echo "setup: not run yet — pol jenkins setup"; return 0; fi
+    n=$(grep -m1 '^steps: ' "$f" | sed 's/^steps: //')
+    v=$(grep -m1 '^\*\*verdict: ' "$f" | sed 's/^\*\*verdict: \([^*]*\)\*\*.*/\1/')
+    echo "setup: ${n:-unknown} (${v:-unknown}) — pol jenkins setup --report"
 }
 
 # ----------------------------------------------------------------- secrets

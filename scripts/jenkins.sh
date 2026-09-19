@@ -9,6 +9,9 @@
 set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/log.sh"
+# the shared whiptail/plain dialog helpers (lifted out of prod.sh in ci-7b)
+source "$SCRIPT_DIR/lib/tui.sh"
+export POL_TUI_LIB="$SCRIPT_DIR/lib/tui.sh"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"; J="$ROOT/polari-jenkins"
 source "$SCRIPT_DIR/lib/jenkins-device.sh"
 cd "$J"
@@ -22,13 +25,21 @@ ${BOLD}pol jenkins${NC} — the host-tier build + publish pipeline (polari-jenki
     status                            compose ps + UI health + secrets + doctor
     logs                              follow (the log prints secret NAMES, never values)
 
+  ${CYAN}START HERE${NC}
+    setup                             the one-shot walkthrough: it explains each option, checks the
+                                      state live, says WHAT/HOW/WHERE, and DOES the local part for you
+    setup --report                    read-only: the state and the "still to do, in order" list
+    setup --yes                       answer every safe local question yes (never invents a token)
+    setup --step <name>               re-run one step: role checkout network secrets isle stages controller
+
   ${CYAN}the pipeline device${NC} — where the throwaway isle goes (ci-7)
-    guide                             a short walkthrough that writes device.env
-    config                            print the device configuration in force
+    config                            print the device configuration + the testing stages in force
     target local                      the throwaway isle VM is created on THIS machine
     target ssh <alias>                …on another device, over ssh (an ALIAS, never an address)
     preflight [--isle] [--json]       (A) is the device CLEAR and does it have room? exit 4 = refused
     isle up|verify|down|status        the throwaway VM itself
+    stages                            CI_ISLE_STAGES — what each throwaway isle tests, and so what may
+                                      ever be released (pol jenkins setup --step stages to change it)
 
   ${CYAN}configuration + secrets${NC}
     doctor [--strict]                 (B) what is set up, what is not, and what to do about it
@@ -64,11 +75,13 @@ case "${1:-help}" in
     logs)    compose logs -f --tail=200 ;;
     status)  compose ps
              C=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${JENKINS_PORT:-8080}/login" || true); echo "UI: HTTP $C"
+             jd_setup_line
              echo; jd_secrets_status; echo; bash "$J/doctor.sh" || true ;;
 
     # ---- the pipeline device (ci-7)
-    guide)   jd_guide ;;
+    setup|guide) shift; jd_setup "$@" ;;     # `guide` is the old name, kept as an alias
     config)  jd_config ;;
+    stages)  jd_source; stages_print; echo "CI_ISLE_STAGES=$CI_ISLE_STAGES   (change it: pol jenkins setup --step stages)" ;;
     target)  shift; jd_target "${1:-}" "${2:-}" ;;
     preflight) shift; jd_export_for_compose; bash "$J/isle/preflight.sh" "$@" ;;
     isle)    shift; jd_export_for_compose; bash "$J/isle/throwaway.sh" "${1:-status}" ;;
