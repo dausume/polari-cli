@@ -30,6 +30,10 @@ ${BOLD}pol jenkins${NC} — the host-tier build + publish pipeline (polari-jenki
                                       state live, says WHAT/HOW/WHERE, and DOES the local part for you
     setup --report                    read-only: the state and the "still to do, in order" list
     setup --yes                       answer every safe local question yes (never invents a token)
+    setup --json [--step <name>]      the MACHINE protocol (polari-pipeline-setup/1) — one JSON document
+         [--answer KEY=VALUE] [--run <id>]   on stdout, logs on stderr. It never prompts and never runs
+                                      anything privileged; a privileged action is described, naming a verb.
+    verbs                             the ALLOWLIST any front end runs through (shell-verbs.json)
     setup --step <name>               re-run one step: role checkout network secrets isle stages controller
 
   ${CYAN}the pipeline device${NC} — where the throwaway isle goes (ci-7)
@@ -111,6 +115,10 @@ case "${1:-help}" in
 
     # ---- the pipeline device (ci-7)
     setup|guide) shift; jd_setup "$@" ;;     # `guide` is the old name, kept as an alias
+    # ci-11a: THE ALLOWLIST, printed. Every command any front end may run on this
+    # device's behalf, by id, with its argv fixed and its parameters' regexes. The
+    # file is the contract; this verb is just a reader of it.
+    verbs)   cat "$J/shell-verbs.json" ;;
     config)  jd_config ;;
     stages)  jd_source; stages_print; echo "CI_ISLE_STAGES=$CI_ISLE_STAGES   (change it: pol jenkins setup --step stages)" ;;
     target)  shift; jd_target "${1:-}" "${2:-}" ;;
