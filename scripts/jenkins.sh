@@ -53,6 +53,9 @@ ${BOLD}pol jenkins${NC} — the host-tier build + publish pipeline (polari-jenki
                                       ONE item deep, latest wins — a newer change REPLACES the pending
                                       one, nothing ever queues behind it, and the run always takes the
                                       branch TIP rather than the sha that triggered it.
+                                      \`covered <sha> (refused: …)\` on main means the release rule has
+                                      ANSWERED for that sha (pool/release/<sha>/refused.json) and no
+                                      tick will re-run it until main moves or that sha's verdict changes.
     scan …                            the advisory scanners — see \`pol scan help\`
 
   ${CYAN}the pipeline device${NC} — where the throwaway isle goes (ci-7)
