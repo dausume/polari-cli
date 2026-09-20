@@ -158,6 +158,8 @@ compose(){ docker compose -p polari-jenkins "$@"; }
 
 case "${1:-help}" in
     up)      ensure_env; compose up -d --build
+             # ci-13: record what the controller started with — `promote` refuses when the checkout has moved
+             bash "$J/controller-stamp.sh" write || true
              log_success "polari-jenkins up → http://127.0.0.1:$(grep ^JENKINS_PORT .env | cut -d= -f2)  (admin / $(secrets_dir)/admin/jenkins_admin_password)"
              echo; bash "$J/doctor.sh" || true ;;
     down)    compose down ;;
