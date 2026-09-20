@@ -160,7 +160,7 @@ case "${1:-help}" in
     # --branch / --promote-from parameter rather than copied).
     promote) shift; jd_export_for_compose; exec bash "$J/promote.sh" "${1:-status}" "${@:2}" ;;
     test-status) shift; jd_export_for_compose; jd_test_status "${1:-}" ;;
-    queue)   shift; jd_export_for_compose; exec bash "$J/quiet.sh" queue "${1:-}" ;;
+    queue)   shift; jd_export_for_compose; jd_in_controller quiet.sh queue "${1:-}" ;;
     scan)    shift; jd_export_for_compose; exec bash "$J/scan/scan.sh" "$@" ;;
 
     # ---- the pipeline device (ci-7)

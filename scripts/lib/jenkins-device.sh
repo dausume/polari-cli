@@ -246,3 +246,20 @@ jd_test_status() {
         echo "  scan report $pool/test/$sha/scan/SCAN_SUMMARY.md  (advisory)"
     fi
 }
+
+# ci-12 — run a polari-jenkins script THROUGH THE CONTROLLER when the state it
+# reads belongs to the pipeline user. `pol jenkins queue` printed "idle / never"
+# on the pipeline device for exactly the reason `promote main` printed "none":
+# after init-device the pool is root:polari-ci and this shell may not read it.
+# The controller runs AS polari-ci, so asking it is not a privilege escalation —
+# it is the pipeline process reading its own bookkeeping.
+jd_in_controller() {   # jd_in_controller <script-name> <args…>
+    local sc="$1"; shift
+    local c="${CI_CONTROLLER_CONTAINER:-polari-jenkins}"
+    if [ -r "$J/pool" ] || ! command -v docker >/dev/null 2>&1 \
+       || ! docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$c"; then
+        bash "$J/$sc" "$@"
+        return
+    fi
+    docker exec "$c" bash "/var/polari-jenkins/$sc" "$@"
+}
