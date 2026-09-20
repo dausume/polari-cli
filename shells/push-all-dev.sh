@@ -228,9 +228,17 @@ promote_repo() {
   fi
   if ! check_artifacts "$path" "$head"; then return 1; fi
   if [ $DO_PUSH -eq 1 ]; then
-    git -C "$path" fetch -q . "$PROMOTE_FROM:$BRANCH" 2>/dev/null \
-      || git -C "$path" fetch -q origin "$PROMOTE_FROM:$BRANCH" || {
-        fail "the local ref $BRANCH would not fast-forward to ${head:0:8}"; return 1; }
+    # Set <branch> to the ORIGIN commit verified above — never from the local <src>. The first promotion
+    # from the pipeline device (2026-09-20) pushed a STALE commit: a superproject pull leaves nested repos
+    # on an old local `dev`, `fetch . dev:test` happily moved `test` to it, and origin rejected the push as
+    # non-fast-forward while the message above had already named the right sha.
+    if [ "$(git -C "$path" symbolic-ref -q --short HEAD 2>/dev/null)" = "$BRANCH" ]; then
+      git -C "$path" merge -q --ff-only "$head" || {
+        fail "the checked-out $BRANCH would not fast-forward to ${head:0:8}"; return 1; }
+    else
+      git -C "$path" update-ref "refs/heads/$BRANCH" "$head" || {
+        fail "could not set the local ref $BRANCH to ${head:0:8}"; return 1; }
+    fi
   fi
   PROMOTED_SHA["$rel"]="$head"
   ok "$BRANCH → ${head:0:8} (ff from $PROMOTE_FROM)$([ $DO_PUSH -eq 1 ] || echo '  [dry run]')"
