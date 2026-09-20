@@ -108,6 +108,26 @@ jd_secrets_status() {
         echo "present (NAMES only — no value is ever printed):"
         [ -n "$listed" ] && echo "$listed" | sed 's#^#  present  #' || echo "  (none)"
     fi
+    # ci-12 (his ask): a listing must say WHERE the thing each secret unlocks
+    # goes — which release pool, which registry — and the destination is rendered
+    # from the same constants the routes push to (routes/destinations.sh), so it
+    # cannot promise something a route does not do. In app mode it names the
+    # DEVELOPER'S namespace, because that is where their releases actually go.
+    echo "catalogue (name — destination — routes — present/absent):"
+    local seen="" s2
+    for r2 in $SECRETS_ACTIVE_ROUTES; do
+        for s2 in $(secrets_route_requires "$r2"); do
+            case " $seen " in *" $s2 "*) continue ;; esac
+            seen="$seen $s2"
+            printf '  %s\n' "$(secrets_catalog_line "$s2")"
+        done
+    done
+    local legacy; legacy="$(secrets_legacy_names)"
+    if [ -n "$legacy" ]; then
+        echo "$legacy" | while read -r old new; do
+            log_warn "$old is stored under the OLD name — it still works; rename it with: sudo pol jenkins secrets mv $old $new"
+        done
+    fi
     echo "routes:"
     local r need s miss inlist c
     for r in $SECRETS_ACTIVE_ROUTES; do
@@ -123,7 +143,7 @@ jd_secrets_status() {
 
 jd_secrets_put() {   # jd_secrets_put <area>/<name>  — the VALUE comes from stdin
     jd_source
-    local rel="${1:-}"; case "$rel" in */*) ;; *) die "pol jenkins secrets put <area>/<name>   (e.g. github/github_token) — the value is read from stdin" ;; esac
+    local rel="${1:-}"; case "$rel" in */*) ;; *) die "pol jenkins secrets put <area>/<name>   (e.g. github/release_token) — the value is read from stdin" ;; esac
     case "$rel" in *..*) die "refusing a path with '..'" ;; esac
     [ -t 0 ] && log_info "reading the value from stdin — paste it and press Ctrl-D (it is never echoed, never logged)"
     local tmp; tmp=$(mktemp); chmod 0600 "$tmp"; trap 'shred -u "$tmp" 2>/dev/null || rm -f "$tmp"' RETURN
@@ -138,6 +158,36 @@ jd_secrets_put() {   # jd_secrets_put <area>/<name>  — the VALUE comes from st
         log_warn "$rel stored in the CHECKOUT ($(secrets_dir)) as 0600 — readable by every process of $(id -un). sudo pol jenkins init-device moves it out."
     fi
     log_info "pol jenkins restart to hand it to the controller; pol jenkins doctor to see which routes are now ARMED"
+}
+
+# ci-12 — `pol jenkins secrets mv <old> <new>`: rename a stored secret in place,
+# keeping its mode and owner. It exists because ci-12 renamed the two GitHub
+# tokens so their names say what they are FOR, and a device that already holds
+# one should not have to be handed a fresh token to catch up. The VALUE is never
+# read, printed or copied through this shell — in the system posture the move is
+# a single `sudo mv` of a root-owned file.
+jd_secrets_mv() {
+    jd_source
+    local from="${1:-}" to="${2:-}"
+    case "$from" in */*) ;; *) die "pol jenkins secrets mv <area>/<old> <area>/<new>" ;; esac
+    case "$to"   in */*) ;; *) die "pol jenkins secrets mv <area>/<old> <area>/<new>" ;; esac
+    case "$from$to" in *..*) die "refusing a path with '..'" ;; esac
+    local d; d="$(secrets_dir)"
+    if [ "$(secrets_mode)" = system ]; then
+        sudo test -s "$d/$from" || die "$from is not there (nothing to rename)"
+        sudo test -e "$d/$to" && die "$to already exists — remove it first, or you would lose one of the two"
+        sudo install -d -o root -g "$CI_USER" -m 0750 "$d/$(dirname "$to")"
+        sudo mv "$d/$from" "$d/$to" || die "could not rename $from"
+        sudo chown "root:$CI_USER" "$d/$to"; sudo chmod 0640 "$d/$to"
+        log_success "$from → $to (root:$CI_USER 0640; the value never passed through this shell)"
+    else
+        [ -s "$d/$from" ] || die "$from is not there (nothing to rename)"
+        [ -e "$d/$to" ] && die "$to already exists — remove it first"
+        install -d -m 0700 "$d/$(dirname "$to")"
+        mv "$d/$from" "$d/$to"; chmod 0600 "$d/$to"
+        log_success "$from → $to (0600, the checkout posture)"
+    fi
+    log_info "pol jenkins restart to hand it to the controller under the new name"
 }
 
 jd_secrets_rm() {

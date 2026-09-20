@@ -98,9 +98,15 @@ ${BOLD}pol jenkins${NC} — the host-tier build + publish pipeline (polari-jenki
   ${CYAN}configuration + secrets${NC}
     doctor [--strict]                 (B) what is set up, what is not, and what to do about it
     init-device                       (C) create the polari-ci user + /etc/polari-jenkins/secrets (needs sudo)
-    secrets [status]                  which secrets exist (names only) and which routes are ARMED
+    secrets [status]                  the catalogue: each secret's NAME, WHERE the thing it unlocks
+                                      goes (which release pool, which registry), the routes that use
+                                      it, and present/absent. Never a value.
     secrets put <area>/<name>         store one, value from stdin
     secrets rm  <area>/<name>         remove one
+    secrets mv  <old> <new>           rename one in place, keeping its mode and owner (ci-12 renamed
+                                      github/github_token → github/release_token and
+                                      registries/ghcr_token → github/registry_token; the old names
+                                      still work and the doctor says so)
 EOF
 )"
 }
@@ -109,12 +115,29 @@ ensure_env(){
     [ -f .env ] || { sed "s#^POLARI_SUITE=.*#POLARI_SUITE=$ROOT#; s#^UID=.*#UID=$(id -u)#; s#^GID=.*#GID=$(id -g)#; s#^DOCKER_GID=.*#DOCKER_GID=$(getent group docker | cut -d: -f3)#" .env.example > .env; log_info "wrote polari-jenkins/.env (gitignored)"; }
     mkdir -p jenkins_home pool
     jd_source
+    # ci-12: in the SYSTEM posture the secrets directory is root:polari-ci 0750,
+    # so a person without passwordless sudo cannot even SEE whether the admin
+    # password is there. `secrets_have` then says no, and the old code went on to
+    # generate a new one — which fails on the write and stops `up` dead, on a
+    # device that had a perfectly good password all along. Say what is true
+    # instead: only root and the controller can read it, and that is the posture
+    # working.
     if ! secrets_have admin/jenkins_admin_password; then
-        PW=$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)
-        printf '%s' "$PW" | jd_secrets_put admin/jenkins_admin_password >/dev/null
-        log_warn "generated the local admin password (stored in $(secrets_dir)/admin/jenkins_admin_password). Shown once: $PW"
+        if [ "$(secrets_mode)" = system ] && ! sudo -n true 2>/dev/null; then
+            log_info "the admin password is in $(secrets_dir)/admin/jenkins_admin_password — root:$CI_USER 0640, so only sudo and the controller can read it. Not regenerating."
+        else
+            PW=$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)
+            printf '%s' "$PW" | jd_secrets_put admin/jenkins_admin_password >/dev/null
+            log_warn "generated the local admin password (stored in $(secrets_dir)/admin/jenkins_admin_password). Shown once: $PW"
+        fi
     fi
     [ "$(secrets_mode)" = repo ] && chmod -R go-rwx secrets 2>/dev/null || true
+    # ci-12: what the HOST calls the two paths the controller knows as
+    # /var/polari-pool and /var/jenkins_home. A `docker -v` issued from inside
+    # the controller is resolved by the daemon, on the host, so anything that
+    # mounts one of those paths needs the host's name for it.
+    export CI_HOST_POOL="$J/pool"
+    export CI_HOST_JENKINS_HOME="${JENKINS_HOME:-$J/jenkins_home}"
     jd_export_for_compose     # CI_ROUTES / CI_EXECUTORS / the isle target reach casc + the jobs
 }
 compose(){ docker compose -p polari-jenkins "$@"; }
@@ -172,7 +195,8 @@ case "${1:-help}" in
                  status|'') jd_secrets_status ;;
                  put)       shift; jd_secrets_put "${1:-}" ;;
                  rm)        shift; jd_secrets_rm "${1:-}" ;;
-                 *)         die "pol jenkins secrets [status|put <area>/<name>|rm <area>/<name>]" ;;
+                 mv)        shift; jd_secrets_mv "${1:-}" "${2:-}" ;;
+                 *)         die "pol jenkins secrets [status|put <area>/<name>|rm <area>/<name>|mv <old> <new>]" ;;
              esac ;;
 
     help|--help|-h) usage ;;
