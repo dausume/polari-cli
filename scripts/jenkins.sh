@@ -61,6 +61,11 @@ ${BOLD}pol jenkins${NC} — the host-tier build + publish pipeline (polari-jenki
     target ssh <alias>                …on another device, over ssh (an ALIAS, never an address)
     preflight [--isle] [--json]       (A) is the device CLEAR and does it have room? exit 4 = refused
     isle up|verify|down|status        the throwaway VM itself
+    isle authorize [<alias>]          put THE PIPELINE USER'S OWN key (init-device made it) on the isle
+                                      device, over the alias you already reach it by. The controller runs
+                                      as polari-ci and cannot read your ~/.ssh — without this every isle
+                                      stage refuses at the preflight. Idempotent; it verifies the target's
+                                      host key against your own known_hosts and refuses on a mismatch.
     stages                            CI_ISLE_STAGES — what each throwaway isle tests, and so what may
                                       ever be released (pol jenkins setup --step stages to change it)
 
@@ -181,6 +186,11 @@ case "${1:-help}" in
              # ci-10: leakcheck is its own script (it reads the target and never
              # changes it); everything else is the throwaway VM's own verbs.
              if [ "${1:-}" = leakcheck ]; then shift; exec bash "$J/isle/leakcheck.sh" "${1:-report}" "${@:2}"; fi
+             # ci-12 (§76 addendum 3): `authorize` is the ONE verb here that is
+             # deliberately run by the INTERACTIVE user and not through the
+             # controller — it copies the PIPELINE user's public key to the
+             # target over the alias this person already reaches it by.
+             if [ "${1:-}" = authorize ]; then shift; exec bash "$J/isle/authorize.sh" "$@"; fi
              bash "$J/isle/throwaway.sh" "${1:-status}" "${@:2}" ;;
 
     # ---- configuration + secrets
