@@ -217,9 +217,22 @@ jd_test_status() {
     # a short sha is enough: the pool directory is named by the full one
     if [ ! -d "$pool/test/$sha" ]; then
         local hit; hit="$(ls -1d "$pool/test/$sha"* 2>/dev/null | head -1 || true)"
+        [ -z "$hit" ] && hit="$(docker exec "${CI_CONTROLLER_CONTAINER:-polari-jenkins}" \
+            sh -c "ls -1d /var/polari-pool/test/$sha* 2>/dev/null | head -1" 2>/dev/null || true)"
         [ -n "$hit" ] && sha="$(basename "$hit")"
     fi
+    # ci-12: read THROUGH the controller when the pool belongs to polari-ci —
+    # "no verdict" must mean absent, never "I may not look".
+    # shellcheck source=../../../polari-jenkins/pool.sh
+    . "$J/pool.sh"
+    local body; body="$(pool_read "test/$sha/verdict.json" 2>/dev/null || true)"
     local f="$pool/test/$sha/verdict.json"
+    if [ -n "$body" ]; then
+        local tmp; tmp="$(mktemp)"; printf '%s' "$body" > "$tmp"
+        python3 "$J/verdict.py" show "$tmp"; rm -f "$tmp"
+        echo "  file       $f  (read through the controller: the pool belongs to the pipeline user)"
+        return 0
+    fi
     if [ ! -f "$f" ]; then
         log_warn "no verdict for ${sha:0:12} on this device"
         echo "  polari-test polls the test branch every 5 minutes and records one verdict per sha."
