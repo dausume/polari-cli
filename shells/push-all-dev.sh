@@ -240,7 +240,7 @@ promote_repo() {
 check_repo() {
   local rel="$1" path="$SUITE/$1"
   local branch dirty ahead
-  dirty=$(git -C "$path" status --porcelain | wc -l)
+  dirty=$(git -C "$path" status --porcelain --ignore-submodules=dirty | wc -l)
   if [ "$dirty" -ne 0 ]; then
     fail "tree not clean ($dirty entries) — commit or stash first"
     errors=$((errors + 1))
