@@ -247,6 +247,38 @@ jd_test_status() {
     fi
 }
 
+# ci-3 — `pol jenkins report [<sha>]`: THE ONE PAGE, printed.
+#
+# Same posture as test-status: the pool belongs to the pipeline user, so the
+# file is read THROUGH the controller and "no report" means absent rather than
+# "I may not look". It renders nothing itself — report.py did that in the run,
+# and a CLI that re-rendered would be a second implementation of the page.
+jd_report() {
+    jd_source
+    local sha="${1:-}" pool="${POLARI_POOL:-$J/pool}"
+    if [ -z "$sha" ]; then
+        sha="$(git -C "$ROOT" ls-remote origin refs/heads/test 2>/dev/null | awk '{print $1}' | head -1)"
+        [ -n "$sha" ] || { log_warn "there is no origin/test yet — pol jenkins promote test creates it"; return 1; }
+    fi
+    if [ ! -d "$pool/test/$sha" ]; then
+        local hit; hit="$(ls -1d "$pool/test/$sha"* 2>/dev/null | head -1 || true)"
+        [ -z "$hit" ] && hit="$(docker exec "${CI_CONTROLLER_CONTAINER:-polari-jenkins}" \
+            sh -c "ls -1d /var/polari-pool/test/$sha* 2>/dev/null | head -1" 2>/dev/null || true)"
+        [ -n "$hit" ] && sha="$(basename "$hit")"
+    fi
+    # shellcheck source=../../../polari-jenkins/pool.sh
+    . "$J/pool.sh"
+    local body; body="$(pool_read "test/$sha/TEST_REPORT.md" 2>/dev/null || true)"
+    if [ -n "$body" ]; then printf '%s\n' "$body"; return 0; fi
+    local f="$pool/test/$sha/TEST_REPORT.md"
+    [ -f "$f" ] && { cat "$f"; return 0; }
+    log_warn "no test report for ${sha:0:12} on this device"
+    echo "  polari-test renders one per sha, after the verdict (polari-jenkins/report.py)."
+    echo "  If this sha has never been on test:   pol jenkins promote test"
+    echo "  The verdict alone:                    pol jenkins test-status ${sha:0:12}"
+    return 1
+}
+
 # ci-12 — run a polari-jenkins script THROUGH THE CONTROLLER when the state it
 # reads belongs to the pipeline user. `pol jenkins queue` printed "idle / never"
 # on the pipeline device for exactly the reason `promote main` printed "none":

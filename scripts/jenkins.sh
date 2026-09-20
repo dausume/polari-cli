@@ -49,6 +49,12 @@ ${BOLD}pol jenkins${NC} — the host-tier build + publish pipeline (polari-jenki
     test-status [<sha>]               the verdict for a sha (default: the tip of test) — what was built,
                                       what the selftests said, what the isle stages said, and the
                                       advisory scan counts that changed none of it
+    report [<sha>]                    THE ONE PAGE for a sha (ci-3): the verdict and why, the debs with
+                                      their sha256 and the image ids that were installed, the scan
+                                      counts, the device selftests, and per isle stage the install
+                                      time-to-online, the verify details, the suites that ran INSIDE
+                                      the product, the uninstall verdict with the product's own
+                                      findings, and the leak diff. It is a release asset too.
     queue [--json]                    both poll queues: pending / newest sha / since / running.
                                       ONE item deep, latest wins — a newer change REPLACES the pending
                                       one, nothing ever queues behind it, and the run always takes the
@@ -168,6 +174,7 @@ case "${1:-help}" in
     # --branch / --promote-from parameter rather than copied).
     promote) shift; jd_export_for_compose; exec bash "$J/promote.sh" "${1:-status}" "${@:2}" ;;
     test-status) shift; jd_export_for_compose; jd_test_status "${1:-}" ;;
+    report)      shift; jd_export_for_compose; jd_report "${1:-}" ;;
     queue)   shift; jd_export_for_compose; jd_in_controller quiet.sh queue "${1:-}" ;;
     scan)    shift; jd_export_for_compose; exec bash "$J/scan/scan.sh" "$@" ;;
 

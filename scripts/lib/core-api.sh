@@ -6,8 +6,24 @@
 # (polari-node_backend.*), whichever is running. The in-container
 # server listens on :3000.
 
+# THE THREE NAMES A POLARI BACKEND CAN HAVE, and they are three because there
+# are three routes onto a machine:
+#   prf-backend          compose (pol suite up / pol node up)
+#   polari-node_backend  a swarm task (pol swarm deploy node)
+#   prf-isle-backend     THE ISLE ROUTE — Isle-Mesh/polari-isle/docker-compose.yml
+#                        names it that, and `isle core-install` is how most
+#                        people will ever get a Polari.
+#
+# ci-3, found by building the isle test (2026-09-20): the third was missing, so
+# `pol modules selftest <m>` on a machine installed from polari-complete died
+# with "no local backend container … pol suite up / pol node up" — advice that
+# is wrong there, because an isle is neither. It was never noticed because
+# nothing had ever run the CLI on an isle box. The pipeline's own in-guest
+# runner (polari-jenkins/isle/guest-selftests.sh) still cannot use this — `pol`
+# is not installed by polari-complete at all — but a PERSON on an isle can now.
 core_backend_container() {
     docker ps --format '{{.Names}}' | grep -x prf-backend && return 0
+    docker ps --format '{{.Names}}' | grep -x prf-isle-backend && return 0
     docker ps --format '{{.Names}}' | grep '^polari-node_backend' | head -1
 }
 

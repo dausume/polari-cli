@@ -252,7 +252,7 @@ print(json.dumps(body))" "$MOD" "$CLASSES_ARG" "$ONLY_NON_PRIOR")
         if [ -n "$API_ARG" ]; then
             RESP=$(echo "$BODY" | POLARI_CORE_URL="$API_ARG" core_api POST /modules/export) || die "no backend at $API_ARG"
         else
-            RESP=$(echo "$BODY" | core_api POST /modules/export) || die "no local backend container (compose prf-backend or swarm polari-node_backend) and POLARI_CORE_URL unset — start the node/suite, set POLARI_CORE_URL, or pass --api <base>"
+            RESP=$(echo "$BODY" | core_api POST /modules/export) || die "no local backend container (compose prf-backend, isle prf-isle-backend, or swarm polari-node_backend) and POLARI_CORE_URL unset — start the node/suite, set POLARI_CORE_URL, or pass --api <base>"
         fi
         echo "$RESP" | python3 -c "
 import json, sys
@@ -317,7 +317,7 @@ print(f"registered: {mod} kind={fresh['kind']} path={fresh['path']} "
 PYEOF
         ;;
     deps)
-        BE=$(core_backend_container) || die "no local backend container (compose prf-backend or swarm polari-node_backend) — pol suite up / pol node up / pol swarm deploy node first"
+        BE=$(core_backend_container) || die "no local backend container (compose prf-backend, isle prf-isle-backend, or swarm polari-node_backend) — pol suite up / pol node up / pol swarm deploy node / isle core-install first"
         log_info "Running module dependency selftest in $BE"
         docker exec "$BE" python3 -m moduleService.selftest_module_dependencies ;;
     selftest)
@@ -325,7 +325,7 @@ PYEOF
         [ -n "$MOD" ] || die "usage: pol modules selftest <module> (see pol modules list)"
         # vpn-1: the backend may be the compose container OR the swarm
         # task (dev = swarm since 2026-08-26) — core-api.sh knows both.
-        BE=$(core_backend_container) || die "no local backend container (compose prf-backend or swarm polari-node_backend) — pol suite up / pol node up / pol swarm deploy node first"
+        BE=$(core_backend_container) || die "no local backend container (compose prf-backend, isle prf-isle-backend, or swarm polari-node_backend) — pol suite up / pol node up / pol swarm deploy node / isle core-install first"
         FOUND=0
         # mp-1: modules live in either import root; PYTHONPATH in the
         # image resolves modules/<m> under its plain name.
