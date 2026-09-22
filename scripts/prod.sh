@@ -1154,8 +1154,8 @@ case "$COMMAND" in
     status)  do_status ;;
     # dep-1: the deploy agent is its OWN file, on purpose — the forced command names that file's absolute
     # path, and it sources none of this script (no vault, no answers, no certificate).
-    agent)   shift; exec bash "$SCRIPT_DIR/prod-agent.sh" "$@" ;;
-    restore) shift; do_restore "${1:-}" ;;
+    agent)   exec bash "$SCRIPT_DIR/prod-agent.sh" "$@" ;;   # COMMAND was already shifted off above
+    restore) do_restore "${1:-}" "${2:-}" ;;
     # dep-0 (2026-09-22): the deployment target's own answer to "what do you run?" — READ by
     # polari-jenkins/deploy/conditions.sh over ssh, so "is there a newer release?" is a reading,
     # not a guess. Until rel-2 serves /api/release this file-and-stack reading is the truth.
