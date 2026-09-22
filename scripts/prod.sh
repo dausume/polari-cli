@@ -19,6 +19,8 @@
 #   pol prod plan                  what apply WOULD do, from the answers (no changes)
 #   pol prod apply [--yes]         render + stage + deploy from the answers (idempotent)
 #   pol prod status                the board: stack, services, cert issuer/expiry, DNS, health
+#   pol prod current               ONE reading of what this machine RUNS: release, image tag, debs source,
+#                                  stack state, applied-at — key=value lines a deployer reads over ssh (dep-0)
 #   pol prod cert                  (re)issue the edge certificate per the answers
 #   pol prod debs [build|copy <dir>]   stage the platform debs the server hands out
 #   pol prod render | deploy | down    the individual steps
@@ -1127,6 +1129,18 @@ case "$COMMAND" in
     check)   do_check ;;
     apply)   do_apply "$@" ;;
     status)  do_status ;;
+    # dep-0 (2026-09-22): the deployment target's own answer to "what do you run?" — READ by
+    # polari-jenkins/deploy/conditions.sh over ssh, so "is there a newer release?" is a reading,
+    # not a guess. Until rel-2 serves /api/release this file-and-stack reading is the truth.
+    current) load_answers
+             echo "release=$(case "${POL_PROD_DEBS:-}" in release:*) echo "${POL_PROD_DEBS#release:}" ;; *) echo "${POL_PROD_IMAGE_TAG:+polari-v$POL_PROD_IMAGE_TAG}" ;; esac)"
+             echo "image_tag=${POL_PROD_IMAGE_TAG:-}"; echo "image_repo=${POL_PROD_IMAGE_REPO:-}"; echo "debs=${POL_PROD_DEBS:-}"
+             echo "profile=$(profile)"; echo "domain=${POL_PROD_DOMAIN:-}"
+             echo "stack=$(docker stack ls --format '{{.Name}}' 2>/dev/null | grep -qx "$(stack_name)" && echo "$(stack_name)" || echo none)"
+             echo "backend_image=$(docker stack services "$(stack_name)" --format '{{.Name}} {{.Image}}' 2>/dev/null | awk '/backend/{print $2; exit}')"
+             echo "applied_at=$([ -f "$ANSWERS" ] && stat -c %Y "$ANSWERS" || echo 0)"
+             echo "free_gb=$(df -BG --output=avail / 2>/dev/null | tail -1 | tr -dc 0-9)"
+             echo "swarm=$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null || echo none)" ;;
     cert)    load_answers; issue_cert ;;
     debs)    load_answers; case "${1:-}" in build) POL_PROD_DEBS=build ;; copy) POL_PROD_DEBS="copy:${2:?dir}" ;; esac; stage_debs ;;
     render)  if [ "$(profile)" = full ]; then write_configs_full; else write_configs; fi; stage_cert; render_stack ;;

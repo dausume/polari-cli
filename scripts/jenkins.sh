@@ -65,6 +65,13 @@ ${BOLD}pol jenkins${NC} — the host-tier build + publish pipeline (polari-jenki
     retry test|main                   THE MANUAL RUN. A FAILED pipeline is not re-run by any tick — it
                                       waits for a re-push (the branch moves, or promote it again) or for
                                       this verb; the next tick then takes it.
+    deploy list|add|remove|show|authorize|check|status|<name> --now|--dry-run
+                                      DEPLOYMENT TARGETS (dep, plan §11): places Polari runs, reached over ssh by an
+                                      alias the PIPELINE user is authorised for (like the isle target). polari-deploy
+                                      applies a release to a target only when every condition holds (newer, tested,
+                                      published for real, window, healthy, disk, idle, hold off, not failed) — each
+                                      printed with its evidence. \`check\` is that report; \`<name> --now\` is a
+                                      person's deploy (overrides hold + window); \`--dry-run\` renders the ssh commands.
     scan …                            the advisory scanners — see \`pol scan help\`
 
   ${CYAN}the pipeline device${NC} — where the throwaway isle goes (ci-7)
@@ -187,6 +194,16 @@ case "${1:-help}" in
              jd_export_for_compose; jd_in_controller quiet.sh rearm "$1" "pol jenkins retry, by hand"
              jd_in_controller quiet.sh queue "$1" ;;
     scan)    shift; jd_export_for_compose; exec bash "$J/scan/scan.sh" "$@" ;;
+    # dep-0: add/remove/show/authorize are the INTERACTIVE user's (they write the targets file, and authorize
+    # copies the pipeline user's key over the alias this person already reaches the target by); everything that
+    # READS a target or the pool runs through the controller, where the pipeline user's ssh config and the
+    # pool live (jd_in_controller falls back to this shell when the controller is not running).
+    deploy)  shift; jd_export_for_compose
+             case "${1:-list}" in
+                 help|--help) sed -n '2,15p' "$J/deploy/deploy.sh" ;;
+                 add|remove|show|authorize) exec bash "$J/deploy/deploy.sh" "$@" ;;
+                 *) jd_in_controller deploy/deploy.sh "$@" ;;
+             esac ;;
 
     # ---- the pipeline device (ci-7)
     setup|guide) shift; jd_setup "$@" ;;     # `guide` is the old name, kept as an alias
