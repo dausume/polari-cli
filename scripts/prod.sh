@@ -19,8 +19,12 @@
 #   pol prod plan                  what apply WOULD do, from the answers (no changes)
 #   pol prod apply [--yes]         render + stage + deploy from the answers (idempotent)
 #   pol prod status                the board: stack, services, cert issuer/expiry, DNS, health
-#   pol prod current               ONE reading of what this machine RUNS: release, image tag, debs source,
-#                                  stack state, applied-at — key=value lines a deployer reads over ssh (dep-0)
+#   pol prod current               ONE reading of what this machine RUNS (from the answers + the stack)
+#   pol prod agent <verb>          THE DEPLOY AGENT (dep-1): the only thing the pipeline's restricted key may
+#                                  run here — current|stash|update|rollback|verify|stash-list. Reads NO
+#                                  answers, vault or certificate; swaps images with `docker service update`
+#                                  after stashing every volume. See scripts/prod-agent.sh.
+#   pol prod restore <stash-id>    a PERSON's restore of a stash (scales the stack's services down, untars, up)
 #   pol prod cert                  (re)issue the edge certificate per the answers
 #   pol prod debs [build|copy <dir>]   stage the platform debs the server hands out
 #   pol prod render | deploy | down    the individual steps
@@ -332,6 +336,25 @@ for line in sys.stdin.read().split("\n"):
     else: out[k] = v
 print(json.dumps(out, indent=1))'
 }
+# dep-1: a PERSON restores a stash the agent made (never the pipeline). Every service of the stack is
+# scaled to 0 (data must not change under the restore), each archive untarred over its volume, then the
+# stack scaled back to what it was. The stash stays.
+do_restore() {
+    local id="$1" root="${POLARI_STASH_DIR:-$HOME/.polari-stash}" d s v want
+    [ -n "$id" ] || { echo "usage: pol prod restore <stash-id>    (pol prod agent stash-list)"; return 2; }
+    d="$root/$id"; [ -f "$d/stash.json" ] || die "no stash '$id' under $root"
+    s=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["stack"])' "$d/stash.json")
+    log_warn "restoring $id over the volumes of stack $s — every service is stopped meanwhile"
+    [ "${2:-}" = --yes ] || { [ "$HAS_TUI" = 1 ] && tui_yesno "Restore?" "Stop every service of $s, restore the volumes from $id, start again?" || return 0; }
+    docker service ls --filter "label=com.docker.stack.namespace=$s" --format '{{.Name}} {{.Replicas}}' | while read -r name reps; do
+        want="${reps##*/}"; want="${want%% *}"; echo "$name $want" >> "$d/.replicas"; docker service scale -d "$name=0" >/dev/null; done
+    sleep 5
+    for f in "$d"/*.tgz; do v="$(basename "$f" .tgz)"
+        docker run --rm -v "$v:/v" -v "$d:/s:ro" busybox:stable sh -c "rm -rf /v/* /v/.[!.]* 2>/dev/null; tar xzf /s/$v.tgz -C /v" && log_success "restored $v" || log_error "restore of $v FAILED"; done
+    while read -r name want; do docker service scale -d "$name=$want" >/dev/null; done < "$d/.replicas"; rm -f "$d/.replicas"
+    log_success "stack $s scaled back up — pol prod status"
+}
+
 do_verify() {  # pol prod verify [--module <optional module>] — after apply: prove modules and apps can be set up through
                # every route: the console (pol / the API), the apps (App Store + downloads), the interfaces and the topology
     load_answers; set +e   # every check reports; none may abort the run
@@ -1129,6 +1152,10 @@ case "$COMMAND" in
     check)   do_check ;;
     apply)   do_apply "$@" ;;
     status)  do_status ;;
+    # dep-1: the deploy agent is its OWN file, on purpose — the forced command names that file's absolute
+    # path, and it sources none of this script (no vault, no answers, no certificate).
+    agent)   shift; exec bash "$SCRIPT_DIR/prod-agent.sh" "$@" ;;
+    restore) shift; do_restore "${1:-}" ;;
     # dep-0 (2026-09-22): the deployment target's own answer to "what do you run?" — READ by
     # polari-jenkins/deploy/conditions.sh over ssh, so "is there a newer release?" is a reading,
     # not a guess. Until rel-2 serves /api/release this file-and-stack reading is the truth.
