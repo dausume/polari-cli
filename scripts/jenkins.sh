@@ -62,6 +62,9 @@ ${BOLD}pol jenkins${NC} — the host-tier build + publish pipeline (polari-jenki
                                       \`covered <sha> (refused: …)\` on main means the release rule has
                                       ANSWERED for that sha (pool/release/<sha>/refused.json) and no
                                       tick will re-run it until main moves or that sha's verdict changes.
+    retry test|main                   THE MANUAL RUN. A FAILED pipeline is not re-run by any tick — it
+                                      waits for a re-push (the branch moves, or promote it again) or for
+                                      this verb; the next tick then takes it.
     scan …                            the advisory scanners — see \`pol scan help\`
 
   ${CYAN}the pipeline device${NC} — where the throwaway isle goes (ci-7)
@@ -178,6 +181,11 @@ case "${1:-help}" in
     test-status) shift; jd_export_for_compose; jd_test_status "${1:-}" ;;
     report)      shift; jd_export_for_compose; jd_report "${1:-}" ;;
     queue)   shift; jd_export_for_compose; jd_in_controller quiet.sh queue "${1:-}" ;;
+    # rule 4 (his ruling 2026-09-21): a FAILED pipeline waits for a re-push or a MANUAL RUN — this is the
+    # manual run. The failed state is work again; the next tick takes it.
+    retry)   shift; case "${1:-}" in test|main) ;; *) log_error "usage: pol jenkins retry test|main"; exit 2 ;; esac
+             jd_export_for_compose; jd_in_controller quiet.sh rearm "$1" "pol jenkins retry, by hand"
+             jd_in_controller quiet.sh queue "$1" ;;
     scan)    shift; jd_export_for_compose; exec bash "$J/scan/scan.sh" "$@" ;;
 
     # ---- the pipeline device (ci-7)
