@@ -160,6 +160,8 @@ ensure_env(){
     # /var/polari-pool and /var/jenkins_home. A `docker -v` issued from inside
     # the controller is resolved by the daemon, on the host, so anything that
     # mounts one of those paths needs the host's name for it.
+    # rule 5: main releases at the device's LOCAL midnight — the controller gets the host's zone
+    export TZ="${TZ:-${CI_TZ:-$(cat /etc/timezone 2>/dev/null || timedatectl show -p Timezone --value 2>/dev/null || echo UTC)}}"
     export CI_HOST_POOL="$J/pool"
     export CI_HOST_JENKINS_HOME="${JENKINS_HOME:-$J/jenkins_home}"
     jd_export_for_compose     # CI_ROUTES / CI_EXECUTORS / the isle target reach casc + the jobs
