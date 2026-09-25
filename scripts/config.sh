@@ -46,8 +46,8 @@ POLARI_KC_ADMIN_PASS|Keycloak admin password (suite + rf-node)|setup scripts
 POLARI_MYSQL_ROOT_PASS|suite MariaDB root password|setup-polari-security.sh
 POLARI_KC_DB_PASS|Keycloak DB user password (suite + rf-node)|setup scripts
 POLARI_PSC_DB_PASS|PSC DB user password|setup-polari-security.sh
-POLARI_MINIO_ROOT_USER|MinIO root/access user|setup scripts + compose interpolation
-POLARI_MINIO_ROOT_PASS|MinIO root/secret password|setup scripts + compose interpolation
+POLARI_MINIO_ROOT_USER|file store (SeaweedFS S3) root/access user|setup scripts + compose interpolation
+POLARI_MINIO_ROOT_PASS|file store (SeaweedFS S3) root/secret password|setup scripts + compose interpolation
 POLARI_MARIADB_ROOT_PASS|rf-node MariaDB root password|staging/prod-setup.sh
 POLARI_OBJECTS_DB_PASS|rf-node polari object-DB password (dbcombo)|staging/prod-setup.sh + compose
 POLARI_KEYDB_PASS|twin-B KeyDB password|dbcombo compose

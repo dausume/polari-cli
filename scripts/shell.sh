@@ -108,9 +108,10 @@ print(f\"apps covered: {sum(1 for a in d['apps'] if a['installable'])}/{len(d['a
         [ -f "$FILE" ] || die "no artifact at $FILE — run pol shell build/dist first"
         FC=$(docker ps --filter name=prf-file-store --format '{{.Names}}' | head -1)
         [ -n "$FC" ] || die "prf-file-store container not running"
-        # mc inside the container: presigned host-rewrites break SigV4.
         docker cp "$FILE" "$FC":/tmp/pol-shell-artifact
-        docker exec "$FC" sh -c 'U=$(cat "$MINIO_ROOT_USER_FILE" 2>/dev/null || printenv MINIO_ROOT_USER); P=$(cat "$MINIO_ROOT_PASSWORD_FILE" 2>/dev/null || printenv MINIO_ROOT_PASSWORD); mc alias set local http://localhost:9000 "$U" "$P" >/dev/null 2>&1; mc mb --ignore-existing local/shell-artifacts >/dev/null; mc cp -q /tmp/pol-shell-artifact "local/shell-artifacts/'"$KEY"'" >/dev/null && rm /tmp/pol-shell-artifact'
+        # the store's filer takes the file straight into the bucket path (SeaweedFS: a directory under
+        # /buckets IS an S3 bucket); no client credentials leave the container, no presign host rewrites
+        docker exec "$FC" sh -c 'curl -sf -F "file=@/tmp/pol-shell-artifact" "http://localhost:9001/buckets/shell-artifacts/'"$KEY"'" >/dev/null && rm -f /tmp/pol-shell-artifact' || die "upload into the file store failed (prf-file-store filer :9001)"
         SHA=$(sha256sum "$FILE" | cut -d' ' -f1)
         TOK=$(bearer)
         curl -sk -X POST "$API_BASE/api/appstore/artifacts" \
