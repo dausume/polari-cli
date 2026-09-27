@@ -25,6 +25,11 @@
 #                                  answers, vault or certificate; swaps images with `docker service update`
 #                                  after stashing every volume. See scripts/prod-agent.sh.
 #   pol prod restore <stash-id>    a PERSON's restore of a stash (scales the stack's services down, untars, up)
+#   pol prod update [<version>|latest] [--source <owner/repo>|github|forge] [--dry-run] [--yes] [--no-stash] [--no-checkout] [--history]
+#                                  THE DEVICE-SIDE UPDATE (dep-3): a person runs this ON the device — the release from the
+#                                  registered locations, the release rule checked here too, stash, rolling image swap (no
+#                                  service stopped), verify (rollback on failure), checkout to the tag. See scripts/prod-update.sh.
+#   pol prod sources [list|add <owner/repo>|remove <owner/repo>]   the REGISTERED locations update reads (default: the official list)
 #   pol prod cert                  (re)issue the edge certificate per the answers
 #   pol prod debs [build|copy <dir>]   stage the platform debs the server hands out
 #   pol prod render | deploy | down    the individual steps
@@ -57,6 +62,7 @@ source "$SCRIPT_DIR/lib/providers.sh"
 source "$SCRIPT_DIR/lib/vault.sh"
 [ -f "${POL_RF_NODE:-$SUITE/polari-rf-node}/security-ledger.sh" ] && source "${POL_RF_NODE:-$SUITE/polari-rf-node}/security-ledger.sh"
 source "$SCRIPT_DIR/lib/state.sh"
+source "$SCRIPT_DIR/prod-update.sh"   # pu_update / pu_sources / prod_update_last (functions only when sourced)
 SUITE="$POL_SUITE_ROOT"
 GEN="$SUITE/.generated"
 ANSWERS="$GEN/prod-answers.env"
@@ -1125,11 +1131,12 @@ do_status() {
     echo "  terms        $t"
     echo "  vault        $(vault_status | head -1 | sed 's/^vault: //')$([ -n "$POL_PROD_STASH" ] && echo " · provider stash policy: $POL_PROD_STASH")"
     local nxt=""; edge_cert_is_public || nxt="pol prod cert (public certificate) · "; [ "$(ls "$GEN"/debs/*.deb 2>/dev/null | wc -l)" -gt 0 ] || nxt="${nxt}pol prod debs build · "
+    echo "  last update  $(prod_update_last)"
     echo "  next         ${nxt}pol prod status"
 }
 
 # ---------------------------------------------------------------- dispatch
-show_help() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; }
+show_help() { sed -n '2,/^# Profiles:/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
 COMMAND=${1:-guide}; shift || true
 # every run is logged in full (stdout+stderr, the TUI's answers, every step) so it can be reviewed afterwards:
 #   pol prod log            the last run      pol prod log 3      the third-last      ls .generated/prod-log/
@@ -1156,6 +1163,10 @@ case "$COMMAND" in
     # path, and it sources none of this script (no vault, no answers, no certificate).
     agent)   exec bash "$SCRIPT_DIR/prod-agent.sh" "$@" ;;   # COMMAND was already shifted off above
     restore) do_restore "${1:-}" "${2:-}" ;;
+    # dep-3 (his ruling 2026-09-27): deployment is a PERSON on the device running one command; the pipeline only
+    # generates and publishes. Its own file (prod-update.sh); it touches no secret, answer, config or stack file.
+    update)  pu_update "$@" ;;
+    sources) pu_sources "$@" ;;
     # dep-0 (2026-09-22): the deployment target's own answer to "what do you run?" — READ by
     # polari-jenkins/deploy/conditions.sh over ssh, so "is there a newer release?" is a reading,
     # not a guess. Until rel-2 serves /api/release this file-and-stack reading is the truth.
