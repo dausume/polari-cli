@@ -49,7 +49,17 @@ services() {  # services <stack> → name<TAB>image (repo:tag, digest stripped)<
     $DOCKER service ls --filter "label=com.docker.stack.namespace=$1" --format '{{.Name}}	{{.Image}}	{{.Replicas}}' 2>/dev/null | sed 's/@sha256:[0-9a-f]*//'
 }
 our_image() {  # our_image <repo:tag> → 0 when it is a registry image of ours (has a namespace and a version-shaped tag)
-    case "$1" in */*:[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9]*|*/*:lean|*/*:prod|*/*:staging) return 0 ;; *) return 1 ;; esac
+    # tag forms: 2026.09.27 (the release job) · polari-v2026.09.12[-core] (a person's `pol prod apply --release`,
+    # the droplet's first deploy 2026-09-12 — found 2026-09-27: without this line the agent would have LEFT every
+    # service on the droplet alone) · lean|prod|staging (a locally built stack)
+    case "$1" in */*:[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9]*|*/*:polari-v[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9]*|*/*:lean|*/*:prod|*/*:staging) return 0 ;; *) return 1 ;; esac
+}
+tag_release() {  # tag_release <tag> → the release name a tag belongs to ('' when it is not a release image)
+    case "$1" in
+        [0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9]*) echo "polari-v${1%%-*}" ;;
+        polari-v[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9]*) echo "${1%%-core}" ;;
+        *) echo "" ;;
+    esac
 }
 backend_tag() { services "$1" | awk -F'\t' '$1 ~ /prf-backend$/ {split($2, a, ":"); print a[length(a)]; exit}'; }
 
@@ -57,7 +67,7 @@ case "$VERB" in
     --path) printf '%s\n' "$SELF" ;;
     current)
         S="$(stack_name)"; TAG="$([ -n "$S" ] && backend_tag "$S")"
-        echo "release=$(case "$TAG" in [0-9][0-9][0-9][0-9].*) echo "polari-v$TAG" ;; *) echo "" ;; esac)"
+        echo "release=$(tag_release "$TAG")"
         echo "image_tag=${TAG:-}"; echo "stack=${S:-none}"
         [ -n "$S" ] && services "$S" | awk -F'\t' '{print "service=" $1 "|" $2 "|" $3}'
         echo "updated_at=$([ -n "$S" ] && $DOCKER service inspect "$(services "$S" | awk -F'\t' '$1 ~ /prf-backend$/{print $1; exit}')" --format '{{.UpdatedAt}}' 2>/dev/null | cut -c1-19)"
