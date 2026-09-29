@@ -35,12 +35,19 @@ if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
     # shellcheck disable=SC2206
     ARGV=(${SSH_ORIGINAL_COMMAND#pol prod agent}); ARGV=("${ARGV[@]}")
 else ARGV=("$@"); fi
-VERB="${ARGV[0]:-}"; ARG="${ARGV[1]:-}"
+VERB="${ARGV[0]:-}"; ARG="${ARGV[1]:-}"; ONLY=("${ARGV[@]:2}")   # update|rollback <version> [image-name…]
 case "$VERB" in current|stash|update|rollback|verify|stash-list|--path) ;;
     *) log "REFUSED: ${SSH_ORIGINAL_COMMAND:-$*}"; say "REFUSED: '${VERB:-}' is not a deploy verb (current|stash|update|rollback|verify|stash-list). This key runs nothing else."; exit 2 ;;
 esac
 case "$ARG" in ''|[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9]|[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9].[0-9]*) ;;
     *) log "REFUSED: bad version '$ARG'"; say "REFUSED: '$ARG' is not a version (YYYY.MM.DD[.N])"; exit 2 ;; esac
+# the optional image names after the version: ONLY those images move (a release carries a fixed set — 2026.09.27
+# carried prf-backend + prf-frontend, and the droplet's lean stack also runs pol-hub, which that release could not
+# update: found 2026-09-28 on the droplet's first dry run). Names are image basenames (prf-backend), plain characters.
+for o in "${ONLY[@]}"; do case "$o" in ''|-*|*[!a-z0-9-]*) log "REFUSED: bad image name '$o'"; say "REFUSED: '$o' is not an image name"; exit 2 ;; esac; done
+in_only() {  # in_only <repo> → 0 when no list was given, or the image's basename is in it
+    [ "${#ONLY[@]}" -eq 0 ] && return 0; local b="${1##*/}" o; for o in "${ONLY[@]}"; do [ "$o" = "$b" ] && return 0; done; return 1
+}
 
 stack_name() {  # the pol prod stack on this swarm (lean or full); empty = none
     $DOCKER stack ls --format '{{.Name}}' 2>/dev/null | grep -E -m1 '^polari-(lean|prod)$' || true
@@ -103,6 +110,7 @@ case "$VERB" in
             [ -n "$name" ] || continue
             our_image "$image" || { say "leave  $name ($image — not a versioned image of ours)"; continue; }
             repo="${image%:*}"; oldtag="${image##*:}"; new="$repo:$ARG"
+            in_only "$repo" || { say "leave  $name ($image — not an image this release carries)"; continue; }
             [ "$oldtag" = "$ARG" ] && { say "same   $name already runs $new"; continue; }
             N=$((N + 1)); say "update $name: $image → $new (start-first, waiting for convergence)"
             if $DOCKER service update --image "$new" --update-order start-first --update-parallelism 1 --update-delay 5s \

@@ -107,7 +107,7 @@ json.dump({"from": e["PU_FROM"], "to": e["PU_TO"], "source": e["PU_SRC"], "sha":
 }
 pu_rollback() {  # back to the version that ran before — re-pin through the agent, else swarm's own per-service rollback
     if [ -n "$(pu_version "$PREV_TAG")" ] && [ "$PREV_TAG" = "$(pu_version "$PREV_TAG")" ]; then
-        pu_say rollback "prod-agent.sh rollback $PREV_TAG"; pu_agent rollback "$PREV_TAG" 2>&1 | pu_indent
+        pu_say rollback "prod-agent.sh rollback $PREV_TAG $REL_NAMES"; pu_agent rollback "$PREV_TAG" $REL_NAMES 2>&1 | pu_indent
     else   # the previous tag (polari-v…-core, lean, …) is not a version the agent can re-pin: swarm keeps the previous spec
         pu_say rollback "previous tag '$PREV_TAG' is not a release version — docker service rollback per moved service"
         printf '%s\n' "$MOVES" | while IFS='|' read -r name _ _; do [ -n "$name" ] || continue
@@ -178,6 +178,10 @@ print("ghcr_url=%s" % ((g or {}).get("url", "") if isinstance(g, dict) else ""))
 for k, v in sorted((t.get("images") or {}).items()): print("image=%s %s" % (k, v))' "$PU_TMP/release.json" 2>/dev/null)"
     [ -n "$R" ] || { echo "release.json of $TAG is not readable JSON — nothing changed"; exit 1; }
     SHA="$(sed -n 's/^sha=//p' <<<"$R")"; VERDICT="$(sed -n 's/^verdict=//p' <<<"$R")"
+    # the images THIS release carries (tested_against.images: "prf-backend:staging" → prf-backend). Only services
+    # running one of these move; a lean stack also runs images the pipeline does not build yet (pol-hub — found on
+    # the droplet's first dry run 2026-09-28): those are left alone and named, never pointed at a tag that does not exist
+    REL_NAMES="$(sed -n 's/^image=\([^: ]*\)[: ].*/\1/p' <<<"$R" | sed 's|.*/||' | sort -u | tr '\n' ' ')"
     pu_say resolve "$TAG from $SRC  (sha ${SHA:-unknown})"
 
     # 2 — the release rule, on the device too. No override.
@@ -201,6 +205,7 @@ for k, v in sorted((t.get("images") or {}).items()): print("image=%s %s" % (k, v
         [ -n "$name" ] || continue
         if ! pu_versioned "$image"; then pu_say service "$name  $image  (left alone — not a versioned image of ours)"; continue; fi
         nver=$((nver + 1))
+        case " $REL_NAMES " in *" $(basename "${image%:*}") "*) ;; *) pu_say service "$name  $image  (left alone — $TAG carries no $(basename "${image%:*}") image: ${REL_NAMES:-none})"; continue ;; esac
         if [ "${image##*:}" = "$VERSION" ]; then pu_say service "$name  already $image"
         else pu_say service "$name  $image → ${image%:*}:$VERSION"; MOVES="$MOVES$name|$image|${image%:*}:$VERSION"$'\n'; refs="$refs ${image%:*}:$VERSION"; fi
     done < <(sed -n 's/^service=//p' <<<"$cur")
@@ -222,9 +227,9 @@ for k, v in sorted((t.get("images") or {}).items()): print("image=%s %s" % (k, v
     # 4 — dry run: the exact verbs, nothing touched
     if [ "$dry" = 1 ]; then
         [ "$do_stash" = 1 ] && pu_say "would run" "$PU_AGENT stash $VERSION"
-        pu_say "would run" "$PU_AGENT update $VERSION"
+        pu_say "would run" "$PU_AGENT update $VERSION $REL_NAMES   (only these images move)"
         pu_say "would run" "$PU_AGENT verify   (+ /api/health through the proxy)"
-        [ -n "$(pu_version "$PREV_TAG")" ] && [ "$PREV_TAG" = "$(pu_version "$PREV_TAG")" ] && pu_say "on failure" "$PU_AGENT rollback $PREV_TAG" || pu_say "on failure" "docker service rollback <each moved service>   (previous tag '$PREV_TAG' is not a release version)"
+        [ -n "$(pu_version "$PREV_TAG")" ] && [ "$PREV_TAG" = "$(pu_version "$PREV_TAG")" ] && pu_say "on failure" "$PU_AGENT rollback $PREV_TAG $REL_NAMES" || pu_say "on failure" "docker service rollback <each moved service>   (previous tag '$PREV_TAG' is not a release version)"
         [ "$do_checkout" = 1 ] && pu_say "then" "git -C $POL_SUITE_ROOT fetch --tags origin && git checkout $TAG && git submodule update --init"
         echo "dry run — nothing changed"; exit 0
     fi
@@ -245,8 +250,8 @@ for k, v in sorted((t.get("images") or {}).items()): print("image=%s %s" % (k, v
     else pu_say stash "skipped (--no-stash)"; fi
 
     # 6 — the rolling update
-    pu_say update "prod-agent.sh update $VERSION (start-first, one service at a time)"
-    pu_agent update "$VERSION" > "$PU_TMP/update.out" 2>&1; local urc=$?
+    pu_say update "prod-agent.sh update $VERSION $REL_NAMES (start-first, one service at a time)"
+    pu_agent update "$VERSION" $REL_NAMES > "$PU_TMP/update.out" 2>&1; local urc=$?
     pu_indent < "$PU_TMP/update.out"
     if [ "$urc" != 0 ]; then
         pu_rollback; f="$(pu_record update-failed-rolled-back "-")"
