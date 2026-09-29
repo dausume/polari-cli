@@ -133,8 +133,10 @@ case "$VERB" in
             case "$reps" in *"/"*) have="${reps%%/*}"; want="${reps##*/}"; want="${want%% *}" ;; *) have=?; want=? ;; esac
             if [ "$have" = "$want" ] && [ "$have" != 0 ]; then say "ok   $name $reps $image"; else say "BAD  $name $reps $image"; BAD=1; fi
         done < <(services "$S")
-        H="$(curl -sk --max-time 10 -o /dev/null -w '%{http_code}' https://127.0.0.1/api/health 2>/dev/null || echo 000)"
-        case "$H" in 2*) say "ok   local /api/health → $H" ;; *) say "BAD  local /api/health → $H"; BAD=1 ;; esac
+        # POLARI_HEALTH_HOST (optional, from the caller — pol prod update passes the answered API name): a proxy that
+        # routes by name answers 404/421 to a bare 127.0.0.1 probe; a hostname is not a secret, the agent still reads no answers
+        H="$(curl -sk --max-time 10 -o /dev/null -w '%{http_code}' ${POLARI_HEALTH_HOST:+-H "Host: $POLARI_HEALTH_HOST"} https://127.0.0.1/api/health 2>/dev/null || echo 000)"
+        case "$H" in 2*) say "ok   local /api/health${POLARI_HEALTH_HOST:+ (Host: $POLARI_HEALTH_HOST)} → $H" ;; *) say "BAD  local /api/health${POLARI_HEALTH_HOST:+ (Host: $POLARI_HEALTH_HOST)} → $H"; BAD=1 ;; esac
         [ "$BAD" = 0 ] && { echo "verify=ok"; exit 0; } || { echo "verify=failed"; exit 1; } ;;
     stash-list)
         for d in $(ls -1dt "$STASH_ROOT"/*-before-* 2>/dev/null); do echo "$(basename "$d")	$(du -sh "$d" 2>/dev/null | cut -f1)	$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(",".join(d.get("volumes",[])), "complete" if d.get("complete") else "INCOMPLETE")' "$d/stash.json" 2>/dev/null)"; done

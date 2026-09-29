@@ -259,11 +259,16 @@ for k, v in sorted((t.get("images") or {}).items()): print("image=%s %s" % (k, v
     fi
 
     # 7 — verify (converged + healthy through the proxy); failure → back to the previous version
-    local v1 vrc=1 try=0 h
-    while [ "$try" -lt "${POL_PROD_UPDATE_VERIFY_TRIES:-6}" ]; do
-        try=$((try + 1)); v1="$(pu_agent verify 2>&1)"; vrc=$?; h="$(pu_health)"
+    # The window: a backend on a small VM takes MINUTES to come online after an image change (the isle test measured
+    # 335 s to online; the droplet's first update rolled back a booting backend after 60 s — 2026-09-29). Default
+    # 60 tries × 10 s = 10 min; progress every 30 s so a person watching knows it is waiting, not stuck.
+    local v1 vrc=1 try=0 h tries="${POL_PROD_UPDATE_VERIFY_TRIES:-60}" wait="${POL_PROD_UPDATE_VERIFY_WAIT:-10}" dom
+    dom="$(sed -n 's/^POL_PROD_DOMAIN=//p' "$PU_GEN/prod-answers.env" 2>/dev/null | tail -1)"
+    while [ "$try" -lt "$tries" ]; do
+        try=$((try + 1)); v1="$(POLARI_HEALTH_HOST="${dom:+api.prf.$dom}" pu_agent verify 2>&1)"; vrc=$?; h="$(pu_health)"
         [ "$vrc" = 0 ] && [ -n "$h" ] && break
-        [ "$try" -lt "${POL_PROD_UPDATE_VERIFY_TRIES:-6}" ] && sleep "${POL_PROD_UPDATE_VERIFY_WAIT:-10}"
+        [ $((try % 3)) = 0 ] && pu_say waiting "$((try * wait))s — $(printf '%s\n' "$v1" | grep -m1 'BAD' || echo "health: ${h:-no answer yet}") (up to $((tries * wait))s)"
+        [ "$try" -lt "$tries" ] && sleep "$wait"
     done
     printf '%s\n' "$v1" | pu_indent
     pu_say health "${h:-not answering through the proxy}"
