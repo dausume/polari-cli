@@ -118,10 +118,12 @@ pu_rollback() {  # back to the version that ran before — re-pin through the ag
 pu_checkout_prepare() {  # sets CHECKOUT_STATE and, when the move is possible, PU_HELPER (exec'd last)
     local suite="$POL_SUITE_ROOT"
     git -C "$suite" rev-parse --git-dir >/dev/null 2>&1 || { CHECKOUT_STATE="skipped: $suite is not a git checkout"; return; }
-    [ -z "$(git -C "$suite" status --porcelain --untracked-files=no 2>/dev/null)" ] || { CHECKOUT_STATE="skipped: local changes in $suite — nothing discarded; move it by hand"; return; }
     git -C "$suite" fetch -q --tags origin 2>/dev/null || true
     git -C "$suite" rev-parse -q --verify "refs/tags/$TAG" >/dev/null || { CHECKOUT_STATE="skipped: tag $TAG is not on the checkout's origin — the images ARE updated; the CLI stays at its version"; return; }
-    [ "$(git -C "$suite" rev-parse HEAD)" = "$(git -C "$suite" rev-parse "$TAG^{commit}")" ] && { CHECKOUT_STATE="already at $TAG"; return; }
+    # already at the tag wins (the droplet's first update, 2026-09-30: the superproject WAS at the tag, only the CLI
+    # submodule had been moved forward by hand — that is not "local changes" worth a warning)
+    [ "$(git -C "$suite" rev-parse HEAD)" = "$(git -C "$suite" rev-parse "$TAG^{commit}")" ] && { CHECKOUT_STATE="already at $TAG$(git -C "$suite" submodule status 2>/dev/null | grep -q '^+' && echo ' (a submodule is ahead of the tag by hand — left as is)')"; return; }
+    [ -z "$(git -C "$suite" status --porcelain --untracked-files=no --ignore-submodules=dirty 2>/dev/null)" ] || { CHECKOUT_STATE="skipped: local changes in $suite — nothing discarded; move it by hand"; return; }
     PU_HELPER="$(mktemp "${TMPDIR:-/tmp}/pol-prod-checkout.XXXXXX")"; CHECKOUT_STATE="scheduled: $TAG"
     cat > "$PU_HELPER" <<EOF
 #!/bin/bash
@@ -251,8 +253,9 @@ for k, v in sorted((t.get("images") or {}).items()): print("image=%s %s" % (k, v
 
     # 6 — the rolling update
     pu_say update "prod-agent.sh update $VERSION $REL_NAMES (start-first, one service at a time)"
-    pu_agent update "$VERSION" $REL_NAMES > "$PU_TMP/update.out" 2>&1; local urc=$?
-    pu_indent < "$PU_TMP/update.out"
+    # streamed, not captured: docker service update blocks until the new task is running and healthy — minutes for
+    # the backend — and a person watching saw nothing for that whole step (the droplet, 2026-09-30)
+    pu_agent update "$VERSION" $REL_NAMES 2>&1 | tee "$PU_TMP/update.out" | pu_indent; local urc=${PIPESTATUS[0]}
     if [ "$urc" != 0 ]; then
         pu_rollback; f="$(pu_record update-failed-rolled-back "-")"
         pu_say record "$f"; echo "update FAILED and was rolled back to ${PREV_TAG:-the previous images} — the services kept running"; exit 1
