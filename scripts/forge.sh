@@ -26,6 +26,7 @@ ${BOLD}pol forge${NC} — the self-hosted forge (polari-forge/, Forgejo) — the
   ${CYAN}the dual route${NC} — GitHub = online availability · the forge = self-sustaining, the default for people
     mirror <owner/repo>               pull-mirror one GitHub repo onto the forge (skips one already there)
     mirror --forest                   every repo in polari-forge/forest.txt (frg-1 runs this on the chosen box)
+    mirror --sync <owner/repo>|--forest   ask the forge to fetch NOW (after a release); otherwise it checks GitHub once a WEEK
     apt-source [<owner>]              the two lines a person needs: the key fetch + the deb line
 
   ${CYAN}what it costs, what it keeps${NC}
