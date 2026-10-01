@@ -91,6 +91,16 @@ image_source_title() {  # prefix → title, or "manual: <prefix>"
 official_release_sources() {
     printf 'dausume/polari-suite\tGitHub Releases of the Polari suite — the official installers (built and published by the release job)\n'
 }
+# frg-3 (his rulings 2026-09-27/30): DUAL ROUTE — every release is on the self-hosted FORGE (Forgejo; self-sustaining,
+# production's default for people) AND on GitHub (online availability). A device asks the forge FIRST, GitHub second.
+# POL_FORGE_URL is the knob (a home/test forge); the default is the public forge on production. The CLI never sources
+# polari-jenkins — this is the device-side twin of routes/destinations.sh dest_forge_url, kept to the same default.
+official_forge_url() { local u="${POL_FORGE_URL:-https://forge.polari-systems.org}"; printf '%s' "${u%/}"; }
+official_release_locations() {  # the default registered locations, in the order pol prod update asks them (SOURCE values)
+    local r; r="$(official_release_sources | head -1 | cut -f1)"
+    printf 'forge:%s/%s\n' "$(official_forge_url)" "$r"
+    printf 'github:%s\n' "$r"
+}
 release_tags_with_debs() {  # owner/repo → tags whose release carries .deb assets (newest first, ≤ 8); unauthenticated API, 60 calls/h
     curl -fsSL --max-time 15 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$1/releases?per_page=15" 2>/dev/null | python3 -c '
 import sys, json

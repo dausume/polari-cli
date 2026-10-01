@@ -3,8 +3,8 @@
 #
 # His ruling: the pipeline handles nothing beyond "the assets being generated and made available" (the release
 # and its publish). DEPLOYMENT is a person going into the device and running ONE command that updates from the
-# REGISTERED locations — GitHub today, a self-hosted forge later: a list (`pol prod sources`), never a
-# hard-coded host — WITHOUT interrupting services. No pipeline-driven deploys; no pipeline ssh into production.
+# REGISTERED locations — the self-hosted forge first, GitHub second (frg-3, the default list): a list
+# (`pol prod sources`), never a hard-coded host — WITHOUT interrupting services. No pipeline-driven deploys; no pipeline ssh into production.
 #
 #   pol prod update [<version>|latest] [--source <owner/repo>|github|forge] [--dry-run] [--yes]
 #                   [--no-stash] [--no-checkout] [--history]

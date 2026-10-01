@@ -5,7 +5,9 @@
 #   .generated/prod-sources.env    one   SOURCE=<kind>:<where>   line per location, in the order they are asked
 #       SOURCE=github:dausume/polari-suite                 GitHub Releases (api.github.com)
 #       SOURCE=forge:https://forge.example/dausume/polari-suite   a self-hosted Forgejo/Gitea (its /api/v1)
-#   absent = the official list (providers.sh official_release_sources), so a fresh device needs no setup.
+#   absent = the official list (providers.sh official_release_locations): THE FORGE FIRST (production's default,
+#   self-sustaining; POL_FORGE_URL), GitHub second (online availability) — so a fresh device needs no setup, and a
+#   forge that does not answer falls through to GitHub with a "no answer … (next location)" line.
 #
 #   prod_sources                       → kind<TAB>api-base<TAB>owner/repo   one per registered location
 #   pu_release_newest <k> <b> <r>      → tag<TAB>release.json-url  of the newest polari-v release carrying release.json
@@ -24,7 +26,7 @@ pu_source_row() {  # SOURCE value → kind<TAB>base<TAB>owner/repo
 }
 pu_source_entries() {  # the SOURCE values, registered or default
     if [ -s "$PU_SOURCES_FILE" ]; then sed -n 's/^SOURCE=//p' "$PU_SOURCES_FILE"
-    else official_release_sources | cut -f1 | sed 's/^/github:/'; fi
+    else official_release_locations; fi
 }
 prod_sources() { pu_source_entries | while read -r s; do [ -n "$s" ] && pu_source_row "$s"; done; }
 
