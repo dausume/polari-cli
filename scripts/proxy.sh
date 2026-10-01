@@ -20,10 +20,14 @@ ${BOLD}COMMANDS${NC}   (--project suite|node|all, default all)
   ${CYAN}mode${NC}        which nginx world THIS machine is in: isle (the isle
               agent's nginx, generated from its registry — untouched by
               the suite) or suite (pol-proxy, one template per env)
-  ${CYAN}template${NC} <env> [--domain D] [--topology single|swarm] [--auth keycloak]
+  ${CYAN}template${NC} <env> [--domain D] [--topology single|swarm] [--auth keycloak] [--forge on [--forge-owner O]]
               render pol-proxy/nginx.<env>.conf.template (staging|prod|lean)
               --auth keycloak (lean only) adds the auth.<domain> server block
               that fronts pol-keycloak — omit it and the marker is dropped
+              --forge on (lean|prod, frg-2) adds forge.<domain> -> forge:3000 and
+              turns apt.<domain> into a rewrite onto the forge's Debian registry
+              (/api/packages/<owner>/debian/…, owner default dausume) in place of
+              the static /srv/apt tree
               into .generated/nginx.<env>.conf — the file the compose AND
               the swarm stack use. Refuses static upstream{} blocks: the
               one config must boot before every service exists (swarm)
@@ -99,8 +103,10 @@ template_render() {
     # docker network either way, resolved lazily (set $up_x; proxy_pass $up_x)
     # so nginx boots before every task runs. What differs per topology is
     # not nginx but the stack: ports mode + placement (pol prod / pol swarm).
-    local env=$1 domain="" topology="${POL_PROXY_TOPOLOGY:-single}" auth="${POL_PROXY_AUTH:-off}"; shift
-    while [ $# -gt 0 ]; do case "$1" in --domain) domain="$2"; shift 2 ;; --topology) topology="$2"; shift 2 ;; --auth) auth="$2"; shift 2 ;; *) shift ;; esac; done
+    local env=$1 domain="" topology="${POL_PROXY_TOPOLOGY:-single}" auth="${POL_PROXY_AUTH:-off}" forge="${POL_PROXY_FORGE:-off}" fowner="${POL_PROXY_FORGE_OWNER:-dausume}"; shift
+    while [ $# -gt 0 ]; do case "$1" in --domain) domain="$2"; shift 2 ;; --topology) topology="$2"; shift 2 ;; --auth) auth="$2"; shift 2 ;; --forge) forge="$2"; shift 2 ;; --forge-owner) fowner="$2"; shift 2 ;; *) shift ;; esac; done
+    case "$forge" in on|off) ;; *) die "--forge on|off" ;; esac
+    case "$fowner" in *[!A-Za-z0-9._-]*|"") die "--forge-owner: a forge owner name (letters, digits, . _ -)" ;; esac
     local tpl="$POL_SUITE_ROOT/pol-proxy/nginx.$env.conf.template" out="$POL_SUITE_ROOT/.generated/nginx.$env.conf"
     [ -f "$tpl" ] || die "no template for env '$env' (staging|prod|lean)"
     if grep -qE '^\s*upstream [a-z0-9-]+ \{' "$tpl"; then
@@ -145,15 +151,77 @@ template_render() {
 AUTHEOF
 )
     fi
+    # ---- the forge (frg-2, lean|prod): forge.<domain> -> forge:3000, apt.<domain> -> its Debian registry ----------
+    # Forgejo runs PROTOCOL=http on :3000 behind this edge (ROOT_URL https://forge.<domain>/): it needs the Host,
+    # the scheme (X-Forwarded-Proto https) and the client address; 1g bodies for a deb/image upload (the
+    # pipeline's forgejo-* routes publish ~300 MB). apt.<domain> stays THE line people add —
+    #   deb [signed-by=…] https://apt.<domain> stable main      key: https://apt.<domain>/repository.key
+    # — rewritten onto /api/packages/<owner>/debian/<x>; read-only (GET/HEAD) at this name.
+    local forgeblock=""
+    if [ "$forge" = on ]; then
+        forgeblock=$(cat <<'FORGEEOF'
+    # ---- the forge (Forgejo) — forge.__PROD_DOMAIN__: the UI, the API, git over https -------
+    # (ssh clone is not exposed in this slice — https only)
+    server {
+        listen 443 ssl;
+        http2 on;
+        server_name forge.__PROD_DOMAIN__;
+        ssl_certificate     /etc/nginx/certs/pol-proxy.crt;
+        ssl_certificate_key /etc/nginx/certs/pol-proxy.key;
+        client_max_body_size 1g;
+        location / {
+            set $up_forge http://forge:3000;   # resolved lazily (swarm DNS appears when the task runs)
+            proxy_pass $up_forge;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_request_buffering off;
+            proxy_read_timeout 600s;
+            proxy_send_timeout 600s;
+        }
+    }
+
+    # ---- the apt repository — apt.__PROD_DOMAIN__, served BY the forge's Debian registry ----
+    # deb [signed-by=/etc/apt/keyrings/polari.asc] https://apt.__PROD_DOMAIN__ stable main
+    # key: https://apt.__PROD_DOMAIN__/repository.key   (apt.<d>/<x> -> forge /api/packages/__FORGE_OWNER__/debian/<x>)
+    server {
+        listen 443 ssl;
+        http2 on;
+        server_name apt.__PROD_DOMAIN__;
+        ssl_certificate     /etc/nginx/certs/pol-proxy.crt;
+        ssl_certificate_key /etc/nginx/certs/pol-proxy.key;
+        location = /health { add_header Content-Type application/json; return 200 '{"status":"ok","service":"apt","served_by":"forge"}'; }
+        location / {
+            limit_except GET { deny all; }   # read-only at this name (GET implies HEAD); uploads go to forge.<d>
+            set $up_forge_apt http://forge:3000;
+            rewrite ^/(.*)$ /api/packages/__FORGE_OWNER__/debian/$1 break;
+            proxy_pass $up_forge_apt;
+            proxy_set_header Host forge.__PROD_DOMAIN__;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_read_timeout 300s;
+        }
+    }
+FORGEEOF
+)
+    fi
     case "$env" in
         staging) local ip="${LOCAL_IP:-$(lan_ip)}"; sed -e "s/\${LOCAL_IP}/$ip/g" -e "s|\${HSTS_HEADER}|$hsts|" "$tpl" > "$out"; log_success "rendered $out (LOCAL_IP=$ip, topology $topology)" ;;
         prod|lean) [ -n "$domain" ] || domain="${PROD_DOMAIN:-${POL_PROD_DOMAIN:-}}"; [ -n "$domain" ] || die "--domain <public domain> (or PROD_DOMAIN) required for $env"
                    [ "$env" = lean ] && [ "$auth" = keycloak ] && authblock=${authblock//__PROD_DOMAIN__/$domain}
-                   local blockfile; blockfile=$(mktemp); printf '%s\n' "$authblock" > "$blockfile"
-                   sed -e "s/\${PROD_DOMAIN}/$domain/g" -e "s|\${HSTS_HEADER}|$hsts|" \
-                       -e "/\${AUTH_SERVER_BLOCK}/r $blockfile" -e "/\${AUTH_SERVER_BLOCK}/d" "$tpl" > "$out"
-                   rm -f "$blockfile"
-                   log_success "rendered $out (domain $domain, topology $topology, logins $auth, ${hsts:0:9})" ;;
+                   forgeblock=${forgeblock//__PROD_DOMAIN__/$domain}; forgeblock=${forgeblock//__FORGE_OWNER__/$fowner}
+                   local blockfile fblockfile; blockfile=$(mktemp); fblockfile=$(mktemp)
+                   printf '%s\n' "$authblock" > "$blockfile"; printf '%s\n' "$forgeblock" > "$fblockfile"
+                   # forge on: the static apt block (between the APT_STATIC markers) gives way to the forge's two blocks
+                   local aptdel=(); [ "$forge" = on ] && aptdel=(-e '/# >>> APT_STATIC/,/# <<< APT_STATIC/d')
+                   sed "${aptdel[@]}" -e "s/\${PROD_DOMAIN}/$domain/g" -e "s|\${HSTS_HEADER}|$hsts|" \
+                       -e "/\${AUTH_SERVER_BLOCK}/r $blockfile" -e "/\${AUTH_SERVER_BLOCK}/d" \
+                       -e "/\${FORGE_SERVER_BLOCK}/r $fblockfile" -e "/\${FORGE_SERVER_BLOCK}/d" "$tpl" > "$out"
+                   rm -f "$blockfile" "$fblockfile"
+                   if [ "$forge" = on ] && ! grep -q "server_name forge.$domain;" "$out"; then die "template $tpl has no \${FORGE_SERVER_BLOCK} marker — the forge's server blocks were not placed"; fi
+                   log_success "rendered $out (domain $domain, topology $topology, logins $auth, forge $forge${forge:+$([ "$forge" = on ] && echo " owner $fowner")}, ${hsts:0:9})" ;;
     esac
     [ "$topology" = swarm ] && log_info "swarm: the stack pins the proxy to the manager with host-mode 80/443 (pol prod); every other service is reached over the overlay by name"
 }

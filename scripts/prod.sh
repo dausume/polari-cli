@@ -43,6 +43,8 @@
 #  pol prod providers             which providers are in use for what (hosting, DNS, certificate, registry, code) and the pages to visit for each
 #  pol prod addresses [--use <ip>|--auto]  every address assigned to this machine (droplet metadata on DigitalOcean); the exposure IP the A records need (detected, or the one you answered)
 #  pol prod bootstrap             a fresh VM: install docker, swarm init, then the guide
+#  pol prod selftest [-v]         the forge-on-production checks (names, SANs, stack, proxy, vault, verify) — no swarm needed
+#  the forge (frg-2): POL_PROD_FORGE=on → service forge + forge.<D> + apt.<D> (polari-forge/README.md "On production")
 # Profiles: POL_PROD_PROFILE=lean → docker-compose.lean.yml, stack polari-lean;
 # POL_PROD_PROFILE=full → docker-compose.prod.yml, stack polari-prod (Keycloak, MariaDB,
 # MinIO, the scorecard; odoo with POL_PROD_ODOO=on). Unanswered it follows the logins
@@ -60,6 +62,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/log.sh"
 source "$SCRIPT_DIR/lib/providers.sh"
 source "$SCRIPT_DIR/lib/vault.sh"
+source "$SCRIPT_DIR/lib/prod-forge.sh"   # frg-2: the forge as a stack service (POL_PROD_FORGE)
 [ -f "${POL_RF_NODE:-$SUITE/polari-rf-node}/security-ledger.sh" ] && source "${POL_RF_NODE:-$SUITE/polari-rf-node}/security-ledger.sh"
 source "$SCRIPT_DIR/lib/state.sh"
 source "$SCRIPT_DIR/prod-update.sh"   # pu_update / pu_sources / prod_update_last (functions only when sourced)
@@ -77,6 +80,7 @@ POL_PROD_MODULES="${POL_PROD_MODULES:-}"; POL_PROD_DEBS="${POL_PROD_DEBS:-}"; PO
 POL_PROD_IMAGE_REPO="${POL_PROD_IMAGE_REPO:-}"; POL_PROD_ODOO="${POL_PROD_ODOO:-}"
 POL_PROD_PROFILE="${POL_PROD_PROFILE:-}"; POL_PROD_DEMO_USERS="${POL_PROD_DEMO_USERS:-}"
 POL_PROD_APP_PERMISSIONS="${POL_PROD_APP_PERMISSIONS:-}"
+POL_PROD_FORGE="${POL_PROD_FORGE:-}"; POL_PROD_FORGE_OWNER="${POL_PROD_FORGE_OWNER:-}"
 load_answers() {
     if [ -f "$ANSWERS" ]; then
         while IFS='=' read -r k v; do
@@ -107,11 +111,15 @@ load_answers() {
     # Deliberately defaulted off: security is warn-only in deployments until the profiles are proven.
     : "${POL_PROD_APP_PERMISSIONS:=off}"
     case "$POL_PROD_APP_PERMISSIONS" in off|advisory|enforce) ;; *) POL_PROD_APP_PERMISSIONS=off ;; esac
+    # frg-2 THE FORGE on this server (git mirrors, releases, the apt repository people install from): off for
+    # answer files written before the answer existed; the distribution-server + public-server profiles answer on
+    : "${POL_PROD_FORGE:=off}"; case "$POL_PROD_FORGE" in on|off) ;; *) POL_PROD_FORGE=off ;; esac
+    : "${POL_PROD_FORGE_OWNER:=dausume}"
 }
 save_answers() {
     {
         echo "# pol prod answers — $(date -Is). Edit and re-run: pol prod apply. Env vars POL_PROD_* override."
-        for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE PROFILE DEMO_USERS APP_PERMISSIONS; do
+        for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE PROFILE DEMO_USERS APP_PERMISSIONS FORGE FORGE_OWNER; do
             v="POL_PROD_$k"; echo "$v=${!v}"
         done
     } > "$ANSWERS"
@@ -130,7 +138,8 @@ profile_path() {  # name → file (user first, then standard)
 }
 profile_summary() {  # file → one line
     local d a c i; d=$(grep -s '^POL_PROD_DOMAIN=' "$1" | cut -d= -f2-); a=$(grep -s '^POL_PROD_AUTH=' "$1" | cut -d= -f2-); c=$(grep -s '^POL_PROD_CERT_MODE=' "$1" | cut -d= -f2-); i=$(grep -s '^POL_PROD_IMAGE_TAG=' "$1" | cut -d= -f2-)
-    echo "${d:-<domain asked>} · logins ${a:-keycloak} · cert ${c:-self-signed} · images ${i:-build}"
+    local fo; fo=$(grep -s '^POL_PROD_FORGE=' "$1" | cut -d= -f2-)
+    echo "${d:-<domain asked>} · logins ${a:-keycloak} · cert ${c:-self-signed} · images ${i:-build}$([ "$fo" = on ] && echo ' · forge on')"
 }
 profile_list() {  # name<TAB>kind<TAB>summary<TAB>comment
     local f
@@ -147,7 +156,7 @@ profile_load() {  # name → sets POL_PROD_* from the file, expanding ${LAN_IP} 
 }
 profile_save() {  # name → the current answers, with a comment
     mkdir -p "$USER_PROFILES"; load_answers
-    { echo "# saved $(date -Is) on $(hostname) — pol prod profile use $1"; for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE PROFILE DEMO_USERS APP_PERMISSIONS; do v="POL_PROD_$k"; echo "$v=${!v}"; done; } > "$USER_PROFILES/$1.env"
+    { echo "# saved $(date -Is) on $(hostname) — pol prod profile use $1"; for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE PROFILE DEMO_USERS APP_PERMISSIONS FORGE FORGE_OWNER; do v="POL_PROD_$k"; echo "$v=${!v}"; done; } > "$USER_PROFILES/$1.env"
     log_success "profile saved: $USER_PROFILES/$1.env — pol prod profile use $1 [--apply]"
 }
 do_profile() {
@@ -281,7 +290,7 @@ do_facts() {  # machine-readable facts for the Textual guide: pol prod facts [--
     POL_PROD_DOMAIN="${dom:-$POL_PROD_DOMAIN}"   # the links and names follow the domain being asked about
     {
         echo "suite=$SUITE"; echo "git=$(git -C "$SUITE" rev-parse --short HEAD 2>/dev/null)"; echo "host=$(hostname)"; echo "user=$(id -un)"
-        for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE PROFILE DEMO_USERS APP_PERMISSIONS; do v="POL_PROD_$k"; echo "answer.$k=${!v}"; done
+        for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE PROFILE DEMO_USERS APP_PERMISSIONS FORGE FORGE_OWNER; do v="POL_PROD_$k"; echo "answer.$k=${!v}"; done
         echo "on_droplet=$(on_droplet && echo 1 || echo 0)"; echo "detected_ip=$(detected_ip)"; echo "ipv6=$(exposure_ip6)"
         server_addresses | while IFS=$'\t' read -r r a n; do echo "address=$r|$a|$n"; done
         echo "names.lean=$(lean_names "${dom:-example.org}")"; echo "names.full=$(full_names "${dom:-example.org}")"
@@ -370,6 +379,7 @@ do_verify() {  # pol prod verify [--module <optional module>] — after apply: p
     ok(){ pass=$((pass+1)); log_success "$1"; }; bad(){ fail=$((fail+1)); log_error "$1"; }
     j(){ curl -s $k --max-time "${3:-30}" ${2:+-X $2} -H 'Content-Type: application/json' ${4:+-d "$4"} "$base$1"; }
     pol_box "pol prod — verify (modules + apps by every route) @ $base"
+    forge_verify_checks   # frg-2: forge.<D> + apt.<D> (an empty registry is reported, not failed)
     # 0. alive
     [ "$(curl -s $k -o /dev/null -w '%{http_code}' --max-time 15 "$base/api/health")" = 200 ] && ok "API alive: $base/api/health" || { bad "API not answering at $base/api/health"; echo; log_error "verify: $pass passed, $fail failed"; return 1; }
     # 1. the registrar — the unified truth every route reads
@@ -439,7 +449,10 @@ name_rows() {
     printf 'api.prf.%s\tsubdomain\tthe Polari backend API\talways\n' "$D"
     [ "$POL_PROD_AUTH" = keycloak ] && [ "$POL_PROD_PROFILE" = full ] && { printf 'files.%s\tsubdomain\tthe file store (web)\tfull profile\n' "$D"; printf 's3.%s\tsubdomain\tthe file store (S3 API)\tfull profile\n' "$D"; }
     [ "$POL_PROD_ODOO" = on ] && printf 'odoo.%s\tsubdomain\tOdoo ERP\todoo = on\n' "$D"
-    [ "${POL_PROD_DEBS:-skip}" != skip ] && printf 'apt.%s\tsubdomain\tthe apt repository of installers\tinstallers handed out\n' "$D"
+    # frg-2: with the forge on, apt.<D> is the forge's Debian registry (a proxy rewrite) and forge.<D> joins;
+    # otherwise the static apt tree keeps its old rule
+    if forge_on; then forge_name_rows "$D"
+    elif [ "${POL_PROD_DEBS:-skip}" != skip ]; then printf 'apt.%s\tsubdomain\tthe apt repository of installers\tinstallers handed out\n' "$D"; fi
     return 0
 }
 lean_names() { name_rows "$1" | cut -f1 | tr '\n' ' '; }
@@ -462,7 +475,7 @@ do_guide() {
     while IFS=$'\t' read -r n k sm c; do start+=("$n" "[$k] $sm — $c"); done < <(profile_list)
     start+=(fresh "Walk through everything again")
     local pick; pick=$(tui_menu "Start from" "Re-use the answers of a prior run or a profile (you still see every step and can change any answer), or start fresh:" "${start[0]}" "${start[@]}")
-    case "$pick" in last) : ;; fresh) rm -f "$ANSWERS"; for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE PROFILE DEMO_USERS APP_PERMISSIONS; do unset "POL_PROD_$k"; done; load_answers ;; *) profile_load "$pick" ;; esac
+    case "$pick" in last) : ;; fresh) rm -f "$ANSWERS"; for k in ROUTE DOMAIN WWW EXPOSURE_IP DNS_PROVIDER STASH CERT_MODE LE_CHALLENGE LE_EMAIL AUTH MODULES DEBS DEMO IMAGE_TAG IMAGE_REPO ODOO POSTURE PROFILE DEMO_USERS APP_PERMISSIONS FORGE FORGE_OWNER; do unset "POL_PROD_$k"; done; load_answers ;; *) profile_load "$pick" ;; esac
     tui_msg "Credentials and the vault" "Everything this guide generates (Keycloak admin, database and file-store passwords on the full profile) is written ONCE into an encrypted, root-only vault at /etc/polari/vault and nowhere else you have to protect. Read it later with:  sudo pol security vault show\n\nProvider credentials you give along the way (a DigitalOcean API token for the DNS challenge, a registry pull token) CAN be stashed in the same vault so the next run does not ask again. Advice: record them in your own password manager and remove them from the vault afterwards (sudo pol security vault forget 'provider <name>'). The next question sets the rule; you can still answer per item."
     POL_PROD_STASH=$(tui_menu "Stash provider credentials in the vault?" "Generated Polari credentials are always vaulted. For PROVIDER credentials choose:" "${POL_PROD_STASH:-some}" \
         all "Stash every provider credential I enter (convenient; move them out later)" \
@@ -536,6 +549,8 @@ Nothing else to do here. (pol prod is the server route.)"
             full "Full — Keycloak, the shared MariaDB, the file store and the scorecard (the public server)")
         if tui_yesno "Demonstration accounts" "Create demonstration accounts in Keycloak (demo-admin, demo-journalist, demo-scientist, demo-viewer, one shared generated password in .generated/demo-users.env)? Answer No for anything real — they are sign-ins anyone who reads that file can use."; then POL_PROD_DEMO_USERS=on; else POL_PROD_DEMO_USERS=off; fi
     fi
+    # frg-2: the forge — one yes/no, right after the logins (his ruling: production is the default distribution point)
+    if tui_yesno "The forge" "Host the forge (git mirrors, releases, the apt repository people install from) on this server?\n\nForgejo in 512 MiB, behind the proxy at forge.$POL_PROD_DOMAIN and apt.$POL_PROD_DOMAIN; registration off, anyone reads; its secrets go to the vault and its data to the volume $FORGE_VOL. GitHub stays the secondary route."; then POL_PROD_FORGE=on; else POL_PROD_FORGE=off; fi
     # Odoo is an add-on installed after the initial deployment (POL_PROD_ODOO=on pol prod apply), not a first-run question
     POL_PROD_MODULES=$(tui_input "Modules" "The floor set the server boots (comma-separated; more = more memory):" "$POL_PROD_MODULES")
     # Installers: skip | a PUBLISHED release (our official source, listed) | build here | manual pool (dir, release URL, github:owner/repo@tag)
@@ -603,11 +618,14 @@ do_plan() {
     echo "  modules      $POL_PROD_MODULES"
     echo "  installers   $POL_PROD_DEBS   staged now: $(ls "$GEN"/debs/*.deb 2>/dev/null | wc -l)"
     echo "  demo notice  $POL_PROD_DEMO"
+    forge_plan_line
     if [ -n "$POL_PROD_IMAGE_REPO" ]; then echo "  images       PULL from $POL_PROD_IMAGE_REPO ($(image_source_title "$POL_PROD_IMAGE_REPO")) at tag $POL_PROD_IMAGE_TAG"; else echo "  images       BUILD on this machine from this checkout, tagged $POL_PROD_IMAGE_TAG"; fi
     echo
     echo "  apply will: 1 preflight · 2 write env + runtime configs · 3 render the proxy config$([ "$(profile)" = full ] && echo ' · 3b security setup (CA, Keycloak, DB credentials)')"
     echo "              4 stage the edge certificate · 5 stage debs · 6 build or pull images · 7 render the stack"
     echo "              8 docker stack deploy $(stack_name) · 9 issue the Let's Encrypt cert (http mode needs the stack up) · 10 status"
+    forge_on && echo "              forge: 2 secrets → vault [forge] + app.ini · 8 app.ini seeded into $FORGE_VOL first · after 8: admin user, token → vault, the re-measure gate"
+    return 0
 }
 do_check() {
     load_answers
@@ -629,9 +647,14 @@ do_check() {
     else log_warn "no domain answered yet (pol prod guide)"; fi
     if [ -s "$GEN/certs/edge/fullchain.pem" ]; then edge_cert_is_public && log_success "edge certificate: publicly trusted ($(edge_cert_issuer))" || log_warn "edge certificate: self-signed — browsers will warn (pol prod cert)"; else log_warn "no edge certificate staged yet (apply stages one)"; fi
     local n; n=$(ls "$GEN"/debs/*.deb 2>/dev/null | wc -l); [ "$n" -gt 0 ] && log_success "$n platform deb(s) staged" || log_warn "no platform debs staged (pol prod debs build|copy)"
-    [ -f "$SUITE/polari-jenkins/secrets/signing/apt_signing_keyid" ] && log_success "apt signing key present" || log_warn "apt repo signing key absent (polari-jenkins/secrets) — apt.$POL_PROD_DOMAIN will serve an unsigned/empty tree"
+    # frg-3: no apt signing key of ours any more — the forge's Debian registry serves the release debs and signs its own index
+    log_info "apt: the forge's Debian registry ($(official_forge_url)/api/packages/<owner>/debian, signed by the forge — pol forge apt-source); GitHub releases carry the same debs"
     [ "$POL_PROD_AUTH" = keycloak ] && [ "$(profile)" = full ] && log_info "full profile: Keycloak + MariaDB + MinIO + scorecard (credentials generated at apply; rotate later with pol security rotate prod)"
     logins_on_lean && log_info "lean profile WITH logins: + pol-keycloak + pol-kc-mariadb (about 1.4 GB); credentials generated at apply into pol-keycloak/keycloak-admin.env and the vault"
+    if forge_on; then
+        [ -n "$(forge_image_pin)" ] && log_success "forge: polari-forge checked out, image pinned ($(forge_image_pin | cut -c1-60)…)" || { log_error "forge on, but polari-forge is not checked out (git submodule update --init polari-forge)"; fail=1; }
+        log_info "forge: limit ${FORGE_LIMIT_MIB} MiB; apply re-measures it against free memory (WARN under $((2*FORGE_LIMIT_MIB)) MiB available) — available now: $(free -m 2>/dev/null | awk '/^Mem:/{print $7}') MiB"
+    fi
     return $fail
 }
 
@@ -741,6 +764,7 @@ POLARI_APP_PERMISSIONS=${POL_PROD_APP_PERMISSIONS:-off}
 $kc_env
 EOF
     logins_on_lean && chmod 600 "$GEN/.env.lean"
+    write_configs_forge "$GEN/.env.lean"
     local demo_enabled=false; [ "$POL_PROD_DEMO" = on ] && demo_enabled=true
     cat > "$GEN/prf-runtime-config.lean.json" <<EOF
 {
@@ -761,7 +785,8 @@ EOF
 { "_comment": "LEAN PRODUCTION: generated by pol prod", "_generated": "$(date -Is)",
   "links": { "prf": "https://prf.$D", "dps": "https://$D/docs.html", "mesh": "${ISLE_MESH_URL:-https://$D/docs/networking-model.html}", "oseb": "https://$D/docs.html" } }
 EOF
-    local pargs=(); logins_on_lean && pargs=(--auth keycloak)
+    local pargs=() fa=(); logins_on_lean && pargs=(--auth keycloak)
+    forge_on && read -r -a fa <<<"$(forge_proxy_args)" && pargs+=("${fa[@]}")
     bash "$SCRIPT_DIR/proxy.sh" template lean --domain "$D" --topology swarm "${pargs[@]}" >/dev/null || die "proxy template failed"
     mkdir -p "$GEN/debs" "$GEN/apt" "$GEN/certbot-www" "$GEN/certs/edge"
     log_success "configs written: .env.lean, prf/pol-hub runtime configs, nginx.lean.conf"
@@ -838,6 +863,8 @@ render_stack() {
     for c in ${POL_STACK_CONSTRAINTS:-}; do extra+=(--constraint "$c"); done
     local pargs=""; [ "$(profile)" = full ] && [ "$POL_PROD_ODOO" = on ] && pargs="--profile odoo"
     logins_on_lean && pargs="$pargs --profile logins"
+    # frg-2: the forge service sits behind the compose profile "forge" (both files) — the same two-key gate
+    forge_on && { pargs="$pargs --profile forge"; extra+=(--with-profile forge); }
     docker compose -f "$(compose_file)" --env-file "$(env_file)" $pargs config 2>"$GEN/compose-config.err" \
         | python3 "$SUITE/pol-build/tools/stackify.py" "${extra[@]}" > "$GEN/stack-$(role).yml" || { cat "$GEN/compose-config.err" >&2; die "stack render failed"; }
     [ -s "$GEN/stack-$(role).yml" ] || { cat "$GEN/compose-config.err" >&2; die "stack render produced nothing"; }
@@ -896,7 +923,13 @@ deploy_stack() {
     [ "$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null)" = active ] || { log_info "docker swarm init (advertise $(lan_ip))"; docker swarm init --advertise-addr "$(lan_ip)" >/dev/null || die "docker swarm init failed — run it by hand: docker swarm init --advertise-addr <this machine's address>"; }
     set -a; source "$(env_file)"; set +a
     local wra=(); [ -n "$POL_PROD_IMAGE_REPO" ] && wra+=(--with-registry-auth)
+    # frg-2: app.ini is copied INTO the forge's volume before the task starts (never mounted)
+    local forge_was=0; if forge_on; then docker service inspect "$(forge_service)" >/dev/null 2>&1 && forge_was=1; forge_seed_volume; fi
     docker stack deploy "${wra[@]}" -c "$GEN/stack-$(role).yml" "$(stack_name)"
+    # a re-seeded app.ini on a RUNNING forge needs a new task (the local-build path below forces every service anyway)
+    if forge_on && [ "$FORGE_SEEDED" = 1 ] && [ "$forge_was" = 1 ] && [ -n "$POL_PROD_IMAGE_REPO" ]; then
+        docker service update --force --quiet "$(forge_service)" >/dev/null 2>&1 && log_info "forge: task rolled onto the new app.ini"
+    fi
     # LOCAL image tags (no registry): swarm cannot see that prf-backend:lean is a NEW build behind the same tag and keeps the
     # old task running (seen 2026-09-14: a redeploy that changed nothing live). Force each service whose image is a local tag.
     if [ -z "$POL_PROD_IMAGE_REPO" ]; then
@@ -1032,6 +1065,7 @@ POLARI_POSTURE=${POL_PROD_POSTURE:-production}   # §17: dev = observe mode for 
 POLARI_APP_PERMISSIONS=${POL_PROD_APP_PERMISSIONS:-off}   # the CRUDE app-permission gate: off | advisory (header only) | enforce (403)
 EOF
     chmod 600 "$GEN/.env.prod"
+    write_configs_forge "$GEN/.env.prod"
     local demo_enabled=false; [ "$POL_PROD_DEMO" = on ] && demo_enabled=true
     local DEMO="\"demo\": { \"enabled\": $demo_enabled, \"title\": \"Demonstration instance\", \"message\": \"This is a public demonstration of Polari. It exists so you can try the software, not to hold anyone's data.\", \"termsUrl\": \"https://$D/docs/demo-terms.html\", \"version\": \"2026-09-09\" }"
     cat > "$GEN/prf-runtime-config.prod.json" <<EOF
@@ -1058,7 +1092,8 @@ EOF
 { "_comment": "PRODUCTION (full): generated by pol prod", "_generated": "$(date -Is)",
   "links": { "prf": "https://prf.$D", "dps": "https://psc.$D", "mesh": "${ISLE_MESH_URL:-https://$D/docs/networking-model.html}", "oseb": "https://$D/docs.html" } }
 EOF
-    bash "$SCRIPT_DIR/proxy.sh" template prod --domain "$D" --topology swarm >/dev/null || die "proxy template failed"
+    local fpargs=(); forge_on && read -r -a fpargs <<<"$(forge_proxy_args)"
+    bash "$SCRIPT_DIR/proxy.sh" template prod --domain "$D" --topology swarm "${fpargs[@]}" >/dev/null || die "proxy template failed"
     [ -s "$SUITE/pol-odoo/odoo.conf" ] || { mkdir -p "$SUITE/pol-odoo"; : ; }
     mkdir -p "$GEN/debs" "$GEN/apt" "$GEN/certbot-www" "$GEN/certs/edge"
     log_success "configs written: .env.prod (credentials kept), prf/psc/pol-hub runtime configs, nginx.prod.conf"
@@ -1092,6 +1127,7 @@ do_apply() {
     do_check || log_warn "preflight reported problems — continuing (fix and re-run apply; every step is idempotent)"
     if [ "$(profile)" = full ]; then security_setup; write_configs_full; else write_configs; vault_lean_logins; fi
     stage_cert; stage_debs; build_or_pull_images; render_stack; deploy_stack
+    forge_after_deploy   # frg-2: admin user, admin token → vault, the re-measure gate (no-op when the forge is off)
     # the DAC + MAC controls for this profile (os-security): render always; apply only when asked (root, changes the host)
     local scn; scn=$([ "$(profile)" = full ] && echo swarm-full || echo swarm-lean)
     python3 "$SUITE/os-security/render.py" --scenario "$scn" --apps-from-manifests >/dev/null 2>&1 && log_info "os-security rendered for $scn (POL_PROD_HARDEN=on applies it; pol security os audit scores it)"
@@ -1124,6 +1160,7 @@ do_status() {
     docker stack services "$(stack_name)" --format '  service      {{.Name}}  {{.Replicas}}  {{.Image}}' 2>/dev/null | sed "s/$(stack_name)_//"
     echo "  certificate  $(edge_cert_issuer)  expires $(edge_cert_expiry)  $(edge_cert_is_public && echo 'PUBLICLY TRUSTED' || echo 'NOT public — browsers warn (pol prod cert)')"
     local ip r; ip=$(public_ip); for n in $(names "${POL_PROD_DOMAIN:-x}"); do r=$(resolve "$n" || true); printf "  dns          %-32s %s%s\n" "$n" "${r:-unresolved}" "$([ -n "$ip" ] && [ "$r" = "$ip" ] && echo "  ✓ exposure address ($(exposure_source))")"; done
+    forge_status_rows
     echo "  installers   $(ls "$GEN"/debs/*.deb 2>/dev/null | wc -l) staged (https://${POL_PROD_DOMAIN:-…}/downloads)   apt tree: $([ -d "$GEN/apt/dists" ] && echo present || echo 'not published')"
     local h; h=$(curl -sk --max-time 5 -H "Host: api.prf.${POL_PROD_DOMAIN:-x}" https://127.0.0.1/api/health 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('phase'), '—', d.get('onlineCount'), '/', d.get('moduleCount'), 'modules online')" 2>/dev/null || echo "not answering yet")
     echo "  backend      $h"
@@ -1188,6 +1225,7 @@ case "$COMMAND" in
     addresses) do_addresses "$@" ;;
     verify)    do_verify "$@" ;;
     harden)    do_harden "$@" ;;
+    selftest)  exec bash "$SCRIPT_DIR/prod-forge-selftest.sh" "$@" ;;
     profile)   do_profile "$@" ;;
     facts)     do_facts "$@" ;;
     providers) do_providers ;;

@@ -9,7 +9,7 @@ A profile is a saved set of `pol prod` answers (the same `POL_PROD_*` keys as `.
 | profile | what it is for |
 |---|---|
 | `local-instance` | one machine, for yourself |
-| `public-server` | a server with logins, on a domain |
+| `public-server` | a server with logins, on a domain — hosts the forge (`POL_PROD_FORGE=on`) |
 | `demo-server` | the same, with the demonstration notice |
-| `distribution-server` | a distribution point: no logins, the published installers handed out |
+| `distribution-server` | a distribution point: no logins, the published installers handed out — hosts the forge (`POL_PROD_FORGE=on`: git mirrors, releases, `apt.<domain>`) |
 | **`pipeline-device`** | **the core that holds the BUILD PIPELINE's settings (ci-8).** Its `POL_PROD_MODULES` ends in `,cicd`, so the `cicd` module is admitted by construction — that is what "always enabled with the pipeline" means. `pol jenkins doctor` checks it live and names this profile as the fix when a core answers without `/api/cicd`. |
