@@ -25,13 +25,18 @@ ${BOLD}pol forge${NC} — the self-hosted forge (polari-forge/, Forgejo) — the
 
   ${CYAN}the dual route${NC} — GitHub = online availability · the forge = self-sustaining, the default for people
     mirror <owner/repo>               pull-mirror one GitHub repo onto the forge (skips one already there)
-    mirror --forest                   every repo in polari-forge/forest.txt (frg-1 runs this on the chosen box)
-    mirror --sync <owner/repo>|--forest   ask the forge to fetch NOW (after a release); otherwise it checks GitHub once a WEEK
+    mirror --forest                   every repo in polari-forge/forest.txt, by its hold= level (default mirror;
+                                      primary = not yet, treated as mirror; link = not migrated, see \`links\` below)
+    mirror --sync <owner/repo>|--forest   ask the forge to fetch NOW (after a release); otherwise it checks GitHub
+                                      once a WEEK (--sync --forest skips hold=link lines — nothing to fetch)
+    mirror --drop <owner/repo>        remove a repo from the forge — refuses unless it IS a mirror (never primary)
+    links                             print what forest.txt holds as hold=link (NOT held here) and its GitHub URL
     apt-source [<owner>]              the two lines a person needs: the key fetch + the deb line
 
   ${CYAN}what it costs, what it keeps${NC}
     meter [--json]                    THE STORAGE METER: rss/peak/cpu + data per area (git, packages, db,
-                                      attachments, log), repos, packages — one JSON line to meter.jsonl + a table
+                                      attachments, log), repos, packages, held/linked/primary — one JSON line
+                                      to meter.jsonl + a table
     retention <K> [--dry-run]         packages: keep the newest K per package + keep.txt, delete the rest
                                       (git history is never trimmed)
     posture                           registration, anonymous read, indexer, mem limit, loopback ports,
@@ -51,7 +56,7 @@ case "$cmd" in help|-h|--help) usage; exit 0 ;; esac
 [ -f "$P/scripts/_lib.sh" ] || die "polari-forge is not checked out at $P — git -C $SUITE submodule update --init polari-forge"
 
 case "$cmd" in
-    render|up|down|status|token|mirror|meter|retention|posture|apt-source)
+    render|up|down|status|token|mirror|meter|retention|posture|apt-source|links)
         exec bash "$P/scripts/$cmd.sh" "$@" ;;
     selftest)
         exec bash "$P/selftest.sh" "$@" ;;
