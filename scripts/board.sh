@@ -3,7 +3,8 @@
 # AI-Notes/plans/BOARD_PROGRAMMING_PLAN.md). detect runs ON THIS HOST (host python:
 # hwmap's scanner + the board definitions, no server needed); --push upserts the
 # result as BoardInstance rows through the API. brd-1: gen / build / flash / twin / cost for the UNO —
-# flash is a DRY-RUN unless the board is detected AND --yes is given.
+# flash is a DRY-RUN unless the board is detected AND --yes is given. brd-fi: firmware VARIANTS (gen --variant) and the
+# installer (install / variants / result) — the same doors as /display/firmware-installer.
 #
 #   pol board help
 set -eu
@@ -33,9 +34,10 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
                                       local binary → topology provider board.engines → refusal)
 
   ${CYAN}the UNO end to end${NC} (brd-1; plain C on avr-libc — RULE 2)
-    gen uno [--class SimRigState] [--api URL] [--rig-name N] [--device-id N] [--u2x 0|1] [--out DIR]
-                                      render the project around the generated header (target=avr; live from
-                                      --api, else the pinned contract) → FirmwareBuild state generated
+    gen uno [--variant V | --class C] [--api URL] [--rig-name N] [--device-id N] [--u2x 0|1] [--out DIR]
+                                      render the variant's project around the generated header(s) (target=avr;
+                                      live from --api, else the pinned contract) → FirmwareBuild state generated,
+                                      with header_sha256 + the wire order (no --variant = uno-sim-rig)
     build uno [--work DIR]            avr-gcc + avr-objcopy + avr-size through the engines ladder (local avr-gcc
                                       → the prf-board-engines image → BOARD_ENGINES_URL worker); REFUSED past
                                       32256 B flash / 2048 B RAM; the .hex sha256 + engine versions + repro block
@@ -46,6 +48,17 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
                                       the SAME .hex in simavr; its UART at a pty link — point a bridge at it:
                                       source=serial, serialDevice=<link>
     cost uno [--write]                re-measure the twin's object cost (rows, simavr state bytes, cycles/s)
+
+  ${CYAN}the firmware installer${NC} (brd-fi; different things to test on the one UNO)
+    variants [--api URL]              the firmware variants: what each tests, what to watch for (offline: the seeded four
+                                      — uno-sim-rig, uno-blink-only, uno-adc-sweep, uno-echo)
+    install uno [--variant V] [--twin] [--dry-run | --yes] [--api URL]
+                                      plan + run + attach in one, through the server on the host holding the port:
+                                      picks (or builds) the variant's compatible build, prints the plan's argv (the
+                                      DRY-RUN, the default); --yes installs, attaches the bridge, prints the first
+                                      frames. --twin = the simavr twin. Exit 3 = refused (stale-header /
+                                      unknown-class firmware, no board, the wrong host)
+    result [RECORD] [--api URL]       an install's result: verdict, read-back, bridge, frames/s, the row now
 
   The two rules: USB from the host (directly or through a known adapter); C / Verilog / SystemVerilog only.
   Selftest: pol modules selftest board  ·  PYTHONPATH=.:modules python3 -m board.board_selftest (in $FW)
@@ -85,5 +98,9 @@ case "$cmd" in
     twin)  [ -n "${ARGS[1]:-}" ] || die "usage: pol board twin uno up|down|status"
            py -m board.custom.twin "${ARGS[@]}" ;;
     cost)  py -m board.custom.sim_cost "${ARGS[@]:1}" ;;
+    variants) mapfile -t A < <(api_arg); py -m board.custom.install_cli variants "${A[@]}" ;;
+    install) [ -n "${ARGS[0]:-}" ] || die "usage: pol board install uno [--variant V] [--twin] [--dry-run|--yes] [--api URL]"
+             py -m board.custom.install_cli install "${ARGS[@]}" --api "$API" ;;
+    result)  py -m board.custom.install_cli result "${ARGS[@]}" --api "$API" ;;
     *) log_error "unknown verb: pol board $cmd"; usage; exit 1 ;;
 esac
