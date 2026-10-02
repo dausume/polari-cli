@@ -31,12 +31,28 @@ ${BOLD}pol faults${NC} — force a firmware fault on purpose, see where it goes 
                                       BER, BEFORE and AFTER, the residual apart) or torn-millis-read's phase sweep (asynchronous RX
                                       traffic x N seeds → torn reads per carry) — rates with Wilson 95 % intervals, onto the fault row
     show <run> [--api URL]            one run: where it fired, where the interrupt landed, the cycles around the fault, the claim
-    engines                           where avr-twin / avr-objdump / avr-nm / vcd-window would run (the board engines seam)
+    engines                           where avr-twin / avr-objdump / avr-nm / vcd-window would run (the board engines seam) and
+                                      cbmc-check / cppcheck-run (the formal engines seam: FORMAL_ENGINES_URL → local → the
+                                      prf-formal-engines image → topology firmwarefaults.formal → refusal)
+
+  ${CYAN}evidence tiers (sc-2 / sc-2b)${NC}
+    campaign list | run <name> [--seeds N] [--rates a,b] [--verbose] [--api URL] | show <name>
+                                      the STATISTICS tier: the fault's RATE as the stimulus (torn-read-phase, uart-ber, bounce-window,
+                                      ack-drop-probability) → per rate the likelihood WITHOUT the technique and its RESIDUAL WITH it
+                                      (Wilson 95 %), the time to the first fault; FaultLikelihood rows + the claims' statistics tier
+    formal list | run <check>|all [--api URL] | show <check>
+                                      the FORMAL tier, narrow: CBMC on the variant's own hal.c with the interrupt as nondeterminism —
+                                      hal-millis-not-torn@uno-sim-rig → decided (bounded, k=2), never proved; @uno-sim-rig-torn →
+                                      refuted with the C trace; rx-ring-index-bound@… → decided / inapplicable (the static guard)
+    static run [<variant>|all] [--api URL] | show <variant>
+                                      cppcheck (built-ins + threadsafety; MISRA not run — its texts are not free) on every firmware
+                                      variant; findings are rows, never a build failure
 
   Seeded: torn-millis-read (scenario 1: the tick ISR forced between the 1st and 2nd lds of g_ms — BEFORE uno-sim-rig-torn,
   AFTER uno-sim-rig), rx-ring-over-256 (1b: refused by hal.c's static guard); sc-1: lost-ack-hang (S2), button-bounce-double-count
   (S3), uart-residual-frame-loss (S4), brownout-mid-eeprom-write (S5), runaway-hang-watchdog (plan §4); priority-inversion-mutex and
-  two-lock-deadlock are written down but not-yet-forcible (no RTOS on the UNO). Records: \$POLARI_FAULTS_HOME (~/.cache/polari-faults).
+  two-lock-deadlock are written down but not-yet-forcible (no RTOS on the UNO); sc-2: torn-millis-read-aligned (--align-at-pc: no extra
+  tick), lost-request-hang (--drop-frame tx:). Records: \$POLARI_FAULTS_HOME (~/.cache/polari-faults).
   Page: /display/firmware-faults · Selftest: pol modules selftest firmwarefaults · Probe: tests/firmwarefaults_probe.py (in $FW)
 EOF
 )"
@@ -48,6 +64,8 @@ py() { (cd "$FW" && PYTHONPATH=.:modules python3 "$@"); }
 case "$cmd" in
     help|-h|--help) usage ;;
     list|engines) py -m firmwarefaults.custom.faults_cli "$cmd" "$@" ;;
+    campaign|formal|static) [ -n "${1:-}" ] || die "usage: pol faults $cmd list|run|show [<name>]   (pol faults help)"
+          py -m firmwarefaults.custom.faults_cli "$cmd" "$@" ;;
     stats) [ -n "${1:-}" ] || die "usage: pol faults stats uart-residual-frame-loss|torn-millis-read [--seeds N]"
           py -m firmwarefaults.custom.faults_cli stats "$@" ;;
     run)  [ -n "${1:-}" ] || die "usage: pol faults run <scenario> [--before|--after|--both|--natural]   (pol faults list names them)"
