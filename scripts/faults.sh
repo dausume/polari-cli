@@ -32,18 +32,22 @@ ${BOLD}pol faults${NC} — force a firmware fault on purpose, see where it goes 
                                       traffic x N seeds → torn reads per carry) — rates with Wilson 95 % intervals, onto the fault row
     show <run> [--api URL]            one run: where it fired, where the interrupt landed, the cycles around the fault, the claim
     engines                           where avr-twin / avr-objdump / avr-nm / vcd-window would run (the board engines seam) and
-                                      cbmc-check / cppcheck-run (the formal engines seam: FORMAL_ENGINES_URL → local → the
-                                      prf-formal-engines image → topology firmwarefaults.formal → refusal)
+                                      cbmc-check / cppcheck-run / mthread-check (the formal engines seam: FORMAL_ENGINES_URL → local
+                                      → the prf-formal-engines image → topology firmwarefaults.formal → refusal)
 
-  ${CYAN}evidence tiers (sc-2 / sc-2b)${NC}
+  ${CYAN}evidence tiers (sc-2 / sc-2b / sc-2c)${NC}
     campaign list | run <name> [--seeds N] [--rates a,b] [--verbose] [--api URL] | show <name>
                                       the STATISTICS tier: the fault's RATE as the stimulus (torn-read-phase, uart-ber, bounce-window,
                                       ack-drop-probability) → per rate the likelihood WITHOUT the technique and its RESIDUAL WITH it
                                       (Wilson 95 %), the time to the first fault; FaultLikelihood rows + the claims' statistics tier
-    formal list | run <check>|all [--api URL] | show <check>
-                                      the FORMAL tier, narrow: CBMC on the variant's own hal.c with the interrupt as nondeterminism —
-                                      hal-millis-not-torn@uno-sim-rig → decided (bounded, k=2), never proved; @uno-sim-rig-torn →
-                                      refuted with the C trace; rx-ring-index-bound@… → decided / inapplicable (the static guard)
+    formal list | run <check>|all|cbmc|mthread [--api URL] | show <check>
+                                      the FORMAL tier, narrow, two engines on the variant's own hal.c. CBMC (the interrupt as
+                                      nondeterminism): hal-millis-not-torn@uno-sim-rig → decided (bounded, k=2), never proved;
+                                      @uno-sim-rig-torn → refuted with the C trace; rx-ring-index-bound@… → decided / inapplicable.
+                                      sc-2c Frama-C/Mthread (the ISR a thread, cli/sei/ATOMIC_BLOCK one interrupt lock):
+                                      hal-millis-race@uno-sim-rig → decided (unbounded); @uno-sim-rig-torn → refuted with the two
+                                      racing lines; rx-ring-race@uno-sim-rig → decided (unbounded); rx-ring-race@uno-sim-rig+broken-flush
+                                      = the negative control (refuted, no claim); @uno-sim-rig-ring512 → inapplicable
     static run [<variant>|all] [--api URL] | show <variant>
                                       cppcheck (built-ins + threadsafety; MISRA not run — its texts are not free) on every firmware
                                       variant; findings are rows, never a build failure
