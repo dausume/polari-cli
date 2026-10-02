@@ -4,7 +4,8 @@
 # hwmap's scanner + the board definitions, no server needed); --push upserts the
 # result as BoardInstance rows through the API. brd-1: gen / build / flash / twin / cost for the UNO —
 # flash is a DRY-RUN unless the board is detected AND --yes is given. brd-fi: firmware VARIANTS (gen --variant) and the
-# installer (install / variants / result) — the same doors as /display/firmware-installer.
+# installer (install / variants / result) — the same doors as /display/firmware-installer. brd-wire (grpc-j4): the
+# computer<->firmware mapping — gen --instance-index, twin --tag (several twins side by side), interface <instance>.
 #
 #   pol board help
 set -eu
@@ -35,9 +36,11 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
 
   ${CYAN}the UNO end to end${NC} (brd-1; plain C on avr-libc — RULE 2)
     gen uno [--variant V | --class C] [--api URL] [--rig-name N] [--device-id N] [--u2x 0|1] [--out DIR]
-                                      render the variant's project around the generated header(s) (target=avr;
-                                      live from --api, else the pinned contract) → FirmwareBuild state generated,
-                                      with header_sha256 + the wire order (no --variant = uno-sim-rig)
+            [--instance-index K]
+                                      render the variant's project around the generated header(s) (target=avr, wire
+                                      v2; live from --api, else the pinned contract) → FirmwareBuild state generated,
+                                      with header_sha256, the wire order and hash v2 (no --variant = uno-sim-rig);
+                                      --instance-index = this build's index among its bridge's bound interfaces
     build uno [--work DIR]            avr-gcc + avr-objcopy + avr-size through the engines ladder (local avr-gcc
                                       → the prf-board-engines image → BOARD_ENGINES_URL worker); REFUSED past
                                       32256 B flash / 2048 B RAM; the .hex sha256 + engine versions + repro block
@@ -45,13 +48,15 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
                                       DRY-RUN (default): prints the exact avrdude argv. A real flash needs the UNO
                                       detected on THIS host AND --yes; verified by read-back; stamps firmware_sha
     twin uno up|down|status [--adc0-mv 750 | --adc0-ramp LO,HI,MS] [--tcp 9831] [--link /tmp/polari-uno-twin-uart]
+            [--work DIR --tag T]
                                       the SAME .hex in simavr; its UART at a pty link — point a bridge at it:
-                                      source=serial, serialDevice=<link>
+                                      source=serial, serialDevice=<link>. --tag runs another twin beside the first
+                                      (its own --work, --tcp, --link: uno-pair = tags 0 and 1)
     cost uno [--write]                re-measure the twin's object cost (rows, simavr state bytes, cycles/s)
 
   ${CYAN}the firmware installer${NC} (brd-fi; different things to test on the one UNO)
-    variants [--api URL]              the firmware variants: what each tests, what to watch for (offline: the seeded four
-                                      — uno-sim-rig, uno-blink-only, uno-adc-sweep, uno-echo)
+    variants [--api URL]              the firmware variants: what each tests, what to watch for (offline: the seeded five
+                                      — uno-sim-rig, uno-blink-only, uno-adc-sweep, uno-pair, uno-echo)
     install uno [--variant V] [--twin] [--dry-run | --yes] [--api URL]
                                       plan + run + attach in one, through the server on the host holding the port:
                                       picks (or builds) the variant's compatible build, prints the plan's argv (the
@@ -59,6 +64,11 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
                                       frames. --twin = the simavr twin. Exit 3 = refused (stale-header /
                                       unknown-class firmware, no board, the wrong host)
     result [RECORD] [--api URL]       an install's result: verdict, read-back, bridge, frames/s, the row now
+
+  ${CYAN}the computer↔firmware mapping${NC} (brd-wire / grpc-j4)
+    interface <instance> [--api URL]  the binding chain of a board instance: row → class → contract (hash v1) → wire
+                                      contract (hash v2, index width / representation) → binding (index, port) →
+                                      instance → board definition → cited facts (e.g. twin:arduino-uno-r3#1)
 
   The two rules: USB from the host (directly or through a known adapter); C / Verilog / SystemVerilog only.
   Selftest: pol modules selftest board  ·  PYTHONPATH=.:modules python3 -m board.board_selftest (in $FW)
@@ -102,5 +112,20 @@ case "$cmd" in
     install) [ -n "${ARGS[0]:-}" ] || die "usage: pol board install uno [--variant V] [--twin] [--dry-run|--yes] [--api URL]"
              py -m board.custom.install_cli install "${ARGS[@]}" --api "$API" ;;
     result)  py -m board.custom.install_cli result "${ARGS[@]}" --api "$API" ;;
+    interface) [ -n "${ARGS[0]:-}" ] || die "usage: pol board interface <instance>   (e.g. twin:arduino-uno-r3#1)"
+             inst=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${ARGS[0]}")
+             $CURL "$API/api/board/instances/$inst/interface" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+if not d.get("ok"):
+    print("[REFUSED] " + str(d.get("error"))); sys.exit(3)
+print("[ OK ] " + d["plain"])
+for l in d["links"]:
+    w, b = l["wire"], l["binding"]
+    print("       row      %s %s  (id %s)" % (l["object"]["class"], l["object"]["name"], l["object"]["id"] or "-"))
+    print("       contract v%s  hash v1 %s   wire hash v2 %s  index %s (%s bit(s) packed, %s byte(s) explicit; suggested %s)  prelude %s B" % (l["contract"]["version"], l["contract"]["contract_hash_v1"] or "-", w.get("contract_hash_v2", "-"), w.get("index_repr", "-"), w.get("index_width", "-"), w.get("index_bytes", "-"), w.get("suggested_index_width", "-"), w.get("prelude_bytes", "-")))
+    print("       binding  %s  index %s on bridge %s  %s %s at %s  frames %s (refused %s)" % (b["name"], b["instance_index"], b["bridge_name"], b["interface_kind"], b.get("interface_name", ""), l["port"]["path"], b["frames_seen"], b["refused_frames"]))
+    print("       board    %s  facts %d  missing: %s" % (l["board_definition"]["name"], len(l["datasheet_facts"]), "; ".join(l["missing"]) or "none"))
+' ;;
     *) log_error "unknown verb: pol board $cmd"; usage; exit 1 ;;
 esac
