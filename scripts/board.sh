@@ -6,6 +6,7 @@
 # flash is a DRY-RUN unless the board is detected AND --yes is given. brd-fi: firmware VARIANTS (gen --variant) and the
 # installer (install / variants / result) — the same doors as /display/firmware-installer. brd-wire (grpc-j4): the
 # computer<->firmware mapping — gen --instance-index, twin --tag (several twins side by side), interface <instance>.
+# sc-3: the ESP32-C3 — gen / build / flash / twin / cost c3 (ESP-IDF + FreeRTOS through prf-esp-engines; the QEMU twin).
 #
 #   pol board help
 set -eu
@@ -53,6 +54,20 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
                                       source=serial, serialDevice=<link>. --tag runs another twin beside the first
                                       (its own --work, --tcp, --link: uno-pair = tags 0 and 1)
     cost uno [--write]                re-measure the twin's object cost (rows, simavr state bytes, cycles/s)
+
+  ${CYAN}the ESP32-C3${NC} (sc-3; D-sc-4 ruled — ESP-IDF v5.5.5 C, FreeRTOS; the prf-esp-engines worker; twin-first)
+    gen c3 [--variant V] [--api URL] [--rig-name N] [--device-id N] [--out DIR]
+                                      the ESP-IDF C project around the generated header (c_twin target=host — the
+                                      UNO's wire v2, so the SAME bridge attaches); variants: c3-sim-rig (default),
+                                      c3-prio-inversion[-mutex], c3-two-lock[-ordered|-backoff] (SCENARIO ONLY)
+    build c3 [--work DIR] [--force]   idf.py build through the engines ladder (ESP_ENGINES_URL → local → the
+                                      prf-esp-engines image → board.esp-engines); idf.py size; reproducible images;
+                                      the build cache (same sources + image = no rebuild)
+    flash c3 [--port P] [--yes]       DRY-RUN (default): the exact esptool write_flash argv from idf.py's flash_args
+    twin c3 up|down|status [--tcp 9832] [--link /tmp/polari-c3-twin-uart]
+                                      the SAME merged image in Espressif's QEMU fork (-machine esp32c3); UART0 at a pty
+                                      link (source=serial), UART1 = the FreeRTOS trace (status shows its tail)
+    cost c3 [--write]                 re-measure the C3 twin's cost (QEMU RSS, virtual instructions/s, wall-time ratio)
 
   ${CYAN}the firmware installer${NC} (brd-fi; different things to test on the one UNO)
     variants [--api URL]              the firmware variants: what each tests, what to watch for (offline: the seeded five
@@ -107,7 +122,7 @@ case "$cmd" in
            mapfile -t A < <(api_arg); py -m board.custom.flash "${ARGS[@]}" "${A[@]}" ;;
     twin)  [ -n "${ARGS[1]:-}" ] || die "usage: pol board twin uno up|down|status"
            py -m board.custom.twin "${ARGS[@]}" ;;
-    cost)  py -m board.custom.sim_cost "${ARGS[@]:1}" ;;
+    cost)  py -m board.custom.sim_cost "${ARGS[@]}" ;;   # sc-3: `cost uno` | `cost c3` (the board word is read by sim_cost)
     variants) mapfile -t A < <(api_arg); py -m board.custom.install_cli variants "${A[@]}" ;;
     install) [ -n "${ARGS[0]:-}" ] || die "usage: pol board install uno [--variant V] [--twin] [--dry-run|--yes] [--api URL]"
              py -m board.custom.install_cli install "${ARGS[@]}" --api "$API" ;;

@@ -29,7 +29,9 @@ ${BOLD}pol faults${NC} — force a firmware fault on purpose, see where it goes 
     stats <scenario> [--seeds N] [--bers 1e-3,1e-4,1e-5] [--verbose] [--api URL]
                                       the statistics tier: uart-residual-frame-loss under --uart-ber (500 commands x N seeds per
                                       BER, BEFORE and AFTER, the residual apart) or torn-millis-read's phase sweep (asynchronous RX
-                                      traffic x N seeds → torn reads per carry) — rates with Wilson 95 % intervals, onto the fault row
+                                      traffic x N seeds → torn reads per carry) — rates with Wilson 95 % intervals, onto the fault row.
+                                      sc-3: priority-inversion-mutex | two-lock-deadlock[-backoff] on the ESP32-C3 QEMU twin — seeded
+                                      tick offsets x N seeds (default 10), both builds → the likelihood WITHOUT / WITH the technique
     show <run> [--api URL]            one run: where it fired, where the interrupt landed, the cycles around the fault, the claim
     engines                           where avr-twin / avr-objdump / avr-nm / vcd-window would run (the board engines seam) and
                                       cbmc-check / cppcheck-run (the formal engines seam: FORMAL_ENGINES_URL → local → the
