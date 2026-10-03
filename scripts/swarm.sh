@@ -26,7 +26,13 @@ ${BOLD}CLUSTER${NC}
   ${CYAN}init${NC}              docker swarm init on this node (idempotent);
                     labels the node polari.machine=<name>
   ${CYAN}join <node>${NC}       drive a nodes.yml machine into the swarm over ssh
-                    (worker join + polari.machine label; top-4)
+                    (worker join + polari.machine label; top-4); checks the
+                    swarm ports (2377/7946/4789) BEFORE joining and reports
+                    'mesh: ok' / 'mesh: NOT formed' after (see 'ports' below)
+  ${CYAN}ports [<node>]${NC}    just the port check join does: TCP 2377 + 7946 and
+                    UDP 7946 + 4789 from <node> to this manager; prints the
+                    exact 'sudo ufw allow …' lines for anything CLOSED (run
+                    ON THE MANAGER); every nodes.yml machine if <node> is omitted
   ${CYAN}status${NC}            swarm state, nodes, stacks, secrets overview
   ${CYAN}join-token${NC}        print worker/manager join commands
 
@@ -43,6 +49,12 @@ ${BOLD}NOTES${NC}
   cnt-engines  the microchip (cntfet) engines worker (:9700, dist-1) —
            build + ship first: docker compose -f docker-compose.cnt-engines.yml
            build && docker save prf-cnt-engines:staging | ssh <node> docker load
+  hw-engines  the hardware-integration engines stack (board/formal/esp —
+           :9830/:9840/:9850 — pinned to node.labels.polari.machine ==
+           isle-core) — join isle-core first: pol swarm join isle-core;
+           no build: here, images ship via docker save prf-board-engines:trixie
+           prf-formal-engines:trixie prf-esp-engines:noble | ssh isle-core
+           docker load (see docker-compose.hw-engines.yml's own header)
   suite    CONFLICTS with a running compose suite (ports 80/443) — stop
            the compose stack first (pol suite down)
   secrets  v1 inlines generated env values via 'docker compose config';
@@ -59,6 +71,7 @@ role_compose_cmd() {
     case "$1" in
         engines) echo "docker compose -f $POL_RF_NODE/docker-compose.msci-engines.yml" ;;
         cnt-engines) echo "docker compose -f $POL_RF_NODE/docker-compose.cnt-engines.yml" ;;
+        hw-engines) echo "docker compose -f $POL_RF_NODE/docker-compose.hw-engines.yml" ;;
         node)    echo "docker compose -f $POL_RF_NODE/docker-compose.staging-nip.yml" ;;
         suite)   echo "docker compose -f $POL_SUITE_ROOT/docker-compose.staging-nip.yml --env-file $POL_SUITE_ROOT/.generated/.env.staging" ;;
         # prd-4: the LEAN production profile (pol prod writes .env.lean + the configs it needs)
@@ -71,7 +84,7 @@ role_compose_cmd() {
 
 render_stack() {
     local role=$1
-    local cmd; cmd=$(role_compose_cmd "$role") || die "unknown role '$role' (engines|cnt-engines|suite|node|lean|prod)"
+    local cmd; cmd=$(role_compose_cmd "$role") || die "unknown role '$role' (engines|cnt-engines|hw-engines|suite|node|lean|prod)"
     # mod-env-3: module enablement is topology ROWS, not a
     # hand-maintained env string. For the node/suite roles the
     # POLARI_MODULES baked into the stack is DERIVED from the core's
@@ -103,6 +116,74 @@ render_stack() {
     log_success "stack rendered: $out"
 }
 
+# swarm-ports: the routing mesh needs the control-plane + data-plane ports
+# open BOTH ways between every node and the manager — TCP 2377 (cluster
+# management) and TCP+UDP 7946 (gossip) node<->manager, plus UDP 4789
+# (VXLAN overlay data) manager-ward. `docker swarm join` only exercises
+# 2377 — a node can join (appear Ready in `docker node ls`) while 7946/4789
+# stay firewalled, and the overlay/ingress mesh never forms: published
+# ports then only answer on that node's OWN address (learned live:
+# pol-core's ufw blocks isle-core on all three). This probes from the
+# JOINING node toward the manager (the direction a restrictive ufw on the
+# manager actually blocks) and prints the exact ufw line to fix each one.
+# UDP is probed the same way as TCP (nc -z/-zu) — an honest caveat: a
+# connectionless nc check can't prove a DROPped UDP port is open (no
+# response either way), only that a REJECT/closed port fails fast; a
+# stuck probe past its timeout is reported CLOSED, which is the safe
+# (over-cautious) reading here.
+SWARM_PORTS_NODE_IP=""
+check_swarm_ports() {  # check_swarm_ports <ssh-alias> <node-label>
+    local alias=$1 node=$2
+    local manager_ip="${LOCAL_IP:-$(lan_ip)}"
+    SWARM_PORTS_NODE_IP=$(ssh -o ConnectTimeout=8 "$alias" "hostname -I 2>/dev/null | awk '{print \$1}'" 2>/dev/null || true)
+    [ -n "$SWARM_PORTS_NODE_IP" ] || log_warn "could not read $node's own IP over ssh — fill it into the ufw lines below by hand"
+    pol_box "swarm ports: $node ($alias) -> manager ($manager_ip)"
+    local closed=()
+    _probe() {  # _probe <label> <tcp|udp> <port>
+        local label=$1 proto=$2 port=$3 flag result
+        [ "$proto" = udp ] && flag="-zu" || flag="-z"
+        if ssh -o ConnectTimeout=6 "$alias" "command -v nc >/dev/null 2>&1 && nc $flag -w3 $manager_ip $port" >/dev/null 2>&1; then
+            result=open
+        else
+            result=CLOSED
+            closed+=("$port/$proto")
+        fi
+        printf '  %-28s %s\n' "$label" "$result"
+    }
+    _probe "TCP 2377 (node -> mgr)" tcp 2377
+    _probe "TCP 7946 (node -> mgr)" tcp 7946
+    _probe "UDP 7946 (node -> mgr)" udp 7946
+    _probe "UDP 4789 (node -> mgr)" udp 4789
+    if [ "${#closed[@]}" -gt 0 ]; then
+        echo
+        log_warn "closed ports block the routing mesh — run ON THE MANAGER:"
+        local cp port proto
+        for cp in "${closed[@]}"; do
+            port=${cp%%/*}; proto=${cp##*/}
+            echo "  sudo ufw allow from ${SWARM_PORTS_NODE_IP:-<$node IP>} to any port $port proto $proto"
+        done
+        return 1
+    fi
+    return 0
+}
+
+# post-join mesh check: `docker node ls` only proves 2377 worked — the
+# overlay network's gossip membership (Peers, populated only once 7946
+# UDP/TCP + 4789 UDP actually get through) is the honest "did the mesh
+# form" answer. Short poll: gossip convergence isn't instant.
+check_mesh_formed() {  # check_mesh_formed <needle: node ip or hostname>
+    local needle=$1 i peers
+    # SWARM_MESH_POLL_{TRIES,INTERVAL}: overridable so a selftest doesn't
+    # have to wait out a real convergence window.
+    for i in $(seq 1 "${SWARM_MESH_POLL_TRIES:-10}"); do
+        peers=$(docker network inspect ingress --format '{{json .Peers}}' 2>/dev/null || true)
+        case "$peers" in *"$needle"*) echo ok; return 0 ;; esac
+        sleep "${SWARM_MESH_POLL_INTERVAL:-2}"
+    done
+    echo "not-formed"
+    return 1
+}
+
 COMMAND=$1; shift || true
 case "$COMMAND" in
     init)
@@ -127,6 +208,9 @@ case "$COMMAND" in
         if docker node ls --format '{{.Hostname}} {{json .}}' 2>/dev/null | grep -q "polari.machine=$NODE"; then
             log_success "$NODE appears joined already (docker node ls)"
         fi
+        PORTS_OK=1
+        check_swarm_ports "$ALIAS" "$NODE" || PORTS_OK=0
+        [ "$PORTS_OK" = 1 ] || log_warn "joining anyway — docker swarm join will likely report success (2377 is the only port it exercises), but the mesh will not form until the ufw lines above are run"
         MANAGER_IP="${LOCAL_IP:-$(lan_ip)}"
         TOKEN=$(docker swarm join-token -q worker)
         REMOTE_HOSTNAME=$(ssh -o ConnectTimeout=8 "$ALIAS" hostname) || die "ssh to $ALIAS failed — pol deploy preflight $NODE"
@@ -153,7 +237,39 @@ print(urllib.request.urlopen(req, timeout=15).read().decode())" \
                 || log_warn "could not update the topology row — pol topology push later"
         fi
         docker node ls
+        log_info "checking whether the routing mesh formed (docker network inspect ingress)…"
+        MESH_NEEDLE="${SWARM_PORTS_NODE_IP:-$REMOTE_HOSTNAME}"
+        if [ "$(check_mesh_formed "$MESH_NEEDLE")" = ok ]; then
+            log_success "mesh: ok — $NODE is a gossip peer on the ingress network"
+        else
+            log_warn "mesh: NOT formed (ports above) — $NODE shows Ready in docker node ls, but its published ports will only answer on $NODE's own address until the mesh forms"
+        fi
         log_success "$NODE joined the swarm (label polari.machine=$NODE) — pol allocate <instance> $NODE to place work" ;;
+    ports)
+        require_swarm
+        NODES_FILE="$POL_SUITE_ROOT/pol-build/manifests/nodes.yml"
+        if [ -n "${1:-}" ]; then
+            NODE=$1
+            ALIAS=$(python3 -c "import sys,yaml; print((yaml.safe_load(open(sys.argv[1]))['nodes'].get(sys.argv[2]) or {}).get('ssh',''))" "$NODES_FILE" "$NODE")
+            [ -n "$ALIAS" ] || die "node '$NODE' not in nodes.yml (pol deploy nodes)"
+            if check_swarm_ports "$ALIAS" "$NODE"; then
+                log_success "ports: all open — $NODE can form the mesh"
+            fi
+        else
+            NAMES=$(python3 -c "
+import yaml
+d = yaml.safe_load(open('$NODES_FILE'))
+print('\n'.join(n for n, v in d['nodes'].items() if v.get('ssh')))
+")
+            [ -n "$NAMES" ] || die "no remote machines in nodes.yml (pol deploy nodes)"
+            for NODE in $NAMES; do
+                ALIAS=$(python3 -c "import sys,yaml; print((yaml.safe_load(open(sys.argv[1]))['nodes'].get(sys.argv[2]) or {}).get('ssh',''))" "$NODES_FILE" "$NODE")
+                if check_swarm_ports "$ALIAS" "$NODE"; then
+                    log_success "ports: all open — $NODE can form the mesh"
+                fi
+                echo
+            done
+        fi ;;
     status)
         pol_box "swarm status"
         docker info 2>/dev/null | grep -A2 "Swarm:" | head -3 || true
@@ -166,11 +282,11 @@ print(urllib.request.urlopen(req, timeout=15).read().decode())" \
         require_swarm
         docker swarm join-token worker; docker swarm join-token manager ;;
     render)
-        render_stack "${1:?role required (engines|cnt-engines|suite|node)}" ;;
+        render_stack "${1:?role required (engines|cnt-engines|hw-engines|suite|node)}" ;;
     deploy)
-        ROLE=${1:?role required (engines|cnt-engines|suite|node)}
+        ROLE=${1:?role required (engines|cnt-engines|hw-engines|suite|node)}
         require_swarm
-        if [ "$ROLE" != "engines" ] && [ "$ROLE" != "cnt-engines" ] && docker ps --format '{{.Names}}' | grep -qE '^(pol-proxy|prf-proxy)$'; then
+        if [ "$ROLE" != "engines" ] && [ "$ROLE" != "cnt-engines" ] && [ "$ROLE" != "hw-engines" ] && docker ps --format '{{.Names}}' | grep -qE '^(pol-proxy|prf-proxy)$'; then
             die "a compose $ROLE stack is running — its published ports conflict. Stop it first (pol suite down / pol node down), then re-deploy."
         fi
         render_stack "$ROLE"
