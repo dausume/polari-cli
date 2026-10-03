@@ -7,6 +7,7 @@
 # installer (install / variants / result) — the same doors as /display/firmware-installer. brd-wire (grpc-j4): the
 # computer<->firmware mapping — gen --instance-index, twin --tag (several twins side by side), interface <instance>.
 # sc-3: the ESP32-C3 — gen / build / flash / twin / cost c3 (ESP-IDF + FreeRTOS through prf-esp-engines; the QEMU twin).
+# brd-bo: THE BOARD OBJECT — pins / render / ingest / conflicts / assign (one board shared by KiCad, Zephyr, ESP-IDF, bare C).
 #
 #   pol board help
 set -eu
@@ -69,6 +70,19 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
                                       link (source=serial), UART1 = the FreeRTOS trace (status shows its tail)
     cost c3 [--write]                 re-measure the C3 twin's cost (QEMU RSS, virtual instructions/s, wall-time ratio)
 
+  ${CYAN}THE BOARD OBJECT${NC} (brd-bo; one board shared by KiCad, Zephyr, ESP-IDF/FreeRTOS, bare C and Polari — no server needed)
+    pins <board>                      the pin assignment (pins named ONCE: D6, A0, GPIO21 …) ↔ SoC pin ↔ net ↔ connector
+                                      pin ↔ function / peripheral ↔ C symbol, the runtime profiles, the rules, the board sha
+    render <board> --as kicad|zephyr|esp-idf|bare-c [--out DIR]
+                                      the view generated FROM the rows (header names the board sha); a board a world
+                                      cannot target is REFUSED with why (the UNO in Zephyr: no AVR arch) — a BoardView row
+    ingest <path> --as KIND [--board B]
+                                      read a view back (KiCad .net, Zephyr overlay/dts, ESP-IDF board_pins.h + sdkconfig,
+                                      bare-C board_config.h): disagreements become BoardConflict rows; the rows never change
+    conflicts [<board>]               the conflicts (shown, never auto-resolved)
+    assign <board> <net> <pin>        THE FLIP: move a net (e.g. uno PWM_LED D5) and print every view's changed lines
+    (with a server: GET /api/board/<board>/pins|views|conflicts, POST /api/board/<board>/render|ingest)
+
   ${CYAN}the firmware installer${NC} (brd-fi; different things to test on the one UNO)
     variants [--api URL]              the firmware variants: what each tests, what to watch for (offline: the seeded five
                                       — uno-sim-rig, uno-blink-only, uno-adc-sweep, uno-pair, uno-echo)
@@ -123,6 +137,8 @@ case "$cmd" in
     twin)  [ -n "${ARGS[1]:-}" ] || die "usage: pol board twin uno up|down|status"
            py -m board.custom.twin "${ARGS[@]}" ;;
     cost)  py -m board.custom.sim_cost "${ARGS[@]}" ;;   # sc-3: `cost uno` | `cost c3` (the board word is read by sim_cost)
+    pins|render|ingest|conflicts|assign)   # brd-bo: THE BOARD OBJECT (rows = the seeds offline; views/conflicts in the local ledger)
+           py -m board.custom.board_object_cli "$cmd" "${ARGS[@]}" ;;
     variants) mapfile -t A < <(api_arg); py -m board.custom.install_cli variants "${A[@]}" ;;
     install) [ -n "${ARGS[0]:-}" ] || die "usage: pol board install uno [--variant V] [--twin] [--dry-run|--yes] [--api URL]"
              py -m board.custom.install_cli install "${ARGS[@]}" --api "$API" ;;
