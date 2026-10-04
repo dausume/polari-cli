@@ -86,6 +86,7 @@ const commands = {
   jenkins:  { script: 'jenkins.sh',  desc: 'Host-tier build + publish controller (polari-jenkins/): SETUP walkthrough, the dev\u2192test\u2192main promote/test-status/queue verbs, up/status/doctor/preflight/target/stages/secrets', aliases: ['ci'] },
   scan:     { script: 'scan.sh',     desc: 'ADVISORY scanners (scn-0): source/deps/images/debs through pinned Trivy + gitleaks + pip-audit + npm audit. Nothing it finds ever gates a build, a test verdict or a release.', aliases: ['scans'] },
   vpn:      { script: 'vpn.sh',      desc: 'Isle VPN (isle-vpn: Isle Link / Isle Bridge) — mirror, proposals, conf render, qr, demo', aliases: ['islevpn'] },
+  net:      { script: 'net.sh',      desc: 'Firewall-handshake plumbing: port-needs table (needs) + the hand-back journal (handback) — the handshake itself is pol swarm ports --apply / join' },
 };
 
 // Bare verbs that people will guess; they need a namespace. Guard them with

@@ -1,11 +1,17 @@
 #!/bin/bash
 # swarm-selftest.sh — checks for swarm.sh's `hw-engines` role (the
-# role_compose_cmd table gains a case the same shape as cnt-engines) and
+# role_compose_cmd table gains a case the same shape as cnt-engines),
 # `pol swarm join`'s pre-flight port check / `pol swarm ports` verb (the
 # TCP 2377+7946 / UDP 7946+4789 node->manager probe, the printed ufw
-# lines, and the post-join ingress-mesh check). No real docker/ssh/swarm
-# touched anywhere: fake `ssh` and `docker` in a scratch bin dir, in the
-# prod-forge-selftest.sh style (FAKE_*_LOG, canned per-subcommand output).
+# lines, and the post-join ingress-mesh check), and the firewall
+# HANDSHAKE (dev-swarm-fw-handshake): `pol net needs`, `--apply` turning
+# CLOSED ports into consented source-scoped ufw rules with a hand-back
+# journal, and `pol net handback --apply` replaying the undo in reverse.
+# No real docker/ssh/swarm/sudo/ufw touched anywhere: fake `ssh`,
+# `docker`, `sudo`, `ufw`, `systemctl`, `nft` in a scratch bin dir, in
+# the prod-forge-selftest.sh style (FAKE_*_LOG, canned per-subcommand
+# output); a POL_FORCE_TTY override stands in for a real pty (nothing in
+# this sandbox can allocate one).
 #
 #   swarm-selftest.sh [-v] [--help]      → prints N/N and exits non-zero on a miss
 set -euo pipefail
@@ -61,7 +67,7 @@ cat > "$BIN/ssh" <<'SH'
 #!/bin/bash
 echo "ssh $*" >> "$FAKE_SSH_LOG"
 args=()
-while [ $# -gt 0 ]; do case "$1" in -o) shift 2 ;; *) args+=("$1"); shift ;; esac; done
+while [ $# -gt 0 ]; do case "$1" in -o) shift 2 ;; -t) shift ;; *) args+=("$1"); shift ;; esac; done
 CMD="${args[1]:-}"
 case "$CMD" in
   hostname) echo fake-isle-core ;;
@@ -71,7 +77,15 @@ case "$CMD" in
   *"nc "*)
       PORT="${CMD##* }"
       case "$CMD" in *"-zu "*) PROTO=udp ;; *) PROTO=tcp ;; esac
-      case " ${OPEN_PORTS:-} " in *" ${PORT}/${PROTO} "*) exit 0 ;; *) exit 1 ;; esac ;;
+      case " ${OPEN_PORTS:-} " in
+        *" ${PORT}/${PROTO} "*) exit 0 ;;
+      esac
+      # a rule `pol swarm ports --apply` just added also counts as open —
+      # this is what lets the post-apply recheck show closed->open.
+      if [ "${FAKE_NC_IGNORE_UFW:-0}" != 1 ] && [ -n "${FAKE_UFW_STATUS_FILE:-}" ] && grep -q "^${PORT}/${PROTO}[[:space:]]" "$FAKE_UFW_STATUS_FILE" 2>/dev/null; then
+          exit 0
+      fi
+      exit 1 ;;
   *) exit 0 ;;
 esac
 SH
@@ -90,10 +104,21 @@ case "$1" in
                   [ "${FAKE_ALREADY_JOINED:-0}" = 1 ] && printf 'fake-isle-core {"polari.machine":"isle-core"}\n' || true ;;
               *'{{.ID}} {{.Hostname}}'*)
                   printf 'NODEID1 fake-isle-core\n' ;;
+              *-q*)
+                  printf 'SELFID\nNODEID1\n' ;;
               *)
                   printf 'ID        HOSTNAME        STATUS\nSELFID    pol-core        Ready\nNODEID1   fake-isle-core  Ready\n' ;;
             esac ;;
         update) exit 0 ;;
+        # pol swarm leave → pol deploy uninstall --route swarm-worker: the
+        # NID lookup (`for id in $(docker node ls -q); do docker node
+        # inspect --format '{{.ID}} {{.Spec.Labels}}' $id; done`) and the
+        # final `docker node rm --force $NID`.
+        inspect)
+            id="${@: -1}"
+            if [ "$id" = NODEID1 ]; then echo "NODEID1 map[polari.machine:isle-core]"
+            else echo "$id map[polari.machine:pol-core]"; fi ;;
+        rm) exit 0 ;;
       esac ;;
   network)
       [ "$2" = inspect ] && {
@@ -138,15 +163,152 @@ esac
 SH
 chmod +x "$BIN/docker"
 
-run() {  # run <swarm.sh args…>  — real swarm.sh, fake ssh/docker, scratch suite
+# ---------------------------------------------------------------- fake sudo / ufw (the handshake)
+FAKE_SUDO_LOG="$T/sudo.log"; : > "$FAKE_SUDO_LOG"
+FAKE_UFW_LOG="$T/ufw.log"; : > "$FAKE_UFW_LOG"
+FAKE_UFW_STATUS_FILE="$T/ufw-status-rules"; : > "$FAKE_UFW_STATUS_FILE"
+
+cat > "$BIN/sudo" <<'SH'
+#!/bin/bash
+echo "sudo $*" >> "$FAKE_SUDO_LOG"
+if [ "$1" = "-n" ]; then
+    shift
+    [ "${1:-}" = "true" ] && exit "${FAKE_SUDO_N_RC:-1}"
+fi
+exec "$@"
+SH
+chmod +x "$BIN/sudo"
+
+# a tiny `ufw` that keeps its "rules" in FAKE_UFW_STATUS_FILE — enough to
+# exercise fw_detect / fw_rule_present / the allow+delete round trip.
+cat > "$BIN/ufw" <<'SH'
+#!/bin/bash
+echo "ufw $*" >> "$FAKE_UFW_LOG"
+case "$1" in
+  status)
+      if [ "${FAKE_UFW_ACTIVE:-1}" = 1 ]; then echo "Status: active"; else echo "Status: inactive"; fi
+      echo; echo "To                         Action      From"; echo "--                         ------      ----"
+      [ -f "$FAKE_UFW_STATUS_FILE" ] && cat "$FAKE_UFW_STATUS_FILE"
+      ;;
+  allow)
+      shift; ip=""; port=""; proto=""
+      while [ $# -gt 0 ]; do case "$1" in
+          from) ip=$2; shift 2 ;;
+          port) port=$2; shift 2 ;;
+          proto) proto=$2; shift 2 ;;
+          comment) shift 2 ;;
+          *) shift ;;
+      esac; done
+      printf '%-28s%-14s%s\n' "$port/$proto" ALLOW "$ip" >> "$FAKE_UFW_STATUS_FILE"
+      echo "Rule added"
+      exit "${FAKE_UFW_ALLOW_RC:-0}" ;;
+  delete)
+      shift; [ "${1:-}" = allow ] && shift
+      port=""; proto=""
+      while [ $# -gt 0 ]; do case "$1" in
+          port) port=$2; shift 2 ;;
+          proto) proto=$2; shift 2 ;;
+          *) shift ;;
+      esac; done
+      if [ -f "$FAKE_UFW_STATUS_FILE" ]; then
+          grep -v "^$port/$proto" "$FAKE_UFW_STATUS_FILE" > "$FAKE_UFW_STATUS_FILE.tmp" 2>/dev/null || : > "$FAKE_UFW_STATUS_FILE.tmp"
+          mv "$FAKE_UFW_STATUS_FILE.tmp" "$FAKE_UFW_STATUS_FILE"
+      fi
+      echo "Rule deleted" ;;
+  *) exit 0 ;;
+esac
+SH
+chmod +x "$BIN/ufw"
+
+# a SECOND bin dir with no ufw at all — the firewalld/nftables/none
+# detection tests run with it and with the sbin dirs stripped from PATH
+# (the real host's ufw/nft live there; stripping them makes "absent"
+# actually absent instead of silently hitting the real tool).
+BIN2="$T/bin2"; mkdir -p "$BIN2"
+ln -s "$BIN/ssh" "$BIN2/ssh"; ln -s "$BIN/docker" "$BIN2/docker"; ln -s "$BIN/sudo" "$BIN2/sudo"
+cat > "$BIN2/systemctl" <<'SH'
+#!/bin/bash
+case "$*" in
+  "is-active --quiet firewalld") [ "${FAKE_FIREWALLD:-0}" = 1 ] && exit 0 || exit 1 ;;
+  *) exit 1 ;;
+esac
+SH
+chmod +x "$BIN2/systemctl"
+cat > "$BIN2/firewall-cmd" <<'SH'
+#!/bin/bash
+exit 0
+SH
+chmod +x "$BIN2/firewall-cmd"
+cat > "$BIN2/nft" <<'SH'
+#!/bin/bash
+if [ "$1" = list ] && [ "${FAKE_NFTABLES:-0}" = 1 ]; then echo "table inet filter { chain input { } }"; fi
+exit 0
+SH
+chmod +x "$BIN2/nft"
+SBIN_STRIPPED_PATH="/usr/bin:/bin:/usr/local/bin"
+
+run() {  # run <swarm.sh args…>  — real swarm.sh, fake ssh/docker/sudo/ufw, scratch suite; stdin /dev/null (non-interactive by default)
     ( cd "$S" && env PATH="$BIN:$PATH" POL_SUITE_ROOT="$S" \
           FAKE_SSH_LOG="$FAKE_SSH_LOG" FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" \
+          FAKE_SUDO_LOG="$FAKE_SUDO_LOG" FAKE_UFW_LOG="$FAKE_UFW_LOG" FAKE_UFW_STATUS_FILE="$FAKE_UFW_STATUS_FILE" \
+          FAKE_UFW_ACTIVE="${FAKE_UFW_ACTIVE:-1}" FAKE_SUDO_N_RC="${FAKE_SUDO_N_RC:-1}" FAKE_UFW_ALLOW_RC="${FAKE_UFW_ALLOW_RC:-0}" \
+          FAKE_NC_IGNORE_UFW="${FAKE_NC_IGNORE_UFW:-0}" \
           NODE_IP="${NODE_IP:-192.168.0.24}" OPEN_PORTS="${OPEN_PORTS-}" \
           MESH_HAS_PEER="${MESH_HAS_PEER:-0}" REMOTE_SWARM_ACTIVE="${REMOTE_SWARM_ACTIVE:-0}" \
           REMOTE_JOIN_RC="${REMOTE_JOIN_RC:-0}" FAKE_ALREADY_JOINED="${FAKE_ALREADY_JOINED:-0}" \
           FAKE_PROXY_RUNNING="${FAKE_PROXY_RUNNING:-0}" \
+          POL_HANDBACK_DIR="${POL_HANDBACK_DIR:-$T/handback}" \
+          POL_FORCE_TTY="${POL_FORCE_TTY-}" POL_ASSUME_NO="${POL_ASSUME_NO-}" CI="${SELFTEST_CI-}" \
+          SWARM_MESH_POLL_TRIES=1 SWARM_MESH_POLL_INTERVAL=0 \
+          bash "$HERE/swarm.sh" "$@" 2>&1 | nocolor ) </dev/null
+}
+
+run_in() {  # run_in <stdin-line> <swarm.sh args…>  — like run(), but feeds one line to a y/N prompt
+    local ans=$1; shift
+    ( cd "$S" && printf '%s\n' "$ans" | env PATH="$BIN:$PATH" POL_SUITE_ROOT="$S" \
+          FAKE_SSH_LOG="$FAKE_SSH_LOG" FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" \
+          FAKE_SUDO_LOG="$FAKE_SUDO_LOG" FAKE_UFW_LOG="$FAKE_UFW_LOG" FAKE_UFW_STATUS_FILE="$FAKE_UFW_STATUS_FILE" \
+          FAKE_UFW_ACTIVE="${FAKE_UFW_ACTIVE:-1}" FAKE_SUDO_N_RC="${FAKE_SUDO_N_RC:-1}" FAKE_UFW_ALLOW_RC="${FAKE_UFW_ALLOW_RC:-0}" \
+          FAKE_NC_IGNORE_UFW="${FAKE_NC_IGNORE_UFW:-0}" \
+          NODE_IP="${NODE_IP:-192.168.0.24}" OPEN_PORTS="${OPEN_PORTS-}" \
+          MESH_HAS_PEER="${MESH_HAS_PEER:-0}" REMOTE_SWARM_ACTIVE="${REMOTE_SWARM_ACTIVE:-0}" \
+          REMOTE_JOIN_RC="${REMOTE_JOIN_RC:-0}" FAKE_ALREADY_JOINED="${FAKE_ALREADY_JOINED:-0}" \
+          FAKE_PROXY_RUNNING="${FAKE_PROXY_RUNNING:-0}" \
+          POL_HANDBACK_DIR="${POL_HANDBACK_DIR:-$T/handback}" \
+          POL_FORCE_TTY="${POL_FORCE_TTY-1}" POL_ASSUME_NO="${POL_ASSUME_NO-}" CI="${SELFTEST_CI-}" \
           SWARM_MESH_POLL_TRIES=1 SWARM_MESH_POLL_INTERVAL=0 \
           bash "$HERE/swarm.sh" "$@" 2>&1 | nocolor )
+}
+
+run2() {  # run2 <swarm.sh args…>  — BIN2 (no ufw), sbin stripped: firewalld/nftables/none detection
+    ( cd "$S" && env PATH="$BIN2:$SBIN_STRIPPED_PATH" POL_SUITE_ROOT="$S" \
+          FAKE_SSH_LOG="$FAKE_SSH_LOG" FAKE_DOCKER_LOG="$FAKE_DOCKER_LOG" FAKE_SUDO_LOG="$FAKE_SUDO_LOG" \
+          FAKE_FIREWALLD="${FAKE_FIREWALLD:-0}" FAKE_NFTABLES="${FAKE_NFTABLES:-0}" \
+          NODE_IP="${NODE_IP:-192.168.0.24}" OPEN_PORTS="${OPEN_PORTS-}" \
+          MESH_HAS_PEER="${MESH_HAS_PEER:-0}" REMOTE_SWARM_ACTIVE="${REMOTE_SWARM_ACTIVE:-0}" \
+          REMOTE_JOIN_RC="${REMOTE_JOIN_RC:-0}" FAKE_ALREADY_JOINED="${FAKE_ALREADY_JOINED:-0}" \
+          FAKE_PROXY_RUNNING="${FAKE_PROXY_RUNNING:-0}" \
+          POL_HANDBACK_DIR="${POL_HANDBACK_DIR:-$T/handback}" \
+          POL_FORCE_TTY="${POL_FORCE_TTY-1}" POL_ASSUME_NO="${POL_ASSUME_NO-}" CI="${SELFTEST_CI-}" \
+          SWARM_MESH_POLL_TRIES=1 SWARM_MESH_POLL_INTERVAL=0 \
+          bash "$HERE/swarm.sh" "$@" 2>&1 | nocolor ) </dev/null
+}
+
+runnet() {  # runnet <net.sh args…>  — pol net, same scratch suite + fakes, stdin /dev/null
+    ( cd "$S" && env PATH="$BIN:$PATH" POL_SUITE_ROOT="$S" \
+          FAKE_SSH_LOG="$FAKE_SSH_LOG" FAKE_SUDO_LOG="$FAKE_SUDO_LOG" FAKE_UFW_LOG="$FAKE_UFW_LOG" \
+          POL_HANDBACK_DIR="${POL_HANDBACK_DIR:-$T/handback}" \
+          POL_FORCE_TTY="${POL_FORCE_TTY-}" POL_ASSUME_NO="${POL_ASSUME_NO-}" CI="${SELFTEST_CI-}" \
+          bash "$HERE/net.sh" "$@" 2>&1 | nocolor ) </dev/null
+}
+
+runnet_in() {  # runnet_in <stdin-line> <net.sh args…>
+    local ans=$1; shift
+    ( cd "$S" && printf '%s\n' "$ans" | env PATH="$BIN:$PATH" POL_SUITE_ROOT="$S" \
+          FAKE_SSH_LOG="$FAKE_SSH_LOG" FAKE_SUDO_LOG="$FAKE_SUDO_LOG" FAKE_UFW_LOG="$FAKE_UFW_LOG" \
+          POL_HANDBACK_DIR="${POL_HANDBACK_DIR:-$T/handback}" \
+          POL_FORCE_TTY="${POL_FORCE_TTY-1}" POL_ASSUME_NO="${POL_ASSUME_NO-}" CI="${SELFTEST_CI-}" \
+          bash "$HERE/net.sh" "$@" 2>&1 | nocolor )
 }
 
 # =================================================================== Fix 1: hw-engines role
@@ -214,6 +376,135 @@ hasnt "  …never reports NOT formed when it did form" "mesh: NOT formed" "$out"
 out="$(run ports no-such-node 2>&1)" || true
 has   "ports: an unknown node refuses" "not in nodes.yml" "$out"
 eq    "  …no ssh attempted" "" "$(cat "$FAKE_SSH_LOG")"
+
+# =================================================================== Fix 3: the firewall HANDSHAKE (dev-swarm-fw-handshake)
+# ---- pol net needs: data, not prose
+out="$(runnet needs swarm-manager)"
+has "net needs swarm-manager: the 4 manager-side rows" "2377   tcp   cluster management (join)" "$out"
+has "  …7946/tcp gossip row" "7946   tcp   gossip (control plane)" "$out"
+has "  …7946/udp gossip row" "7946   udp   gossip (control plane)" "$out"
+has "  …4789/udp VXLAN row" "4789   udp   VXLAN overlay data" "$out"
+out="$(runnet needs swarm-worker)"
+hasnt "net needs swarm-worker: no 2377 (manager-only)" "2377" "$out"
+has   "  …worker-side 7946/udp row" "worker   7946   udp" "$out"
+out="$(runnet needs engine-worker 9830)"
+has "net needs engine-worker 9830: the hw/engine row" "worker   9830   tcp   hw/engine worker API (direct call, not mesh)" "$out"
+out="$(runnet needs bogus-binding 2>&1)" || true
+has "net needs: an unknown binding refuses" "unknown binding" "$out"
+
+# ---- closed ports + interactive yes → the exact rules, through fake sudo, journaled, re-checked
+: > "$FAKE_UFW_STATUS_FILE"; : > "$FAKE_SUDO_LOG"; rm -rf "$T/handback"
+out="$(OPEN_PORTS="" POL_FORCE_TTY=1 run_in "y" ports isle-core --apply)"
+has "--apply + yes: asks a single consent prompt listing every rule" "firewall consent: isle-core (192.168.0.24) -> this host" "$out"
+has "  …the exact source-scoped rule (never a blanket allow <port>)" "sudo ufw allow from 192.168.0.24 to any port 2377 proto tcp comment 'polari swarm-manager isle-core'" "$out"
+has "  …sudo -n true probed first (says whether a password is coming)" "sudo will prompt for a password" "$out"
+has "  …4/4 applied" "4/4 rule(s) applied on this host" "$out"
+has "  …re-checks the ports afterwards (before/after in one transcript)" "re-checking isle-core after apply" "$out"
+has "  …after: all 4 rows now report open" "TCP 2377 (node -> mgr)       open" "$out"
+has "  …'ports: all open' after apply" "ports: all open — isle-core can form the mesh (after apply)" "$out"
+eq  "  …all 4 rules actually ran through fake sudo" "4" "$(grep -c 'sudo ufw allow' "$FAKE_SUDO_LOG")"
+eq  "  …4 lines landed in the hand-back journal" "4" "$(grep -c . "$T/handback/firewall.jsonl" 2>/dev/null || echo 0)"
+has "  …a journal line carries ts/host/binding/peer/rule/undo/comment" '"binding": "swarm-manager", "peer": "isle-core"' "$(cat "$T/handback/firewall.jsonl")"
+has "  …the undo is the exact inverse ufw command" '"undo": "ufw delete allow from 192.168.0.24 to any port 2377 proto tcp"' "$(cat "$T/handback/firewall.jsonl")"
+
+# ---- interactive no → nothing applied
+: > "$FAKE_UFW_STATUS_FILE"; : > "$FAKE_SUDO_LOG"; rm -rf "$T/handback"
+out="$(OPEN_PORTS="" POL_FORCE_TTY=1 run_in "n" ports isle-core --apply)" || true
+has   "--apply + no: declines" "declined — nothing applied" "$out"
+eq    "  …fake sudo never ran an allow" "0" "$(grep -c 'sudo ufw allow' "$FAKE_SUDO_LOG")"
+eq    "  …nothing journaled" "" "$(cat "$T/handback/firewall.jsonl" 2>/dev/null || true)"
+
+# ---- non-interactive (no TTY, no --yes) → nothing applied, lines printed
+: > "$FAKE_UFW_STATUS_FILE"; : > "$FAKE_SUDO_LOG"; rm -rf "$T/handback"
+out="$(OPEN_PORTS="" run ports isle-core --apply)" || true
+has   "--apply, non-interactive: refuses to apply" "non-interactive — not applying" "$out"
+has   "  …still prints the exact ufw line (so it can be run by hand)" "sudo ufw allow from 192.168.0.24 to any port 2377 proto tcp" "$out"
+eq    "  …fake sudo never ran an allow" "0" "$(grep -c 'sudo ufw allow' "$FAKE_SUDO_LOG")"
+
+# ---- CI env refuses even with a (forced) tty — the pipeline must never open ports
+: > "$FAKE_UFW_STATUS_FILE"; : > "$FAKE_SUDO_LOG"
+out="$(OPEN_PORTS="" SELFTEST_CI=1 POL_FORCE_TTY=1 run_in "y" ports isle-core --apply)" || true
+has "--apply, CI env set: refuses even though 'interactive'" "non-interactive — not applying" "$out"
+eq  "  …fake sudo never ran an allow" "0" "$(grep -c 'sudo ufw allow' "$FAKE_SUDO_LOG")"
+
+# ---- POL_ASSUME_NO=1 refuses the same way
+: > "$FAKE_UFW_STATUS_FILE"; : > "$FAKE_SUDO_LOG"
+out="$(OPEN_PORTS="" POL_ASSUME_NO=1 POL_FORCE_TTY=1 run_in "y" ports isle-core --apply)" || true
+has "--apply, POL_ASSUME_NO=1: refuses even though 'interactive'" "non-interactive — not applying" "$out"
+
+# ---- --yes skips the y/N (sudo is still the real gate)
+: > "$FAKE_UFW_STATUS_FILE"; : > "$FAKE_SUDO_LOG"; rm -rf "$T/handback"
+out="$(OPEN_PORTS="" POL_FORCE_TTY=1 run_in "" ports isle-core --apply --yes)"
+hasnt "--apply --yes: no y/N text printed" "apply these 4 rule(s)" "$out"
+has   "  …still applies (sudo is the real gate, not the y/N)" "4/4 rule(s) applied on this host" "$out"
+
+# ---- rules already present (in ufw) are skipped, even though the probe itself still reports closed
+: > "$FAKE_SUDO_LOG"
+printf '%-28s%-14s%s\n' "2377/tcp" ALLOW "192.168.0.24" >  "$FAKE_UFW_STATUS_FILE"
+printf '%-28s%-14s%s\n' "7946/tcp" ALLOW "192.168.0.24" >> "$FAKE_UFW_STATUS_FILE"
+printf '%-28s%-14s%s\n' "7946/udp" ALLOW "192.168.0.24" >> "$FAKE_UFW_STATUS_FILE"
+printf '%-28s%-14s%s\n' "4789/udp" ALLOW "192.168.0.24" >> "$FAKE_UFW_STATUS_FILE"
+out="$(OPEN_PORTS="" FAKE_NC_IGNORE_UFW=1 POL_FORCE_TTY=1 run_in "y" ports isle-core --apply)" || true
+has "--apply: a rule already in ufw is skipped (idempotent)" "already present: allow from 192.168.0.24 port 2377/tcp — skipping" "$out"
+has "  …all four already present" "all needed rules already present on this host" "$out"
+eq  "  …nothing re-applied through sudo" "0" "$(grep -c 'sudo ufw allow' "$FAKE_SUDO_LOG")"
+
+# ---- firewalld detected: equivalent rules PRINTED, never applied
+: > "$FAKE_UFW_STATUS_FILE"
+out="$(OPEN_PORTS="" FAKE_FIREWALLD=1 POL_FORCE_TTY=1 run2 ports isle-core --apply)" || true
+has   "--apply, firewalld host: says so and does not apply" "firewalld detected on this host — pol only automates ufw" "$out"
+has   "  …prints the firewall-cmd equivalent" "sudo firewall-cmd --permanent --add-rich-rule='rule family=\"ipv4\" source address=\"192.168.0.24\" port port=\"2377\" protocol=\"tcp\" accept'" "$out"
+hasnt "  …never claims anything was applied" "rule(s) applied" "$out"
+
+# ---- `pol swarm join` applies by default (ports --apply is opt-in; join is opt-out)
+: > "$FAKE_UFW_STATUS_FILE"; : > "$FAKE_SUDO_LOG"; rm -rf "$T/handback"
+out="$(OPEN_PORTS="" MESH_HAS_PEER=1 POL_FORCE_TTY=1 run_in "y" join isle-core)"
+has "join (default): applies the handshake without --apply" "firewall consent: isle-core (192.168.0.24) -> this host" "$out"
+has "  …re-checks before joining, ports now open" "re-checking ports before joining" "$out"
+has "  …joins cleanly afterwards" "joined the swarm" "$out"
+hasnt "  …no longer warns 'joining anyway' once ports opened" "joining anyway" "$out"
+eq  "  …4 lines landed in the hand-back journal" "4" "$(grep -c . "$T/handback/firewall.jsonl" 2>/dev/null || echo 0)"
+
+# ---- `pol swarm join --no-apply` is the old print-only behaviour
+: > "$FAKE_UFW_STATUS_FILE"; : > "$FAKE_SUDO_LOG"
+out="$(OPEN_PORTS="" run join isle-core --no-apply)"
+hasnt "join --no-apply: never shows the consent box" "firewall consent:" "$out"
+has   "  …still warns + prints the plain ufw lines (old behaviour)" "joining anyway" "$out"
+eq    "  …fake sudo never ran an allow" "0" "$(grep -c 'sudo ufw allow' "$FAKE_SUDO_LOG")"
+
+# ---- handback --apply replays the undo in reverse and shrinks the journal
+: > "$FAKE_UFW_STATUS_FILE"; : > "$FAKE_SUDO_LOG"; rm -rf "$T/handback"
+OPEN_PORTS="" POL_FORCE_TTY=1 run_in "y" ports isle-core --apply --yes >/dev/null
+listed="$(runnet handback --peer isle-core)"
+has "net handback (list): shows the 4 journaled rules" "peer=isle-core" "$listed"
+out="$(POL_FORCE_TTY=1 runnet_in "y" handback --peer isle-core --apply)"
+has   "net handback --apply: lists the undo lines, last-applied first" "sudo ufw delete allow from 192.168.0.24 to any port 4789 proto udp" "$out"
+has   "  …replays through fake sudo" "Rule deleted" "$out"
+has   "  …reports 4/4 handed back" "4/4 rule(s) handed back on this host" "$out"
+eq    "  …the journal is empty afterwards" "" "$(cat "$T/handback/firewall.jsonl" 2>/dev/null || true)"
+out2="$(runnet handback --peer isle-core)"
+has   "  …a second listing shows nothing left" "handback journal empty" "$out2"
+
+# ---- non-interactive handback --apply also refuses (never silently closes ports either)
+: > "$FAKE_UFW_STATUS_FILE"; : > "$FAKE_SUDO_LOG"; rm -rf "$T/handback"
+OPEN_PORTS="" POL_FORCE_TTY=1 run_in "y" ports isle-core --apply --yes >/dev/null
+out="$(runnet handback --peer isle-core --apply)" || true
+has "net handback --apply, non-interactive: refuses" "non-interactive — not applying" "$out"
+eq  "  …journal untouched (4 lines kept)" "4" "$(grep -c . "$T/handback/firewall.jsonl" 2>/dev/null || echo 0)"
+
+# ---- pol swarm leave: hands back both hosts (--yes, no sudo in this test
+# scenario since FAKE_UFW_STATUS_FILE is empty / nothing to hand back),
+# then delegates the actual leave to the EXISTING uninstall route — proof
+# it is not re-implemented: the fake docker/ssh logs show the drain +
+# `docker swarm leave` (over ssh) + `docker node rm`, never from swarm.sh
+# running a bare 'docker swarm leave' itself.
+: > "$FAKE_DOCKER_LOG"; : > "$FAKE_SSH_LOG"; rm -rf "$T/handback"
+out="$(run leave isle-core --yes 2>&1)"
+has "leave: hands back the firewall rules first" "handing back whatever the join handshake opened" "$out"
+has "  …then leaves" "uninstall (swarm-worker) done on isle-core" "$out"
+has "  …the node's own 'docker swarm leave' ran OVER SSH (deploy.sh's route, not a new one)" "docker swarm leave" "$(cat "$FAKE_SSH_LOG")"
+has "  …the manager drains + removes the node (deploy.sh's route)" "node update --availability drain" "$(cat "$FAKE_DOCKER_LOG")"
+has "  …  …and node rm" "node rm --force NODEID1" "$(cat "$FAKE_DOCKER_LOG")"
 
 echo
 echo "swarm-selftest: $PASS/$((PASS+FAIL))"
