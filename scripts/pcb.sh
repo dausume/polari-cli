@@ -50,9 +50,26 @@ case "$cmd" in
         [ -n "${ARGS[0]:-}" ] || die "usage: pol pcb ingest <path> [--board B] [--no-engine] [--api URL]"
         if [ "$API_SET" = 1 ]; then
             board=""; for i in "${!ARGS[@]}"; do [ "${ARGS[$i]}" = "--board" ] && board="${ARGS[$((i+1))]}"; done
-            python3 -c "import json,sys; print(json.dumps({'path': sys.argv[1], 'board': sys.argv[2] or None}))" "${ARGS[0]}" "$board" \
-                | $CURL -X POST -H 'Content-Type: application/json' --data-binary @- "$API/api/pcb/ingest" \
-                | python3 -c 'import json,sys; d=json.load(sys.stdin); print(("[ OK ] stored " + json.dumps(d.get("stored")) if d.get("ok") else "[FAIL] " + str(d.get("error"))))'
+            # pcb-api-1: on_post_ingest opens `path` on the SERVER's OWN
+            # filesystem (no bind mount against a staging container) — a HOST
+            # path (this checkout's absolute path) means nothing there. A
+            # path under the framework's own modules/ directory DOES exist
+            # inside the server's image (modules/ ships with every build);
+            # send it relative to the framework root (the server's own cwd)
+            # and let the server resolve it under its own modules root.
+            # Anything else is refused honestly here — uploading a project's
+            # files over the wire (the {board, files: {name: text}} form
+            # on_post_ingest already accepts) is owed (pcb-2).
+            abspath=$(cd "$(dirname "${ARGS[0]}")" 2>/dev/null && pwd)/$(basename "${ARGS[0]}") || abspath="${ARGS[0]}"
+            case "$abspath" in
+                "$FW/modules/"*)
+                    relpath="modules/${abspath#"$FW/modules/"}"
+                    python3 -c "import json,sys; print(json.dumps({'path': sys.argv[1], 'board': sys.argv[2] or None}))" "$relpath" "$board" \
+                        | $CURL -X POST -H 'Content-Type: application/json' --data-binary @- "$API/api/pcb/ingest" \
+                        | python3 -c 'import json,sys; d=json.load(sys.stdin); print(("[ OK ] stored " + json.dumps(d.get("stored")) if d.get("ok") else "[FAIL] " + str(d.get("error"))))' ;;
+                *)
+                    die "--api needs a path the server can read; upload is owed (pcb-2) — '${ARGS[0]}' is not under $FW/modules/, the only tree the server's image carries today" ;;
+            esac
         else
             py -m pcb.custom.pcb_cli ingest "${ARGS[@]}"
         fi ;;

@@ -73,8 +73,8 @@ resolve_polari_modules() {
     resp=$(core_api GET "/api/topology/modules-env/$inst") || {
         die "POLARI_MODULES unset and no core reachable to derive it from ModuleAssignment rows — start the core, set POLARI_CORE_URL, or (bootstrap only) set POLARI_MODULES explicitly."
     }
-    local parsed
-    parsed=$(echo "$resp" | python3 -c "
+    local envline assignedline
+    { IFS= read -r envline; IFS= read -r assignedline; } < <(echo "$resp" | python3 -c "
 import json, sys
 try:
     d = json.load(sys.stdin)
@@ -82,6 +82,7 @@ except Exception:
     sys.exit(1)
 if d.get('ok'):
     print(d['env'])
+    print(','.join(d.get('assigned') or []))
     for mod, why in sorted((d.get('addedByRequires') or {}).items()):
         print(f'  + {mod} (required by {\", \".join(why)})',
               file=sys.stderr)
@@ -90,6 +91,57 @@ else:
     sys.exit(2)") || {
         die "topology rows refuse to yield a modules env for '$inst' — assign modules first (pol topology assign <module> $inst) or set POLARI_MODULES explicitly (a warned override)."
     }
-    export POLARI_MODULES="$parsed"
+    export POLARI_MODULES="$(checkout_closure_union "$envline" "$assignedline")"
     log_info "POLARI_MODULES derived from topology rows ($inst): $POLARI_MODULES"
+}
+
+# checkout_closure_union BACKEND_ENV_CSV ASSIGNED_CSV — topo-closure-1: the
+# RUNNING backend computes its requires-closure from the manifests baked into
+# its OWN (possibly old) image, so a module assigned on a newer checkout but
+# absent from that image contributes no requires at all (found live:
+# `pol topology modules-env prf-a` missed `grpcbridge`, required by
+# `hwnocode`, because the deployed image predated both). This recomputes the
+# SAME closure from the checkout currently on disk (modules/polari-modules.json
+# + each module's own polari-app.json requires.modules) and unions it with the
+# backend's answer, printing a WARN naming every module the checkout adds that
+# the running image did not already know about. Prints the final, unioned
+# POLARI_MODULES csv on stdout; never fails the caller — a broken/absent
+# checkout just contributes nothing and the backend's own env is kept as-is.
+checkout_closure_union() {
+    local backend_env=$1 assigned=$2
+    local modules_dir="$POL_RF_NODE/polari-framework/modules"
+    local helper="$SCRIPT_DIR/lib/checkout_module_closure.py"
+    [ -f "$helper" ] && [ -d "$modules_dir" ] || { echo "$backend_env"; return 0; }
+    local out
+    out=$(python3 "$helper" "$modules_dir" "$assigned" "$backend_env" 2>/dev/null) || { echo "$backend_env"; return 0; }
+    # NOTE: this function's stdout becomes POLARI_MODULES at the call site
+    # ($(...)) — it must print EXACTLY the final csv and nothing else.
+    # added_by_checkout is read here, in THIS shell, and WARNed through the
+    # real log_warn >&2 (never through this function's own stdout).
+    local finalcsv added_json mod chain
+    finalcsv=$(python3 -c "
+import json, sys
+raw, fallback = sys.argv[1], sys.argv[2]
+try:
+    d = json.loads(raw)
+except Exception:
+    d = {}
+full = d.get('full') or [m for m in fallback.split(',') if m]
+print(','.join(sorted(full)))
+" "$out" "$backend_env")
+    added_json=$(python3 -c "
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except Exception:
+    d = {}
+for mod, chain in sorted((d.get('added_by_checkout') or {}).items()):
+    print('%s\t%s' % (mod, ', '.join(chain)))
+" "$out")
+    if [ -n "$added_json" ]; then
+        while IFS=$'\t' read -r mod chain; do
+            [ -n "$mod" ] && log_warn "closure from the checkout: +$mod (required by $chain; not in the running image)" >&2
+        done <<< "$added_json"
+    fi
+    echo "$finalcsv"
 }

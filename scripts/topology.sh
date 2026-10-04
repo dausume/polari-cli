@@ -254,7 +254,8 @@ for c in d['resolve']['changed']:
 print('  rows updated — deploying the change stays yours:', d['suggestedCommand'])" ;;
     modules-env)
         INST=${1:-prf-a}
-        be_call GET "/api/topology/modules-env/$INST" | pretty "
+        MENV_RESP=$(be_call GET "/api/topology/modules-env/$INST")
+        echo "$MENV_RESP" | pretty "
 if not d.get('ok'):
     print('  REFUSED:', d.get('refusal'))
     print('  knob:', d.get('suggestion'))
@@ -262,9 +263,21 @@ if not d.get('ok'):
 print(f\"  {d['instance']} @ {d['topology']} — {d['count']} modules\")
 print('  assigned:', ', '.join(d['assigned']))
 for mod, why in sorted((d.get('addedByRequires') or {}).items()):
-    print(f\"  + {mod} (required by {', '.join(why)})\")
-print()
-print('  POLARI_MODULES=' + d['env'])" ;;
+    print(f\"  + {mod} (required by {', '.join(why)})\")"
+        # topo-closure-1: the backend's closure comes from the manifests
+        # baked into ITS OWN (possibly old) image — a module assigned on a
+        # newer checkout but absent there contributes no requires at all
+        # (found live: this missed `grpcbridge`, required by `hwnocode`).
+        # Recompute the SAME closure from the checkout on disk and union it
+        # in, WARNing by name for every module only the checkout knows about.
+        MENV_ENV=$(echo "$MENV_RESP" | python3 -c "import json,sys
+d=json.load(sys.stdin)
+print(d.get('env','') if d.get('ok') else '')")
+        MENV_ASSIGNED=$(echo "$MENV_RESP" | python3 -c "import json,sys
+d=json.load(sys.stdin)
+print(','.join(d.get('assigned') or []) if d.get('ok') else '')")
+        echo
+        echo "  POLARI_MODULES=$(checkout_closure_union "$MENV_ENV" "$MENV_ASSIGNED")" ;;
     resolve)
         NAME=$(resolve_name "$1"); [ -n "$NAME" ] || die "no active topology"
         echo '{}' | be_call POST "/api/topology/resolve?name=$NAME" | pretty "

@@ -115,6 +115,14 @@ render_stack() {
     # The compose bundles must exist — they do (they're the repo's root
     # files, themselves generated from pol-services/; see pol build help).
     export LOCAL_IP="${LOCAL_IP:-$(lan_ip)}"
+    # fw-1: node/suite bind-mount host paths (ca/root_ca.crt, .generated/*
+    # configs) — every one of those services' `deploy.placement.constraints`
+    # pins to node.labels.polari.machine == ${POLARI_MACHINE}, so the
+    # scheduler can never drop the task on a different swarm member (e.g. a
+    # joined isle-core, which has none of those paths). The value is THIS
+    # node's own polari.machine label — the same one `pol swarm init` stamps
+    # from POLARI_LOCAL_NODE/nodes.yml — never a hard-coded machine name.
+    export POLARI_MACHINE="${POLARI_MACHINE:-${POLARI_LOCAL_NODE:-pol-core}}"
     mkdir -p "$POL_SUITE_ROOT/.generated"
     local out="$POL_SUITE_ROOT/.generated/stack-$role.yml"
     # compose config resolves env_files/interpolation; stackify.py then

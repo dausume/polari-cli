@@ -36,8 +36,36 @@ pol_box() {
 # The default-route source address is the honest answer, and it is what
 # staging-setup.sh's detect_ip has always used; hostname -I stays only
 # as the last-resort fallback.
+#
+# fw-advertise (found live 2026-10-04): when THIS host is a swarm MANAGER,
+# the swarm (and the rendered proxy config) serve the address FROZEN at
+# `docker swarm init --advertise-addr` (`docker info
+# {{.Swarm.NodeAddr}}`) — never whatever the default route happens to
+# answer on today. A DHCP renewal moved the default-route source address
+# (.212) while the already-deployed proxy, and every worker's idea of the
+# manager, stayed on the advertised one (.210); `pol suite urls` printing
+# the route's address instead of the advertised one sends a browser
+# somewhere the stack isn't listening. Only trust the advertised address
+# when it is actually CONFIGURED ON A LOCAL INTERFACE right now — a stale
+# advertise address (the manager was re-initialised on a new IP without a
+# matching `ip addr add`) must still fall through to the route-based
+# answer below, never be printed as if it were live.
 lan_ip() {
-    local ip=''
+    local ip='' adv control
+    if command -v docker >/dev/null 2>&1; then
+        control=$(docker info --format '{{.Swarm.ControlAvailable}}' 2>/dev/null)
+        if [ "$control" = "true" ]; then
+            adv=$(docker info --format '{{.Swarm.NodeAddr}}' 2>/dev/null)
+            case "$adv" in
+                ""|"<no value>") : ;;
+                *)
+                    if command -v ip >/dev/null 2>&1 && \
+                       ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -qx "$adv"; then
+                        echo "$adv"; return
+                    fi ;;
+            esac
+        fi
+    fi
     command -v ip >/dev/null 2>&1 && \
         ip=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[\d.]+' | head -1)
     [ -z "$ip" ] && command -v hostname >/dev/null 2>&1 && \
