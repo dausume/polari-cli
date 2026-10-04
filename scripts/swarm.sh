@@ -150,30 +150,107 @@ render_stack() {
 # response either way), only that a REJECT/closed port fails fast; a
 # stuck probe past its timeout is reported CLOSED, which is the safe
 # (over-cautious) reading here.
+#
+# check_manager_advertise — THE missing diagnosis (learned live
+# 2026-10-04): a worker always dials the manager's ADVERTISED swarm
+# address — frozen at `docker swarm init`/`--advertise-addr`, read back
+# with `docker info --format '{{.Swarm.NodeAddr}}'` — never whatever
+# address the manager's interface happens to answer on today. A DHCP
+# lease that moves the manager's LAN address (live: 192.168.0.210 ->
+# .212) leaves the port probe above testing the CURRENT (reachable)
+# address while every already-joined worker keeps dialing the OLD one:
+# `pol swarm ports` reports all four ports open, yet `docker node ls`
+# shows the worker Down with a heartbeat failure — no firewall at fault.
+# Sets ADVERTISE_IP (the address the probes below must target) and
+# ADVERTISE_DRIFTED (0/1).
+ADVERTISE_IP=""
+ADVERTISE_DRIFTED=0
+check_manager_advertise() {
+    ADVERTISE_IP=$(docker info --format '{{.Swarm.NodeAddr}}' 2>/dev/null || true)
+    ADVERTISE_DRIFTED=0
+    case "$ADVERTISE_IP" in ""|"<no value>") ADVERTISE_IP="${LOCAL_IP:-$(lan_ip)}"; return 0 ;; esac
+    local current now_ip iface
+    current=$(
+        { command -v ip >/dev/null 2>&1 && ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1
+          command -v hostname >/dev/null 2>&1 && hostname -I 2>/dev/null; } | tr '\n' ' '
+    )
+    case " $current " in
+        *" $ADVERTISE_IP "*)
+            log_success "advertise $ADVERTISE_IP ok" ;;
+        *)
+            ADVERTISE_DRIFTED=1
+            # loopback (127.0.0.1) is always the FIRST entry `ip -4 -o addr
+            # show` reports — never what the box is reachable on; skip it
+            # when picking the one address to show in the warning.
+            now_ip=$(printf '%s\n' $current | grep -v '^127\.' | grep -v '^$' | head -1)
+            iface=$(command -v ip >/dev/null 2>&1 && ip route get 1.1.1.1 2>/dev/null | grep -oP 'dev \K\S+' | head -1)
+            iface=${iface:-<iface>}
+            log_warn "advertise $ADVERTISE_IP  DRIFTED (this host is now ${now_ip:-unknown})"
+            echo
+            if ping -c1 -W1 "$ADVERTISE_IP" >/dev/null 2>&1; then
+                echo "  (a) immediate, no data loss: held by another device — $ADVERTISE_IP answers a ping that is not this host; refusing to suggest adding it here"
+            else
+                echo "  (a) immediate, no data loss: sudo ip addr add $ADVERTISE_IP/24 dev $iface"
+                echo "      — costs: the swarm and every stack heal in seconds; NOT persistent across reboot"
+            fi
+            echo "  (b) durable: give the manager a reserved/static address and re-initialise the swarm on it —"
+            echo "      docker swarm leave --force   (on every node)"
+            echo "      docker swarm init --advertise-addr <ip>   (on the manager)"
+            echo "      pol swarm join <node>   (re-run, each node)"
+            echo "      pol swarm deploy <role>   (re-run, each stack)"
+            echo "      — costs: stacks and swarm secrets are lost, volumes stay"
+            echo "  pol never runs either of these for you."
+            ;;
+    esac
+}
+# _node_down_reason <node-label> — when <node-label> is ALREADY
+# registered (polari.machine=<node-label>) and `docker node ls` shows it
+# Down, print its Status.Message — the heartbeat-failure reason the live
+# finding needed, surfaced by the ports check itself instead of a
+# separate `docker node ls` + manual `docker node inspect`.
+_node_down_reason() {
+    local node=$1 id line label rest state msg
+    while IFS= read -r id; do
+        [ -n "$id" ] || continue
+        line=$(docker node inspect --format '{{index .Spec.Labels "polari.machine"}}|{{.Status.State}}|{{.Status.Message}}' "$id" 2>/dev/null) || continue
+        label=${line%%|*}; rest=${line#*|}; state=${rest%%|*}; msg=${rest#*|}
+        if [ "$label" = "$node" ]; then
+            [ "$state" = "down" ] && log_warn "$node is already registered and shows Down in docker node ls — reason: ${msg:-unknown}"
+            return 0
+        fi
+    done < <(docker node ls -q 2>/dev/null)
+}
 SWARM_PORTS_NODE_IP=""
 SWARM_PORTS_CLOSED=()   # "port/proto" rows from the LAST check_swarm_ports call — fw_handshake_apply reads this
 check_swarm_ports() {  # check_swarm_ports <ssh-alias> <node-label>
     local alias=$1 node=$2
-    local manager_ip="${LOCAL_IP:-$(lan_ip)}"
+    check_manager_advertise
+    local manager_ip="$ADVERTISE_IP"
     SWARM_PORTS_NODE_IP=$(ssh -o ConnectTimeout=8 "$alias" "hostname -I 2>/dev/null | awk '{print \$1}'" 2>/dev/null || true)
     [ -n "$SWARM_PORTS_NODE_IP" ] || log_warn "could not read $node's own IP over ssh — fill it into the ufw lines below by hand"
-    pol_box "swarm ports: $node ($alias) -> manager ($manager_ip)"
+    pol_box "swarm ports: $node ($alias) -> manager advertise ($manager_ip)"
     SWARM_PORTS_CLOSED=()
     _probe() {  # _probe <label> <tcp|udp> <port>
-        local label=$1 proto=$2 port=$3 flag result
-        [ "$proto" = udp ] && flag="-zu" || flag="-z"
+        local label=$1 proto=$2 port=$3 flag result suffix=""
+        # UDP is connectionless: a DROPped (silently discarded) packet
+        # looks identical to an answered one until the probe's own
+        # timeout — nc can prove REJECT/closed, never prove a firewall
+        # DROP. Labelled so "open" here is never read as a VXLAN guarantee
+        # (see check_data_plane for the test that actually proves it).
+        if [ "$proto" = udp ]; then flag="-zu"; suffix=" (probe cannot see DROP)"; else flag="-z"; fi
         if ssh -o ConnectTimeout=6 "$alias" "command -v nc >/dev/null 2>&1 && nc $flag -w3 $manager_ip $port" >/dev/null 2>&1; then
             result=open
         else
             result=CLOSED
             SWARM_PORTS_CLOSED+=("$port/$proto")
         fi
-        printf '  %-28s %s\n' "$label" "$result"
+        printf '  %-28s %s%s\n' "$label" "$result" "$suffix"
     }
     _probe "TCP 2377 (node -> mgr)" tcp 2377
     _probe "TCP 7946 (node -> mgr)" tcp 7946
     _probe "UDP 7946 (node -> mgr)" udp 7946
     _probe "UDP 4789 (node -> mgr)" udp 4789
+    _node_down_reason "$node"
     if [ "${#SWARM_PORTS_CLOSED[@]}" -gt 0 ]; then
         echo
         log_warn "closed ports block the routing mesh — run ON THE MANAGER (or 'pol swarm ports $node --apply' to do it with consent):"
@@ -202,6 +279,93 @@ check_mesh_formed() {  # check_mesh_formed <needle: node ip or hostname>
     done
     echo "not-formed"
     return 1
+}
+
+# _curl_elapsed <url> <timeout-sec> — prints "<N> s ok" on success or
+# "TIMEOUT" on any failure (connect refused/timed out alike — the caller
+# only cares about the manager-reachable-but-node-not case). set -e-safe:
+# the probe's own exit status never escapes as a bare failing command.
+_curl_elapsed() {
+    local url=$1 to=$2 t0 t1 rc
+    t0=$(date +%s.%N)
+    curl -sk --max-time "$to" -o /dev/null "$url" >/dev/null 2>&1 && rc=0 || rc=$?
+    t1=$(date +%s.%N)
+    if [ "$rc" = 0 ]; then
+        python3 -c "print(f'{$t1-$t0:.2f} s ok')" 2>/dev/null || echo "ok"
+    else
+        echo TIMEOUT
+    fi
+}
+
+# check_data_plane — a SECOND missing diagnosis (learned live right after
+# the advertise-drift fix shipped): CONTROL plane up (node Ready, both
+# peers listed in `docker network inspect ingress`) but the DATA plane
+# dead — a published ingress port answers in well under a second via the
+# node's OWN address and HANGS to timeout via the manager's advertised
+# address. Cause class: the manager's firewall drops UDP 4789 (VXLAN
+# overlay data — sometimes 7946/udp too); `nc -zu` (check_swarm_ports
+# above) cannot see a DROP, so the port probe reports "all open" while
+# the overlay never actually carries traffic. Finds ONE service with an
+# ingress-published TCP port whose task is scheduled on <node-hostname>
+# and times both routes; a manager-side timeout (node-side fine) feeds
+# the UDP rows into SWARM_PORTS_CLOSED so the SAME consent handshake
+# (`--apply`) that opens closed TCP/UDP ports can open these too.
+check_data_plane() {  # check_data_plane <node-label> <node-hostname>
+    local node=$1 node_hostname=$2
+    local node_ip="$SWARM_PORTS_NODE_IP" manager_ip="$ADVERTISE_IP"
+    local name port="" task_host=""
+    for name in $(docker service ls --format '{{.Name}}' 2>/dev/null || true); do
+        [ -n "$name" ] || continue
+        port=$(docker service inspect "$name" --format '{{json .Endpoint.Ports}}' 2>/dev/null | python3 -c '
+import json, sys
+try:
+    ports = json.load(sys.stdin) or []
+except Exception:
+    ports = []
+for p in ports:
+    if p.get("PublishMode") == "ingress" and p.get("Protocol") == "tcp":
+        print(p.get("PublishedPort", ""))
+        break
+' 2>/dev/null || true)
+        [ -n "$port" ] || continue
+        task_host=$(docker service ps "$name" --filter "desired-state=running" --format '{{.Node}}' 2>/dev/null | grep -F "$node_hostname" | head -1 || true)
+        [ -n "$task_host" ] && break
+        port=""
+    done
+    if [ -z "$port" ] || [ -z "$task_host" ]; then
+        log_info "data plane: no published service on $node to test"
+        return 0
+    fi
+    [ -n "$node_ip" ] && [ -n "$manager_ip" ] || { log_warn "data plane: node/manager address unknown — skipping the curl probe"; return 0; }
+
+    local via_node via_mgr
+    via_node=$(_curl_elapsed "http://$node_ip:$port/capability" "${SWARM_DP_TIMEOUT:-5}")
+    via_mgr=$(_curl_elapsed "http://$manager_ip:$port/capability" "${SWARM_DP_TIMEOUT:-5}")
+    echo "  data plane $port: via node ${via_node} · via manager ${via_mgr}"
+
+    case "$via_mgr" in
+        TIMEOUT)
+            case "$via_node" in
+                TIMEOUT)
+                    log_warn "data plane: unreachable via BOTH routes — not a VXLAN-specific symptom, check the service itself"
+                    return 0 ;;
+                *)
+                    log_warn "mesh: formed but VXLAN blocked — allow UDP 4789 (and 7946/udp) from $node_ip on the manager"
+                    echo "  sudo ufw allow from $node_ip to any port 4789 proto udp"
+                    echo "  sudo ufw allow from $node_ip to any port 7946 proto udp"
+                    local cp already4789=0 already7946=0
+                    for cp in "${SWARM_PORTS_CLOSED[@]}"; do
+                        [ "$cp" = "4789/udp" ] && already4789=1
+                        [ "$cp" = "7946/udp" ] && already7946=1
+                    done
+                    [ "$already4789" = 1 ] || SWARM_PORTS_CLOSED+=("4789/udp")
+                    [ "$already7946" = 1 ] || SWARM_PORTS_CLOSED+=("7946/udp")
+                    return 1 ;;
+            esac ;;
+        *)
+            log_success "data plane: reachable via both routes"
+            return 0 ;;
+    esac
 }
 
 COMMAND=$1; shift || true
@@ -248,8 +412,10 @@ case "$COMMAND" in
         MANAGER_IP="${LOCAL_IP:-$(lan_ip)}"
         TOKEN=$(docker swarm join-token -q worker)
         REMOTE_HOSTNAME=$(ssh -o ConnectTimeout=8 "$ALIAS" hostname) || die "ssh to $ALIAS failed — pol deploy preflight $NODE"
+        JOIN_SKIPPED=0
         if ssh "$ALIAS" "docker info 2>/dev/null | grep -q 'Swarm: active'"; then
             log_info "$NODE already in a swarm — skipping join"
+            JOIN_SKIPPED=1
         else
             ssh "$ALIAS" "docker swarm join --token $TOKEN $MANAGER_IP:2377" || die "join failed on $NODE"
         fi
@@ -273,12 +439,33 @@ print(urllib.request.urlopen(req, timeout=15).read().decode())" \
         docker node ls
         log_info "checking whether the routing mesh formed (docker network inspect ingress)…"
         MESH_NEEDLE="${SWARM_PORTS_NODE_IP:-$REMOTE_HOSTNAME}"
+        # the actual docker node ls status for THIS node — never assume
+        # Ready; a Down node (heartbeat failure, e.g. the advertise-drift
+        # case above) must say so, not a copy-pasted "shows Ready".
+        NODE_STATUS=$(docker node ls --format '{{.Hostname}} {{.Status}}' 2>/dev/null | awk -v h="$REMOTE_HOSTNAME" '$1==h{print $2}')
+        NODE_STATUS=${NODE_STATUS:-Unknown}
         if [ "$(check_mesh_formed "$MESH_NEEDLE")" = ok ]; then
             log_success "mesh: ok — $NODE is a gossip peer on the ingress network"
+            # control plane (gossip) up is NOT proof the DATA plane (VXLAN)
+            # is — a manager-side UDP 4789/7946 DROP is invisible to the nc
+            # probe above but shows up instantly as a hung curl.
+            DP_OK=1
+            check_data_plane "$NODE" "$REMOTE_HOSTNAME" || DP_OK=0
+            if [ "$DP_OK" = 0 ] && [ "$JOIN_APPLY" = 1 ]; then
+                if fw_handshake_apply "" "swarm-manager" "$NODE" "$SWARM_PORTS_NODE_IP" "$JOIN_YES"; then
+                    echo
+                    log_info "re-checking the data plane after apply…"
+                    check_data_plane "$NODE" "$REMOTE_HOSTNAME" || true
+                fi
+            fi
         else
-            log_warn "mesh: NOT formed (ports above) — $NODE shows Ready in docker node ls, but its published ports will only answer on $NODE's own address until the mesh forms"
+            log_warn "mesh: NOT formed (ports above) — $NODE shows $NODE_STATUS in docker node ls, but its published ports will only answer on $NODE's own address until the mesh forms"
         fi
-        log_success "$NODE joined the swarm (label polari.machine=$NODE) — pol allocate <instance> $NODE to place work" ;;
+        if [ "$JOIN_SKIPPED" = 1 ]; then
+            log_success "$NODE already a member (label polari.machine=$NODE refreshed) — pol allocate <instance> $NODE to place work"
+        else
+            log_success "$NODE joined the swarm (label polari.machine=$NODE) — pol allocate <instance> $NODE to place work"
+        fi ;;
     ports)
         require_swarm
         NODES_FILE="$POL_SUITE_ROOT/pol-build/manifests/nodes.yml"

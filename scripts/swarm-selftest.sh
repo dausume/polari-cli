@@ -95,30 +95,86 @@ cat > "$BIN/docker" <<'SH'
 #!/bin/bash
 echo "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
-  info) echo "Swarm: active"; exit 0 ;;
+  info)
+      case "$*" in
+        *NodeAddr*) echo "${FAKE_ADVERTISE_IP:-192.168.0.212}" ;;
+        *) echo "Swarm: active" ;;
+      esac
+      exit 0 ;;
   node)
       case "$2" in
         ls)
             case "$*" in
               *'{{.Hostname}} {{json .}}'*)
                   [ "${FAKE_ALREADY_JOINED:-0}" = 1 ] && printf 'fake-isle-core {"polari.machine":"isle-core"}\n' || true ;;
+              *'{{.Hostname}} {{.Status}}'*)
+                  if [ "${FAKE_NODE_DOWN:-0}" = 1 ]; then
+                      printf 'pol-core Ready\nfake-isle-core Down\n'
+                  else
+                      printf 'pol-core Ready\nfake-isle-core Ready\n'
+                  fi ;;
               *'{{.ID}} {{.Hostname}}'*)
                   printf 'NODEID1 fake-isle-core\n' ;;
               *-q*)
                   printf 'SELFID\nNODEID1\n' ;;
               *)
-                  printf 'ID        HOSTNAME        STATUS\nSELFID    pol-core        Ready\nNODEID1   fake-isle-core  Ready\n' ;;
+                  if [ "${FAKE_NODE_DOWN:-0}" = 1 ]; then
+                      printf 'ID        HOSTNAME        STATUS\nSELFID    pol-core        Ready\nNODEID1   fake-isle-core  Down\n'
+                  else
+                      printf 'ID        HOSTNAME        STATUS\nSELFID    pol-core        Ready\nNODEID1   fake-isle-core  Ready\n'
+                  fi ;;
             esac ;;
         update) exit 0 ;;
         # pol swarm leave → pol deploy uninstall --route swarm-worker: the
         # NID lookup (`for id in $(docker node ls -q); do docker node
         # inspect --format '{{.ID}} {{.Spec.Labels}}' $id; done`) and the
-        # final `docker node rm --force $NID`.
+        # final `docker node rm --force $NID`; also the advertise-drift
+        # down-reason lookup (`_node_down_reason`'s own composite format).
         inspect)
-            id="${@: -1}"
-            if [ "$id" = NODEID1 ]; then echo "NODEID1 map[polari.machine:isle-core]"
-            else echo "$id map[polari.machine:pol-core]"; fi ;;
+            case "$*" in
+              *'{{index .Spec.Labels "polari.machine"}}|{{.Status.State}}|{{.Status.Message}}'*)
+                  id="${@: -1}"
+                  if [ "$id" = NODEID1 ]; then
+                      if [ "${FAKE_NODE_DOWN:-0}" = 1 ]; then
+                          echo "isle-core|down|${FAKE_DOWN_MESSAGE:-heartbeat failure}"
+                      else
+                          echo "isle-core|ready|"
+                      fi
+                  else
+                      echo "pol-core|ready|"
+                  fi ;;
+              *)
+                  id="${@: -1}"
+                  if [ "$id" = NODEID1 ]; then echo "NODEID1 map[polari.machine:isle-core]"
+                  else echo "$id map[polari.machine:pol-core]"; fi ;;
+            esac ;;
         rm) exit 0 ;;
+      esac ;;
+  service)
+      # the data-plane check's service discovery: ls -> one service name,
+      # inspect -> its Endpoint.Ports (ingress/tcp/FAKE_DP_PORT), ps ->
+      # which node its running task sits on. FAKE_DP_SERVICE=0 simulates
+      # "nothing published on this node to test".
+      case "$2" in
+        ls)
+            case "$*" in
+              *'{{.Name}}'*)
+                  [ "${FAKE_DP_SERVICE:-1}" = 1 ] && echo "polari-hw-engines_board-engines" ;;
+            esac ;;
+        inspect)
+            case "$*" in
+              *'{{json .Endpoint.Ports}}'*)
+                  if [ "${FAKE_DP_SERVICE:-1}" = 1 ]; then
+                      printf '[{"Protocol":"tcp","PublishMode":"ingress","PublishedPort":%s,"TargetPort":%s}]\n' "${FAKE_DP_PORT:-9830}" "${FAKE_DP_PORT:-9830}"
+                  else
+                      echo '[]'
+                  fi ;;
+            esac ;;
+        ps)
+            case "$*" in
+              *'{{.Node}}'*)
+                  [ "${FAKE_DP_SERVICE:-1}" = 1 ] && echo "fake-isle-core" ;;
+            esac ;;
       esac ;;
   network)
       [ "$2" = inspect ] && {
@@ -162,6 +218,50 @@ YAML
 esac
 SH
 chmod +x "$BIN/docker"
+
+# ---------------------------------------------------------------- fake ip / hostname / ping
+# (the advertise-drift check: "current interface addresses" + the
+# held-by-another-device ping probe — deterministic, never the real host's)
+cat > "$BIN/ip" <<'SH'
+#!/bin/bash
+case "$*" in
+  "route get "*)
+      echo "1.1.1.1 via 192.168.0.1 dev ${FAKE_IFACE:-eth0} src ${FAKE_HOST_IP:-192.168.0.212} uid 1000" ;;
+  "-4 -o addr show")
+      printf '1: lo    inet 127.0.0.1/8 scope host lo\n'
+      printf '2: %s    inet %s/24 brd 192.168.0.255 scope global %s\n' "${FAKE_IFACE:-eth0}" "${FAKE_HOST_IP:-192.168.0.212}" "${FAKE_IFACE:-eth0}" ;;
+  *) exit 1 ;;
+esac
+SH
+chmod +x "$BIN/ip"
+cat > "$BIN/hostname" <<'SH'
+#!/bin/bash
+case "$1" in
+  -I) echo "${FAKE_HOST_IP:-192.168.0.212}" ;;
+  *) echo fake-pol-core ;;
+esac
+SH
+chmod +x "$BIN/hostname"
+cat > "$BIN/ping" <<'SH'
+#!/bin/bash
+echo "ping $*" >> "${FAKE_PING_LOG:-/dev/null}"
+[ "${FAKE_PING_OK:-0}" = 1 ] && exit 0 || exit 1
+SH
+chmod +x "$BIN/ping"
+
+# fake curl — the data-plane check's two routes. Branches on which host
+# (node IP vs manager/advertise IP) is in the URL; returns instantly
+# (no real sleep) so FAKE_DP_*_OK=0 stands in for a hung connection.
+cat > "$BIN/curl" <<'SH'
+#!/bin/bash
+echo "curl $*" >> "${FAKE_CURL_LOG:-/dev/null}"
+url="${@: -1}"
+case "$url" in
+  *"//${NODE_IP:-192.168.0.24}:"*) [ "${FAKE_DP_NODE_OK:-1}" = 1 ] && exit 0 || exit 28 ;;
+  *)                                [ "${FAKE_DP_MGR_OK:-1}" = 1 ] && exit 0 || exit 28 ;;
+esac
+SH
+chmod +x "$BIN/curl"
 
 # ---------------------------------------------------------------- fake sudo / ufw (the handshake)
 FAKE_SUDO_LOG="$T/sudo.log"; : > "$FAKE_SUDO_LOG"
@@ -226,6 +326,8 @@ chmod +x "$BIN/ufw"
 # actually absent instead of silently hitting the real tool).
 BIN2="$T/bin2"; mkdir -p "$BIN2"
 ln -s "$BIN/ssh" "$BIN2/ssh"; ln -s "$BIN/docker" "$BIN2/docker"; ln -s "$BIN/sudo" "$BIN2/sudo"
+ln -s "$BIN/ip" "$BIN2/ip"; ln -s "$BIN/hostname" "$BIN2/hostname"; ln -s "$BIN/ping" "$BIN2/ping"
+ln -s "$BIN/curl" "$BIN2/curl"
 cat > "$BIN2/systemctl" <<'SH'
 #!/bin/bash
 case "$*" in
@@ -257,6 +359,12 @@ run() {  # run <swarm.sh args…>  — real swarm.sh, fake ssh/docker/sudo/ufw, 
           MESH_HAS_PEER="${MESH_HAS_PEER:-0}" REMOTE_SWARM_ACTIVE="${REMOTE_SWARM_ACTIVE:-0}" \
           REMOTE_JOIN_RC="${REMOTE_JOIN_RC:-0}" FAKE_ALREADY_JOINED="${FAKE_ALREADY_JOINED:-0}" \
           FAKE_PROXY_RUNNING="${FAKE_PROXY_RUNNING:-0}" \
+          FAKE_HOST_IP="${FAKE_HOST_IP:-192.168.0.212}" FAKE_ADVERTISE_IP="${FAKE_ADVERTISE_IP:-192.168.0.212}" \
+          FAKE_IFACE="${FAKE_IFACE:-eth0}" FAKE_PING_OK="${FAKE_PING_OK:-0}" FAKE_NODE_DOWN="${FAKE_NODE_DOWN:-0}" \
+          FAKE_DOWN_MESSAGE="${FAKE_DOWN_MESSAGE-}" \
+          FAKE_DP_SERVICE="${FAKE_DP_SERVICE:-0}" FAKE_DP_PORT="${FAKE_DP_PORT:-9830}" \
+          FAKE_DP_NODE_OK="${FAKE_DP_NODE_OK:-1}" FAKE_DP_MGR_OK="${FAKE_DP_MGR_OK:-1}" \
+          SWARM_DP_TIMEOUT="${SWARM_DP_TIMEOUT:-2}" \
           POL_HANDBACK_DIR="${POL_HANDBACK_DIR:-$T/handback}" \
           POL_FORCE_TTY="${POL_FORCE_TTY-}" POL_ASSUME_NO="${POL_ASSUME_NO-}" CI="${SELFTEST_CI-}" \
           SWARM_MESH_POLL_TRIES=1 SWARM_MESH_POLL_INTERVAL=0 \
@@ -274,6 +382,12 @@ run_in() {  # run_in <stdin-line> <swarm.sh args…>  — like run(), but feeds 
           MESH_HAS_PEER="${MESH_HAS_PEER:-0}" REMOTE_SWARM_ACTIVE="${REMOTE_SWARM_ACTIVE:-0}" \
           REMOTE_JOIN_RC="${REMOTE_JOIN_RC:-0}" FAKE_ALREADY_JOINED="${FAKE_ALREADY_JOINED:-0}" \
           FAKE_PROXY_RUNNING="${FAKE_PROXY_RUNNING:-0}" \
+          FAKE_HOST_IP="${FAKE_HOST_IP:-192.168.0.212}" FAKE_ADVERTISE_IP="${FAKE_ADVERTISE_IP:-192.168.0.212}" \
+          FAKE_IFACE="${FAKE_IFACE:-eth0}" FAKE_PING_OK="${FAKE_PING_OK:-0}" FAKE_NODE_DOWN="${FAKE_NODE_DOWN:-0}" \
+          FAKE_DOWN_MESSAGE="${FAKE_DOWN_MESSAGE-}" \
+          FAKE_DP_SERVICE="${FAKE_DP_SERVICE:-0}" FAKE_DP_PORT="${FAKE_DP_PORT:-9830}" \
+          FAKE_DP_NODE_OK="${FAKE_DP_NODE_OK:-1}" FAKE_DP_MGR_OK="${FAKE_DP_MGR_OK:-1}" \
+          SWARM_DP_TIMEOUT="${SWARM_DP_TIMEOUT:-2}" \
           POL_HANDBACK_DIR="${POL_HANDBACK_DIR:-$T/handback}" \
           POL_FORCE_TTY="${POL_FORCE_TTY-1}" POL_ASSUME_NO="${POL_ASSUME_NO-}" CI="${SELFTEST_CI-}" \
           SWARM_MESH_POLL_TRIES=1 SWARM_MESH_POLL_INTERVAL=0 \
@@ -288,6 +402,12 @@ run2() {  # run2 <swarm.sh args…>  — BIN2 (no ufw), sbin stripped: firewalld
           MESH_HAS_PEER="${MESH_HAS_PEER:-0}" REMOTE_SWARM_ACTIVE="${REMOTE_SWARM_ACTIVE:-0}" \
           REMOTE_JOIN_RC="${REMOTE_JOIN_RC:-0}" FAKE_ALREADY_JOINED="${FAKE_ALREADY_JOINED:-0}" \
           FAKE_PROXY_RUNNING="${FAKE_PROXY_RUNNING:-0}" \
+          FAKE_HOST_IP="${FAKE_HOST_IP:-192.168.0.212}" FAKE_ADVERTISE_IP="${FAKE_ADVERTISE_IP:-192.168.0.212}" \
+          FAKE_IFACE="${FAKE_IFACE:-eth0}" FAKE_PING_OK="${FAKE_PING_OK:-0}" FAKE_NODE_DOWN="${FAKE_NODE_DOWN:-0}" \
+          FAKE_DOWN_MESSAGE="${FAKE_DOWN_MESSAGE-}" \
+          FAKE_DP_SERVICE="${FAKE_DP_SERVICE:-0}" FAKE_DP_PORT="${FAKE_DP_PORT:-9830}" \
+          FAKE_DP_NODE_OK="${FAKE_DP_NODE_OK:-1}" FAKE_DP_MGR_OK="${FAKE_DP_MGR_OK:-1}" \
+          SWARM_DP_TIMEOUT="${SWARM_DP_TIMEOUT:-2}" \
           POL_HANDBACK_DIR="${POL_HANDBACK_DIR:-$T/handback}" \
           POL_FORCE_TTY="${POL_FORCE_TTY-1}" POL_ASSUME_NO="${POL_ASSUME_NO-}" CI="${SELFTEST_CI-}" \
           SWARM_MESH_POLL_TRIES=1 SWARM_MESH_POLL_INTERVAL=0 \
@@ -505,6 +625,100 @@ has "  …then leaves" "uninstall (swarm-worker) done on isle-core" "$out"
 has "  …the node's own 'docker swarm leave' ran OVER SSH (deploy.sh's route, not a new one)" "docker swarm leave" "$(cat "$FAKE_SSH_LOG")"
 has "  …the manager drains + removes the node (deploy.sh's route)" "node update --availability drain" "$(cat "$FAKE_DOCKER_LOG")"
 has "  …  …and node rm" "node rm --force NODEID1" "$(cat "$FAKE_DOCKER_LOG")"
+
+# =================================================================== Fix 4: manager advertise-address drift (dev-swarm-advertise-check)
+# the live finding: `pol swarm ports isle-core` reported all four ports
+# open while the worker was actually Down (heartbeat failure) because the
+# manager's swarm was advertised on an address a later DHCP renewal moved
+# off of — the probe tested the CURRENT (reachable) address, not the one
+# the worker dials.
+# the earlier net-handback tests left $FAKE_UFW_STATUS_FILE populated —
+# clear it so the fake nc probe below reflects OPEN_PORTS alone, not
+# leftover "already applied" rules from a prior test.
+: > "$FAKE_UFW_STATUS_FILE"
+# ---- drifted: NodeAddr frozen at .210, this host now .212 — the probe
+# must target the ADVERTISED address (box title), both remedies printed
+out="$(OPEN_PORTS="2377/tcp 7946/tcp 7946/udp 4789/udp" FAKE_ADVERTISE_IP=192.168.0.210 FAKE_HOST_IP=192.168.0.212 FAKE_PING_OK=0 run ports isle-core)"
+has   "advertise drift: DRIFTED row names the frozen + current address" "advertise 192.168.0.210  DRIFTED (this host is now 192.168.0.212)" "$out"
+has   "  …the port probe targets the ADVERTISED address, not today's" "manager advertise (192.168.0.210)" "$out"
+has   "  …remedy (a), the exact command" "sudo ip addr add 192.168.0.210/24 dev eth0" "$out"
+has   "  …remedy (a) states its cost" "heal in seconds; NOT persistent across reboot" "$out"
+has   "  …remedy (b), the re-init sequence" "docker swarm leave --force   (on every node)" "$out"
+has   "  …  …docker swarm init --advertise-addr" "docker swarm init --advertise-addr <ip>" "$out"
+has   "  …remedy (b) states its cost" "stacks and swarm secrets are lost, volumes stay" "$out"
+has   "  …pol never runs either for you" "pol never runs either of these for you." "$out"
+hasnt "  …never silently calls a drifted address 'ok'" "advertise 192.168.0.210 ok" "$out"
+
+# ---- drifted AND held by another device: remedy (a) is refused, not suggested
+out="$(OPEN_PORTS="2377/tcp 7946/tcp 7946/udp 4789/udp" FAKE_ADVERTISE_IP=192.168.0.210 FAKE_HOST_IP=192.168.0.212 FAKE_PING_OK=1 run ports isle-core)"
+has   "advertise drift, held: refuses remedy (a)" "held by another device — 192.168.0.210 answers a ping" "$out"
+hasnt "  …never still suggests adding the held address" "sudo ip addr add 192.168.0.210" "$out"
+has   "  …remedy (b) is still offered" "docker swarm leave --force   (on every node)" "$out"
+
+# ---- not drifted: the plain ok row, no remedies at all
+out="$(OPEN_PORTS="2377/tcp 7946/tcp 7946/udp 4789/udp" FAKE_ADVERTISE_IP=192.168.0.212 FAKE_HOST_IP=192.168.0.212 run ports isle-core)"
+has   "advertise not drifted: the plain ok row" "advertise 192.168.0.212 ok" "$out"
+hasnt "  …no DRIFTED row" "DRIFTED" "$out"
+hasnt "  …no remedy lines" "docker swarm leave --force" "$out"
+
+# ---- the UDP rows keep their EXACT old text (backward compatible) and
+# now carry the "probe cannot see DROP" caveat as a suffix
+out="$(OPEN_PORTS="" run ports isle-core)"
+has "UDP rows: still report CLOSED exactly as before" "UDP 7946 (node -> mgr)       CLOSED" "$out"
+has "  …now suffixed with the DROP caveat" "UDP 7946 (node -> mgr)       CLOSED (probe cannot see DROP)" "$out"
+has "  …UDP 4789 too" "UDP 4789 (node -> mgr)       CLOSED (probe cannot see DROP)" "$out"
+
+# ---- Down node: the heartbeat reason is surfaced by `ports` ITSELF —
+# the exact live combination (all four ports "open", worker already
+# registered and Down) without a separate `docker node ls` + inspect.
+out="$(OPEN_PORTS="2377/tcp 7946/tcp 7946/udp 4789/udp" FAKE_NODE_DOWN=1 run ports isle-core)"
+has "Down node: the heartbeat reason is surfaced by the ports check" "isle-core is already registered and shows Down in docker node ls — reason: heartbeat failure" "$out"
+has "  …still (correctly) says all ports open — the live finding's combination" "ports: all open — isle-core can form the mesh" "$out"
+
+# ---- skipped join: no false "joined" line, says "already a member",
+# and still runs the advertise + mesh checks (not short-circuited)
+out="$(OPEN_PORTS="2377/tcp 7946/tcp 7946/udp 4789/udp" MESH_HAS_PEER=1 REMOTE_SWARM_ACTIVE=1 run join isle-core)"
+has   "skipped join: still reports the skip" "isle-core already in a swarm — skipping join" "$out"
+has   "  …says 'already a member', never a false join" "isle-core already a member (label polari.machine=isle-core refreshed)" "$out"
+hasnt "  …never claims it joined" "isle-core joined the swarm" "$out"
+has   "  …still runs the advertise check" "advertise 192.168.0.212 ok" "$out"
+has   "  …still runs the mesh check" "mesh: ok — isle-core is a gossip peer" "$out"
+
+# =================================================================== Fix 5: data-plane reachability (VXLAN dropped — control plane up, data dead)
+# a second live finding, right after the advertise fix: node Ready, both
+# peers listed in `docker network inspect ingress` (mesh: ok), yet a
+# published ingress port hangs to timeout via the manager while answering
+# instantly via the node's own address — the manager's firewall drops UDP
+# 4789 (VXLAN), which `nc -zu` can never prove (see the DROP caveat above).
+# ---- blocked: mesh ok, node-side fast, manager-side TIMEOUT — verdict +
+# exact source-scoped ufw lines (fed into the SAME SWARM_PORTS_CLOSED the
+# consent handshake already reads)
+out="$(OPEN_PORTS="2377/tcp 7946/tcp 7946/udp 4789/udp" MESH_HAS_PEER=1 FAKE_DP_SERVICE=1 FAKE_DP_NODE_OK=1 FAKE_DP_MGR_OK=0 SWARM_DP_TIMEOUT=1 run join isle-core --no-apply)"
+has "data plane blocked: mesh still reports ok (control plane is fine)" "mesh: ok — isle-core is a gossip peer" "$out"
+has "  …the row: fast via node" "data plane 9830: via node" "$out"
+has "  …  …TIMEOUT via manager" "via manager TIMEOUT" "$out"
+has "  …the verdict names VXLAN specifically, not a generic firewall warning" "mesh: formed but VXLAN blocked — allow UDP 4789 (and 7946/udp) from 192.168.0.24 on the manager" "$out"
+has "  …the exact source-scoped ufw line for 4789/udp" "sudo ufw allow from 192.168.0.24 to any port 4789 proto udp" "$out"
+has "  …the exact source-scoped ufw line for 7946/udp" "sudo ufw allow from 192.168.0.24 to any port 7946 proto udp" "$out"
+
+# ---- the default (opt-out) apply path offers the SAME consent handshake
+# for the two VXLAN rows, through the existing fw_handshake_apply
+: > "$FAKE_UFW_STATUS_FILE"; : > "$FAKE_SUDO_LOG"; rm -rf "$T/handback"
+out="$(OPEN_PORTS="2377/tcp 7946/tcp 7946/udp 4789/udp" MESH_HAS_PEER=1 FAKE_DP_SERVICE=1 FAKE_DP_NODE_OK=1 FAKE_DP_MGR_OK=0 SWARM_DP_TIMEOUT=1 POL_FORCE_TTY=1 run_in "y" join isle-core)"
+has "data plane blocked, default apply: offers the consent handshake for 4789/udp" "sudo ufw allow from 192.168.0.24 to any port 4789 proto udp comment 'polari swarm-manager isle-core'" "$out"
+has "  …and for 7946/udp" "sudo ufw allow from 192.168.0.24 to any port 7946 proto udp comment 'polari swarm-manager isle-core'" "$out"
+has "  …reports 2/2 applied (just the VXLAN rows — the TCP/UDP probe already found everything else open)" "2/2 rule(s) applied on this host" "$out"
+
+# ---- data plane reachable via both routes — no VXLAN verdict
+out="$(OPEN_PORTS="2377/tcp 7946/tcp 7946/udp 4789/udp" MESH_HAS_PEER=1 FAKE_DP_SERVICE=1 FAKE_DP_NODE_OK=1 FAKE_DP_MGR_OK=1 SWARM_DP_TIMEOUT=1 run join isle-core --no-apply)"
+has   "data plane ok: reachable via both routes" "data plane: reachable via both routes" "$out"
+hasnt "  …no VXLAN verdict when it is fine" "VXLAN blocked" "$out"
+
+# ---- no published ingress service on the node to test
+out="$(OPEN_PORTS="2377/tcp 7946/tcp 7946/udp 4789/udp" MESH_HAS_PEER=1 FAKE_DP_SERVICE=0 run join isle-core --no-apply)"
+has "data plane: no service on the node → says so plainly" "data plane: no published service on isle-core to test" "$out"
+
+bash -n "$HERE/swarm.sh" && ok "bash -n: swarm.sh parses clean" || bad "bash -n swarm.sh" "clean parse" "syntax error"
 
 echo
 echo "swarm-selftest: $PASS/$((PASS+FAIL))"
