@@ -26,6 +26,25 @@ pol swarm render|deploy|rm|ps|services <role> stacks (roles: engines|suite|node)
 #   engines proven E2E; suite/node conflict with their compose twins (refuse)
 #   v1 inlines generated env values via compose-config; secrets = refinement
 
+# Bridging devices OPENS the ports it needs — with your consent
+pol swarm ports <node> [--apply] [--yes]   check (default) or open CLOSED
+                                            ports: a single y/N (or sudo
+                                            itself) per host, never a
+                                            blanket 'allow <port>'
+pol swarm join <node> [--no-apply] [--yes] does the handshake by default
+pol swarm leave <node>                     hands back what join opened,
+                                            then leaves (no duplicate logic)
+pol net needs <binding> [port]             the port-needs TABLE (data, not
+                                            prose): swarm-manager|swarm-worker|
+                                            engine-worker <port>
+pol net handback [<node>] [--peer p] [--apply]   the hand-back journal
+                                            (~/.polari/handback/firewall.jsonl);
+                                            --apply replays the undo in
+                                            reverse, same consent rules
+#   never prompts/applies in a pipeline or CI (POL_ASSUME_NO=1 forces that
+#   refusal on purpose); firewalld/nftables hosts get the equivalent
+#   command printed, never applied (ufw-only automation)
+
 # Generated nginx proxies (replaces the sed .template path)
 pol proxy render|check|promote|status         check = nginx -t in a container
 #   rf prod render needs POLARI_PROD_DOMAIN exported
@@ -76,6 +95,45 @@ pol build clean                              rm rendered jinja-build/
 # CA toolkit                                           [alias: certs, ca]
 pol cert setup|issue|renew|verify|walkthrough
 ```
+
+## Bridging devices opens ports with consent
+
+`pol swarm join <node>` bridges two devices (this manager and a worker) —
+that needs ports open between them. Instead of only printing `sudo ufw
+allow …` lines for a person to run by hand, the join/ports handshake can
+run that line itself, with consent, every time:
+
+1. **check** — `check_swarm_ports` (unchanged) probes node→manager on
+   2377/tcp, 7946/tcp+udp, 4789/udp and reports which are CLOSED.
+2. **detect** — is `ufw` active on this host? Inactive/absent ⇒ nothing to
+   do. `firewalld`/`nftables` ⇒ the equivalent command is PRINTED, never
+   applied (pol only automates ufw).
+3. **skip** — a rule already present in `ufw status` is left alone
+   (idempotent; pol never re-adds what's already there).
+4. **ask** — one prompt lists every rule for that host:
+   `apply these N rules on <host>? [y/N]`. No TTY, `POL_ASSUME_NO=1`, or a
+   CI environment ⇒ never prompts, never applies, only prints the lines —
+   a pipeline can never open a port. `--yes` skips the prompt for a person
+   who already decided; `sudo` is still the real gate (it asks for a
+   password unless it's already passwordless on that host).
+5. **apply** — every rule is SOURCE-SCOPED: `sudo ufw allow from <peer ip>
+   to any port <p> proto <tcp|udp> comment 'polari <binding> <peer>'`.
+   Never a blanket `allow <port>`.
+6. **journal** — every rule actually applied is appended as one JSON line
+   to `~/.polari/handback/firewall.jsonl` **on the host it touched**
+   (`{ts, host, binding, peer, rule, undo, comment}`), and the ports are
+   re-checked so the transcript shows the before/after.
+
+`pol swarm ports <node> --apply` does this check-only; `pol swarm join
+<node>` does it by default (`--no-apply` for the old print-only
+behaviour). `pol net needs <binding> [port]` prints the port-needs table
+a binding draws its rules from (`swarm-manager`, `swarm-worker`,
+`engine-worker <port>` — data, not prose). `pol net handback [<node>]
+[--peer <label>] [--apply]` lists — or, with `--apply`, REPLAYS IN
+REVERSE and shrinks — the hand-back journal, under the same consent
+rules. `pol swarm leave <node>` calls that hand-back on both hosts before
+delegating the actual leave to the existing `pol deploy uninstall --route
+swarm-worker` route (no duplicated `docker swarm leave` logic).
 
 Knobs honored everywhere: `LOCAL_IP`, `POLARI_SUITE_ROOT`, and the
 credential knobs (`POLARI_KC_ADMIN_PASS`, `POLARI_MYSQL_ROOT_PASS`,
