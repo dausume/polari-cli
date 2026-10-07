@@ -26,6 +26,10 @@ ${BOLD}pol faults${NC} — force a firmware fault on purpose, see where it goes 
                                       of the technique (flash bytes, cycles per call, worst ISR latency). Default --both.
                                       --natural: no forcing, 10 s — the fault's measured rate (written onto the fault row)
                                       --control: brownout-mid-eeprom-write's EEPROM-persistence check (reset AFTER the write)
+                                      an ACCEPTANCE scenario (hw priorities P1, D-hw-2 — temp-sensor-to-os-acceptance,
+                                      blink-on-command-acceptance) proves a Capability's GOAL under normal operation
+                                      instead: no before/after/natural/control sides, just [--hardware] for the stopgap
+                                      flash/detect route (default digital-twin) — see also `pol capability prove`
     stats <scenario> [--seeds N] [--bers 1e-3,1e-4,1e-5] [--verbose] [--api URL]
                                       the statistics tier: uart-residual-frame-loss under --uart-ber (500 commands x N seeds per
                                       BER, BEFORE and AFTER, the residual apart) or torn-millis-read's phase sweep (asynchronous RX
