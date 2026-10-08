@@ -98,6 +98,8 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
     interface <instance> [--api URL]  the binding chain of a board instance: row → class → contract (hash v1) → wire
                                       contract (hash v2, index width / representation) → binding (index, port) →
                                       instance → board definition → cited facts (e.g. twin:arduino-uno-r3#1)
+  chain <board> <pin> [--json]        ucd-0a: THE HARDWARE CHAIN of one pin — board pin → SoC pin → pin functions → peripheral
+                                      signals → peripherals → registers → the cited bit fields (e.g. chain arduino-uno-r3 D3)
 
   The two rules: USB from the host (directly or through a known adapter); C / Verilog / SystemVerilog only.
   Selftest: pol modules selftest board  ·  PYTHONPATH=.:modules python3 -m board.board_selftest (in $FW)
@@ -143,6 +145,8 @@ case "$cmd" in
     install) [ -n "${ARGS[0]:-}" ] || die "usage: pol board install uno [--variant V] [--twin] [--dry-run|--yes] [--api URL]"
              py -m board.custom.install_cli install "${ARGS[@]}" --api "$API" ;;
     result)  py -m board.custom.install_cli result "${ARGS[@]}" --api "$API" ;;
+    chain) [ -n "${ARGS[1]:-}" ] || die "usage: pol board chain <board> <pin> [--json]   (e.g. arduino-uno-r3 D3)"
+           if [ "$JSON" = 1 ]; then py -m board.custom.hardware_chain chain "${ARGS[0]}" "${ARGS[1]}" --json; else py -m board.custom.hardware_chain chain "${ARGS[0]}" "${ARGS[1]}"; fi ;;
     interface) [ -n "${ARGS[0]:-}" ] || die "usage: pol board interface <instance>   (e.g. twin:arduino-uno-r3#1)"
              inst=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${ARGS[0]}")
              $CURL "$API/api/board/instances/$inst/interface" | python3 -c '
