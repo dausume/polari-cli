@@ -42,6 +42,8 @@ case "$cmd" in
           py "$cmd" "$1" ;;
     run) [ -n "${1:-}" ] || die "usage: pol firmware run <solution> [--mode digital-twin|hardware]"
          t="$1"; shift; py run "$t" "$@" ;;
+    export) [ -n "${1:-}" ] || die "usage: pol firmware export <solution> [--target both|board|twin] [--out DIR] [--verify] [--json]   (ucd-0f: the CMake export directory + tar.gz)"
+            py export "$@" ;;
     assign) [ -n "${1:-}" ] || die "usage: pol firmware assign <solution> --task T [--port P] --pin <BoardPin>"
             t="$1"; shift; py assign "$t" "$@" ;;
     *) log_error "unknown verb: pol firmware $cmd"; usage; exit 1 ;;
