@@ -7,6 +7,8 @@ source "$SCRIPT_DIR/lib/log.sh"
 source "$SCRIPT_DIR/lib/state.sh"
 
 VERB=$1; shift || true
+# a trailing help word ('pol rebuild help') asks for the usage, it never runs the verb — rebuild REMOVES a running stack
+case "${1:-}" in help|-h|--help) VERB=help ;; esac
 
 route() {   # route <action> [extra...] — dispatch to the recorded approach
     local action=$1; shift || true
