@@ -100,6 +100,13 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
                                       instance → board definition → cited facts (e.g. twin:arduino-uno-r3#1)
   chain <board> <pin> [--json]        ucd-0a: THE HARDWARE CHAIN of one pin — board pin → SoC pin → pin functions → peripheral
                                       signals → peripherals → registers → the cited bit fields (e.g. chain arduino-uno-r3 D3)
+  circuit-check <circuit> [--board B|--binding S[@B]]
+                                      ucd-0c: THE ELECTRICAL FINDINGS for one circuit over one board (default:
+                                      uno-button-clock / arduino-uno-r3) — LED current against the pin's own cited
+                                      current limit, single driver per net, shared ground, level compatibility, the
+                                      button's pull defined (warn until a task's PinClaim or a pull resistor does);
+                                      --binding also reads a real FirmwareSolution's own PinClaims (status ok | warn |
+                                      refuse | undetermined — undetermined names the missing cite, never a guess)
 
   The two rules: USB from the host (directly or through a known adapter); C / Verilog / SystemVerilog only.
   Selftest: pol modules selftest board  ·  PYTHONPATH=.:modules python3 -m board.board_selftest (in $FW)
@@ -147,6 +154,11 @@ case "$cmd" in
     result)  py -m board.custom.install_cli result "${ARGS[@]}" --api "$API" ;;
     chain) [ -n "${ARGS[1]:-}" ] || die "usage: pol board chain <board> <pin> [--json]   (e.g. arduino-uno-r3 D3)"
            if [ "$JSON" = 1 ]; then py -m board.custom.hardware_chain chain "${ARGS[0]}" "${ARGS[1]}" --json; else py -m board.custom.hardware_chain chain "${ARGS[0]}" "${ARGS[1]}"; fi ;;
+    circuit-check)   # ucd-0c: the electrical findings — python3 -m board.custom.electrical_check <circuit> [--board B|--binding S[@B]]
+           circuit="${ARGS[0]:-uno-button-clock}"
+           rest=("${ARGS[@]:1}")
+           [ "${#rest[@]}" -gt 0 ] || rest=(--board arduino-uno-r3)
+           py -m board.custom.electrical_check "$circuit" "${rest[@]}" ;;
     interface) [ -n "${ARGS[0]:-}" ] || die "usage: pol board interface <instance>   (e.g. twin:arduino-uno-r3#1)"
              inst=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${ARGS[0]}")
              $CURL "$API/api/board/instances/$inst/interface" | python3 -c '
