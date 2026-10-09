@@ -67,6 +67,8 @@ case "$cmd" in
     list) py -m cmod.custom.capability_cli list ;;
     show) [ -n "${1:-}" ] || die "usage: pol capability show <name>   (pol capability list)"
           cmd_show "$1" ;;
+    attest) [ -n "${ARGS[0]:-}" ] || die "usage: pol capability attest <name> --mode hardware|digital-twin --observed '…' [--board-instance X] [--failed] [--api URL]   (a person's confirmation = a run of kind attested)"
+            py attest "${ARGS[@]}" ;;
     prove) [ -n "${1:-}" ] || die "usage: pol capability prove <name> [--twin|--hardware]   (pol capability list)"
            name="$1"; shift; py -m cmod.custom.capability_cli prove "$name" "$@" ;;
     *) log_error "unknown verb: pol capability $cmd"; usage; exit 1 ;;
