@@ -56,7 +56,10 @@ case "$cmd" in
           py "$cmd" "$1" ;;
     run) [ -n "${1:-}" ] || die "usage: pol firmware run <solution> [--mode digital-twin|hardware]"
          t="$1"; shift; py run "$t" "$@" ;;
-    export) [ -n "${1:-}" ] || die "usage: pol firmware export <solution> [--target both|board|twin] [--out DIR] [--verify] [--json]   (ucd-0f: the CMake export directory + tar.gz)"
+    export) [ -n "${1:-}" ] || die "usage: pol firmware export <solution> [--target both|board|twin] [--form source-dir|install-bundle|solution] [--out DIR] [--verify] [--json]
+       source-dir      (default, ucd-0f) the full CMake-buildable project + README + manifest
+       install-bundle  (ucd-frames+bundle) ONLY what a person flashes with: firmware.hex + polari-install.json + INSTALL.md — no sources
+       solution        (ucd-frames+bundle) the board-agnostic solution: atoms' C + graph/requirements/purposes.json — builds nothing by itself"
             py export "$@" ;;
     claims) [ -n "${1:-}" ] || die "usage: pol firmware claims <solution> [--json]   (ucd-0b: pin claims + peripheral claims + the generated register settings)"
             py claims "$@" ;;
