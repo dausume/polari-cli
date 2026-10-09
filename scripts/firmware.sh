@@ -25,6 +25,12 @@ ${BOLD}pol firmware${NC} — a CGraph + a board in, a firmware build out (fs-0 a
   ${CYAN}assign${NC} <solution> --task T [--port P] --pin <BoardPin>
                                        the door the pin-map drag (fs-1) will call (live server only — prints the
                                        equivalent POST /api/firmware/solutions/<solution>/assign here)
+  ${CYAN}claims${NC} <solution> [--json]
+                                       ucd-0b: pin claims (mode/pull/edge/initial, PinFunction) + peripheral claims
+                                       (exclusive/shared holds) + the generated register settings (DDRx/PORTx,
+                                       EICRA/EIMSK/EIFR or PCMSKx/PCICR) with their field lines — pure, seed-time
+                                       (a running server's GET /api/firmware/solutions/<solution> carries the live,
+                                       canvas-overridden rows instead)
 
   <solution> = uno-sim-rig (seeded: the sim-rig firmware as a FirmwareSolution) or a FirmwareSolution row's name.
   Page: /display/firmware-solutions · API: /api/firmware/solutions · Selftest: pol modules selftest cmod
@@ -44,6 +50,8 @@ case "$cmd" in
          t="$1"; shift; py run "$t" "$@" ;;
     export) [ -n "${1:-}" ] || die "usage: pol firmware export <solution> [--target both|board|twin] [--out DIR] [--verify] [--json]   (ucd-0f: the CMake export directory + tar.gz)"
             py export "$@" ;;
+    claims) [ -n "${1:-}" ] || die "usage: pol firmware claims <solution> [--json]   (ucd-0b: pin claims + peripheral claims + the generated register settings)"
+            py claims "$@" ;;
     assign) [ -n "${1:-}" ] || die "usage: pol firmware assign <solution> --task T [--port P] --pin <BoardPin>"
             t="$1"; shift; py assign "$t" "$@" ;;
     *) log_error "unknown verb: pol firmware $cmd"; usage; exit 1 ;;
