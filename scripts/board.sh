@@ -93,6 +93,15 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
                                       frames. --twin = the simavr twin. Exit 3 = refused (stale-header /
                                       unknown-class firmware, no board, the wrong host)
     result [RECORD] [--api URL]       an install's result: verdict, read-back, bridge, frames/s, the row now
+    attach uno --variant uno-button-clock --twin [--api URL] [--seconds N] [--presses N]
+                                      ucd-frames+bundle: builds the variant and runs the twin ON THIS HOST (a twin
+                                      refuses a remote rung — it never goes through install's own server-side
+                                      attach), with a press schedule on D2 + the wire D6->D3; forwards frames to
+                                      --api for the run's duration — the generated Java bridge over gRPC when the
+                                      server's :3002 is reachable from this host, else the SAME rows pushed over the
+                                      CRUDE PUT/POST doors (packet_ref decode). Ensures the HardwareBridgeDefinition
+                                      + HardwareInterfaceBinding exist first. No --api: decodes locally, pushes
+                                      nothing.
 
   ${CYAN}the computer↔firmware mapping${NC} (brd-wire / grpc-j4)
     interface <instance> [--api URL]  the binding chain of a board instance: row → class → contract (hash v1) → wire
@@ -152,6 +161,8 @@ case "$cmd" in
     install) [ -n "${ARGS[0]:-}" ] || die "usage: pol board install uno [--variant V] [--twin] [--dry-run|--yes] [--api URL]"
              py -m board.custom.install_cli install "${ARGS[@]}" --api "$API" ;;
     result)  py -m board.custom.install_cli result "${ARGS[@]}" --api "$API" ;;
+    attach)  [ -n "${ARGS[0]:-}" ] || die "usage: pol board attach uno --variant uno-button-clock --twin [--api URL] [--seconds N] [--presses N]"
+             mapfile -t A < <(api_arg); py -m board.custom.attach_cli "${ARGS[@]}" "${A[@]}" ;;
     chain) [ -n "${ARGS[1]:-}" ] || die "usage: pol board chain <board> <pin> [--json]   (e.g. arduino-uno-r3 D3)"
            if [ "$JSON" = 1 ]; then py -m board.custom.hardware_chain chain "${ARGS[0]}" "${ARGS[1]}" --json; else py -m board.custom.hardware_chain chain "${ARGS[0]}" "${ARGS[1]}"; fi ;;
     circuit-check)   # ucd-0c: the electrical findings — python3 -m board.custom.electrical_check <circuit> [--board B|--binding S[@B]]
