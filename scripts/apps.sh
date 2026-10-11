@@ -11,6 +11,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/log.sh
 source "$SCRIPT_DIR/lib/log.sh"
+# shellcheck source=lib/export-publish.sh
+source "$SCRIPT_DIR/lib/export-publish.sh"
 
 usage() {
     pol_box "pol apps — use-case module configurations (Polari-Apps)"
@@ -31,12 +33,18 @@ usage() {
                         the active topology: upserts the definition,
                         writes ModuleAssignment rows, re-resolves.
                         --plan prints the plan and touches NOTHING.
-  ${CYAN}shell <app> [--output <dir>]${NC}
+  ${CYAN}shell <app> [--output <dir>] [--publish] [--app-kind K --realization R]${NC}
                         sep-3: make an isle app from ANY Polari app —
                         creates/reuses the scope=app AppShellDefinition,
                         fetches the canonical registration, and builds
                         the launcher .deb (materialized NOW, at install
                         time — never a shelf of artifacts).
+                        A hardware-app/bridge app (kind+realization read
+                        from its polari-app.json, or the two flags) gets
+                        a launcher that opens the Hardware Bridge panel
+                        and Depends on avrdude. --publish uploads the deb
+                        to the firmware export store (form bridge-app-deb)
+                        and prints its download_url.
 
 Backend is reached via \$POLARI_CORE_URL when set, else docker exec
 into the local prf-backend. Container deploys stay human-invoked
@@ -196,9 +204,12 @@ print(f\"  next (human-run): {d['suggestedCommand']}\")" ;;
         # (scope=app) -> canonical registration -> launcher .deb.
         APP=${1:-}; [ -n "$APP" ] || die "usage: pol apps shell <app> [--output <dir>]"
         shift || true
-        OUT=""
+        OUT=""; PUBLISH=0; APP_KIND=""; REALIZATION=""
         while [ $# -gt 0 ]; do case "$1" in
             --output) OUT="$2"; shift 2 ;;
+            --publish) PUBLISH=1; shift ;;
+            --app-kind) APP_KIND="$2"; shift 2 ;;
+            --realization) REALIZATION="$2"; shift 2 ;;
             *) die "unknown arg: $1" ;;
         esac; done
         API_BASE="${POLARI_CORE_URL:-https://api.prf.$(lan_ip).nip.io}"
@@ -223,11 +234,43 @@ import json, sys
 doc = json.load(open(sys.argv[1]))
 assert doc.get('kind') == 'polari-shell-registration', doc
 PYEOF
+        # kind/realization: the response when it carries them, else the
+        # app's own manifest (polari-app.json app.kind / app.realization)
+        if [ -z "$APP_KIND$REALIZATION" ]; then
+            KR=$(echo "$CONV" | python3 -c "
+import json, os, sys
+d = json.load(sys.stdin)
+k, r = d.get('kind', ''), d.get('realization', '')
+if not (k or r):
+    root = sys.argv[1]
+    for n in {d['appName'], d['appName'].replace('-', '_')}:
+        p = os.path.join(root, 'polari-rf-node/polari-framework/modules', n, 'polari-app.json')
+        if os.path.isfile(p):
+            a = json.load(open(p)).get('app') or {}
+            k, r = a.get('kind', ''), a.get('realization', '')
+            break
+print((k or '-') + ' ' + (r or '-'))" "$POL_SUITE_ROOT")
+            APP_KIND=${KR%% *}; REALIZATION=${KR##* }
+            [ "$APP_KIND" != "-" ] || APP_KIND=""; [ "$REALIZATION" != "-" ] || REALIZATION=""
+        fi
         DEB_OUT="${OUT:-$POL_SUITE_ROOT/polari-app-shell/dist}"
         STAGE_DIR=$(mktemp -d)
+        EXTRA=()
+        [ -z "$APP_KIND" ] || EXTRA+=(--app-kind "$APP_KIND")
+        [ -z "$REALIZATION" ] || EXTRA+=(--realization "$REALIZATION")
+        BUILD_LOG=$(mktemp)
         POLARI_SHELL_BUILD="$STAGE_DIR" bash "$BUILDER" \
-            --registration "$REG" --kind polari --output "$DEB_OUT"
+            --registration "$REG" --kind polari --output "$DEB_OUT" \
+            "${EXTRA[@]}" | tee "$BUILD_LOG"
         rm -rf "$STAGE_DIR"
+        if [ "$PUBLISH" = 1 ]; then
+            DEB_FILE=$(sed -n 's/^built: \(.*\.deb\) (.*/\1/p' "$BUILD_LOG" | tail -1)
+            rm -f "$BUILD_LOG"
+            [ -f "$DEB_FILE" ] || die "could not find the built deb to publish"
+            export_publish "$DEB_FILE" bridge-app-deb uno-light || exit 1
+        else
+            rm -f "$BUILD_LOG"
+        fi
         log_info "the deb materialized NOW (decision 7) — install with the printed apt line" ;;
     help|*) usage ;;
 esac

@@ -9,6 +9,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/log.sh
 source "$SCRIPT_DIR/lib/log.sh"
+# shellcheck source=lib/export-publish.sh
+source "$SCRIPT_DIR/lib/export-publish.sh"
 
 SHELL_REPO="$POL_SUITE_ROOT/polari-app-shell"
 API_BASE="${POLARI_CORE_URL:-https://api.prf.$(lan_ip).nip.io}"
@@ -21,7 +23,13 @@ usage() {
   ${CYAN}identity${NC}              the instance's shell-probe identity payload
   ${CYAN}build${NC}                 ./gradlew build + srcDistTar (the archive
                         gradle-project downloads overlay)
-  ${CYAN}dist${NC}                  installDist + jpackage .deb (linux x64)
+  ${CYAN}dist${NC} [--core] [--publish]
+                        installDist + jpackage .deb (linux x64).
+                        --core builds polari-shell-core (the shared
+                        runtime every launcher deb Depends on);
+                        --publish builds it AND uploads it to the
+                        firmware export store (form shell-core-deb),
+                        printing its download_url.
   ${CYAN}publish <platform> <version>${NC}
                         upload the built artifact for gradle-project |
                         desktop-linux-x64 and commit its ShellArtifact
@@ -75,6 +83,22 @@ print(f\"apps covered: {sum(1 for a in d['apps'] if a['installable'])}/{len(d['a
         log_success "archive: $SHELL_REPO/build/dist/polari-app-shell-src.tar.gz" ;;
     dist)
         require_repo
+        CORE=0; PUBLISH=0
+        for a in "$@"; do case "$a" in
+            --core) CORE=1 ;; --publish) CORE=1; PUBLISH=1 ;;
+            *) die "unknown arg: $a" ;; esac; done
+        if [ "$CORE" = 1 ]; then
+            CORE_LOG=$(mktemp)
+            bash "$SHELL_REPO/shells/build-shared-shell.sh" \
+                --version "${POLARI_SHELL_VERSION:-0.1.0}" | tee "$CORE_LOG"
+            CORE_DEB=$(sed -n 's/^built: \(.*\.deb\) (.*/\1/p' "$CORE_LOG" | tail -1)
+            rm -f "$CORE_LOG"
+            [ -f "$CORE_DEB" ] || die "build-shared-shell.sh produced no deb"
+            if [ "$PUBLISH" = 1 ]; then
+                export_publish "$CORE_DEB" shell-core-deb uno-light || exit 1
+            fi
+            exit 0
+        fi
         (cd "$SHELL_REPO" && ./gradlew :desktop:installDist)
         (cd "$SHELL_REPO" && jpackage --type deb --name polari-shell \
             --app-version "${POLARI_SHELL_VERSION:-0.1.0}" --vendor Polari \
