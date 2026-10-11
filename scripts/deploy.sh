@@ -16,9 +16,11 @@ show_help() {
 ${BOLD}COMMANDS${NC}
   ${CYAN}nodes${NC}                     list configured targets + their roles
   ${CYAN}preflight <node>${NC}          ssh reachability, docker, git, disk — no changes
-  ${CYAN}run <node> --role <r>${NC}     full deploy: clone/pull the public repo on the
-                            target, run the self-generating setup, bring the
-                            role up (engines|remote-worker|node)
+  ${CYAN}run <node> --role <r>${NC}     full deploy: clone/pull the public suite repo on the
+                            target (ff-only, then ONLY the role's pieces via
+                            bootstrap-dev.sh — never the whole forest), run the
+                            self-generating setup, bring the role up
+                            (engines|remote-worker|node)
   ${CYAN}run <node> --role <r> --dry-run${NC}
                             print every remote command without executing
 
@@ -111,12 +113,23 @@ EOF
             remote-worker)
                 UP_CMD="cd $DIR/polari-rf-node && CORE_IP=$CORE_IP docker compose -f docker-compose.remote-worker.yml --profile dask up -d --build" ;;
             node)
-                UP_CMD="cd $DIR/polari-rf-node && LOCAL_IP=\$(hostname -I | awk '{print \$1}') ./staging-setup.sh && LOCAL_IP=\$(hostname -I | awk '{print \$1}') docker compose -f docker-compose.staging-nip.yml up -d --build" ;;
+                # The PRF dev certs FIRST (generate-prf-certs.sh dev: self-generating, no prompts): the
+                # keycloak image build COPYs prf-keycloak/certs/prf-kc.{crt,key}, which staging-setup.sh
+                # does not make — a fresh target without them fails the build (2026-10-11, econ-core).
+                # (setup-polari-security.sh --skip-subs makes only the SUITE's pol-* certs, not these.)
+                UP_CMD="cd $DIR/polari-rf-node && bash generate-prf-certs.sh dev < /dev/null && LOCAL_IP=\$(hostname -I | awk '{print \$1}') ./staging-setup.sh && LOCAL_IP=\$(hostname -I | awk '{print \$1}') docker compose -f docker-compose.staging-nip.yml up -d --build" ;;
             *) die "unknown role '$ROLE' (engines|remote-worker|node)" ;;
         esac
 
+        # The checkout step pulls the SUITE (ff-only) and then only the pieces this role needs, through
+        # bootstrap-dev.sh (piece-wise; a piece that cannot be pulled warns and never blocks). It used
+        # to be `git pull --recurse-submodules`, which recursed into every nested submodule of the
+        # whole forest — a single unreachable one (2026-10-11: Isle-Mesh/isle-manager-app, an ssh
+        # GitHub URL with no host key on econ-core) aborted the pull AND skipped the role's build.
+        PIECES="polari-rf-node polari-cli"
         STEPS=(
-            "if [ -d $DIR/.git ]; then git -C $DIR pull --recurse-submodules; else git clone --recurse-submodules $URL $DIR; fi"
+            "if [ -d $DIR/.git ]; then git -C $DIR pull --ff-only; else git clone --branch dev $URL $DIR; fi"
+            "cd $DIR && ./bootstrap-dev.sh $PIECES"
             "$UP_CMD"
         )
         pol_box "deploy: $NODE role=$ROLE (core ip $CORE_IP)"
