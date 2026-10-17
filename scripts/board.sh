@@ -109,6 +109,10 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
                                       instance → board definition → cited facts (e.g. twin:arduino-uno-r3#1)
   chain <board> <pin> [--json]        ucd-0a: THE HARDWARE CHAIN of one pin — board pin → SoC pin → pin functions → peripheral
                                       signals → peripherals → registers → the cited bit fields (e.g. chain arduino-uno-r3 D3)
+  exposure <board> [<pin>] [--json]   hsp-0: the enclosure crossings (package leg, header, series part, buffer, internal) of a board or one pin
+  reach <board> [--json]              hsp-0: every SoC pin + pin function: reaches a header | internal (consumed by …) | not bonded
+  ladder <board> <pin> [<function>] [--package P] [--circuit C] [--transport T] [--phase PH] [--json]
+                                      hsp-0: THE AVAILABILITY LADDER (10 rungs; the first blocking rung named)
   circuit-check <circuit> [--board B|--binding S[@B]]
                                       ucd-0c: THE ELECTRICAL FINDINGS for one circuit over one board (default:
                                       uno-button-clock / arduino-uno-r3) — LED current against the pin's own cited
@@ -165,6 +169,12 @@ case "$cmd" in
              mapfile -t A < <(api_arg); py -m board.custom.attach_cli "${ARGS[@]}" "${A[@]}" ;;
     chain) [ -n "${ARGS[1]:-}" ] || die "usage: pol board chain <board> <pin> [--json]   (e.g. arduino-uno-r3 D3)"
            if [ "$JSON" = 1 ]; then py -m board.custom.hardware_chain chain "${ARGS[0]}" "${ARGS[1]}" --json; else py -m board.custom.hardware_chain chain "${ARGS[0]}" "${ARGS[1]}"; fi ;;
+    exposure) [ -n "${ARGS[0]:-}" ] || die "usage: pol board exposure <board> [<pin>] [--json]"
+              py -m board.custom.reachability exposure "${ARGS[@]}" $( [ "$JSON" = 1 ] && echo --json ) ;;
+    reach)    [ -n "${ARGS[0]:-}" ] || die "usage: pol board reach <board> [--json]"
+              py -m board.custom.reachability reach "${ARGS[@]}" $( [ "$JSON" = 1 ] && echo --json ) ;;
+    ladder)   [ -n "${ARGS[1]:-}" ] || die "usage: pol board ladder <board> <pin> [<function>] [--package P] [--circuit C] [--transport T] [--phase PH] [--json]"
+              py -m board.custom.reachability ladder "${ARGS[@]}" $( [ "$JSON" = 1 ] && echo --json ) ;;
     circuit-check)   # ucd-0c: the electrical findings — python3 -m board.custom.electrical_check <circuit> [--board B|--binding S[@B]]
            circuit="${ARGS[0]:-uno-button-clock}"
            rest=("${ARGS[@]:1}")
