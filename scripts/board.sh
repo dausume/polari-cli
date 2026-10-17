@@ -113,6 +113,10 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
   reach <board> [--json]              hsp-0: every SoC pin + pin function: reaches a header | internal (consumed by …) | not bonded
   ladder <board> <pin> [<function>] [--package P] [--circuit C] [--transport T] [--phase PH] [--json]
                                       hsp-0: THE AVAILABILITY LADDER (10 rungs; the first blocking rung named)
+  registers <soc> [--class pin|peripheral|memory|cpu] [--json]
+                                      rp-0: the register profile — every register pin-configuration | peripheral-operation | memory-nvm | cpu-system | mixed, cited
+  memory <soc> [--board B] [--sizes TEXT,DATA,BSS] [--json]
+                                      rp-0: the memory map — register file, I/O, extended I/O, SRAM, flash (application + boot loader), EEPROM; firmware use
   systems [--json]                    hsp-1: the Hardware Systems (stage, participants)
   system <system> [--json]            hsp-1: one Hardware System (e.g. uno-light-system)
   links <system> [--json]             hsp-1: its links (traces, series parts, USB, serial, gRPC) with the crossings they ride on
@@ -179,6 +183,10 @@ case "$cmd" in
               py -m board.custom.reachability reach "${ARGS[@]}" $( [ "$JSON" = 1 ] && echo --json ) ;;
     ladder)   [ -n "${ARGS[1]:-}" ] || die "usage: pol board ladder <board> <pin> [<function>] [--package P] [--circuit C] [--transport T] [--phase PH] [--json]"
               py -m board.custom.reachability ladder "${ARGS[@]}" $( [ "$JSON" = 1 ] && echo --json ) ;;
+    registers) [ -n "${ARGS[0]:-}" ] || die "usage: pol board registers <soc> [--class pin|peripheral|memory|cpu] [--json]   (e.g. atmega328p)"
+               py -m board.custom.register_profile registers "${ARGS[@]}" $( [ "$JSON" = 1 ] && echo --json ) ;;
+    memory)    [ -n "${ARGS[0]:-}" ] || die "usage: pol board memory <soc> [--board B] [--sizes TEXT,DATA,BSS] [--json]   (e.g. atmega328p --board arduino-uno-r3)"
+               py -m board.custom.register_profile memory "${ARGS[@]}" $( [ "$JSON" = 1 ] && echo --json ) ;;
     systems)  py -m board.custom.hardware_system list $( [ "$JSON" = 1 ] && echo --json ) ;;
     system)   [ -n "${ARGS[0]:-}" ] || die "usage: pol board system <system> [--json]"
               py -m board.custom.hardware_system show "${ARGS[@]}" $( [ "$JSON" = 1 ] && echo --json ) ;;
