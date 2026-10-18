@@ -4,6 +4,7 @@
 # validated it still exists) and DERIVES its schedule (D-fs-1: from the atoms' own ISR/tick/loop/init annotations,
 # never authored) and register map (D-fs-2: bound/unbound/conflict against the board's own BoardPin rows). build/run
 # reuse cmod-glue and the board installer/twin — nothing reimplemented here.
+# fsc-2 (FIRMWARE_SCORE_PROFILES_PLAN.md): `scores`, `profile`, `score-values` score the Mission Solutions against Firmware Score Profiles (module cmod, on the scoring module).
 #
 #   pol firmware help
 set -eu
@@ -38,6 +39,18 @@ ${BOLD}pol firmware${NC} — a CGraph + a board in, a firmware build out (fs-0 a
                                        POST /api/firmware/solutions/<solution>/bindings {"board": ...} does the
                                        real create)
 
+  ${CYAN}scores${NC} [--profile P[,Q]] [--mission M] [--scope both|finished|plan] [--board B] [--top] [--limit N] [--json] [--api URL]
+                                       fsc-2: every non-failed Mission Solution scored against the Firmware Score Profiles, top to
+                                       bottom (finished | plan), the deciding terms; failures listed with the Purpose and reason, never
+                                       scored. --top = the top scorer of each profile. Competitive: per term the best compared solution is
+                                       100 and the worst 0, then each profile column again. Default mission uno-light-mission.
+  ${CYAN}profile${NC} show [<name>] | create <name> [--copy-of P] [--weight term=w ...] [--purpose-weight purpose:term=w ...]
+                                       | weight <name> term=w [...]       (create / weight need --api URL: the profile is a row there;
+                                       seeded profiles are copied before they are edited, never changed in place)
+  ${CYAN}score-values refresh${NC} [--mission M] [--limit N] --api URL
+                                       fsc-1: write the term values (hardware:<board> / purpose:<name> contexts, kind + basis) as
+                                       ScoreContext / ScoreSubject / ContextualizedValue rows on that server
+
   <solution> = uno-sim-rig (seeded: the sim-rig firmware as a FirmwareSolution) or a FirmwareSolution row's name.
   ucd-0b2b: every verb above also accepts <solution>@<board> (a specific HardwareBinding — the default when
   omitted; a FirmwareSolution is hardware-agnostic, the HardwareBinding is the mask laying it over one board).
@@ -48,6 +61,7 @@ EOF2
 
 cmd="${1:-help}"; [ $# -gt 0 ] && shift
 py() { (cd "$FW" && PYTHONPATH=.:modules python3 -m cmod.custom.firmware_cli "$@"); }
+py_fsc() { (cd "$FW" && PYTHONPATH=.:modules python3 -m cmod.custom.fsc_cli "$@"); }   # fsc-2: Firmware Score Profiles
 
 case "$cmd" in
     help|-h|--help) usage ;;
@@ -68,5 +82,10 @@ case "$cmd" in
     bindings) py bindings "${1:-}" ;;
     bind) [ -n "${1:-}" ] || die "usage: pol firmware bind <solution> --board <board>"
           t="$1"; shift; py bind "$t" "$@" ;;
+    scores) py_fsc scores "$@" ;;
+    profile) [ -n "${1:-}" ] || die "usage: pol firmware profile show [<name>] | create <name> [--copy-of P] [--weight term=w ...] | weight <name> term=w ..."
+             py_fsc profile "$@" ;;
+    score-values) [ -n "${1:-}" ] || die "usage: pol firmware score-values refresh [--mission M] [--limit N] --api URL"
+                  py_fsc score-values "$@" ;;
     *) log_error "unknown verb: pol firmware $cmd"; usage; exit 1 ;;
 esac
