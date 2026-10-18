@@ -204,7 +204,8 @@ case "$cmd" in
               py -m board.custom.config_events list "${ARGS[@]}" $( [ "$JSON" = 1 ] && echo --json ) ;;
     retire-derived)
               if printf '%s\n' "${ARGS[@]}" | grep -qx -- '--apply'; then
-                  $CURL -X POST -H 'Content-Type: application/json' -d '{"apply": true}' "$API/api/board/maintenance/retire-derived-rows"; echo
+                  # deleting thousands of rows one by one outlasts $CURL's 30 s limit: give the apply its own (the server keeps going either way; re-run to see what is left)
+                  $CURL --max-time 900 -X POST -H 'Content-Type: application/json' -d '{"apply": true}' "$API/api/board/maintenance/retire-derived-rows"; echo
               else
                   $CURL "$API/api/board/maintenance/retire-derived-rows"; echo
                   echo "(dry run — add --apply to retire the identical rows)"
