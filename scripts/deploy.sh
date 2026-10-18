@@ -21,6 +21,11 @@ ${BOLD}COMMANDS${NC}
                             bootstrap-dev.sh — never the whole forest), run the
                             self-generating setup, bring the role up
                             (engines|remote-worker|node)
+  ${CYAN}selftest <node> [--ref BRANCH] [--modules a.b_selftest,…]${NC}
+                            run framework selftests on that machine (a separate
+                            <repo_dir>-test checkout at the ref; deps in a private
+                            pip --target folder; host engines images) — keeps
+                            heavy test runs off the live-stack machine
   ${CYAN}run <node> --role <r> --dry-run${NC}
                             print every remote command without executing
 
@@ -146,6 +151,33 @@ EOF
         else
             log_info "dry-run complete — rerun without --dry-run to execute"
         fi ;;
+    selftest)
+        # Run framework selftest suites on ANOTHER machine (his ask 2026-10-18: leverage the three devices; pol-core keeps the live stack and
+        # had 4 GB free). A separate test checkout (<repo_dir>-test) so the node's own deploy checkout is never touched; the framework at --ref
+        # (a branch an agent pushed, default dev); the Python deps in a PRIVATE folder via `pip install --target` (no system change, delete the
+        # folder to undo); suites run on the host so the engines seam reaches that machine's local engine images exactly as on pol-core.
+        NODE=${1:?node required (pol deploy nodes)}; shift || true
+        REF="dev"; MODS="board.board_selftest,cmod.cmod_selftest,hwnocode.hwnocode_selftest,moduleService.selftest_manifests"; DRY=false
+        while [ $# -gt 0 ]; do case "$1" in
+            --ref) REF="$2"; shift 2 ;; --modules) MODS="$2"; shift 2 ;; --dry-run) DRY=true; shift ;; *) shift ;;
+        esac; done
+        SSH=$(node_field "$NODE" ssh); DIR=$(node_field "$NODE" repo_dir); URL=$(node_field "$NODE" repo_url)
+        [ -n "$SSH" ] || die "$NODE is this machine — run the suites here, or pick another node (pol deploy nodes)"
+        TDIR="${DIR}-test"; ENV_DIR='$HOME/.polari-test-env'; FW="$TDIR/polari-rf-node/polari-framework"
+        STEPS=(
+            "if [ -d $TDIR/.git ]; then git -C $TDIR fetch -q origin && git -C $TDIR checkout -q -B dev origin/dev; else git clone -q --branch dev $URL $TDIR; fi"
+            "cd $TDIR && ./bootstrap-dev.sh polari-rf-node polari-cli >/dev/null"
+            "git -C $FW fetch -q origin $REF && git -C $FW checkout -q -B pol-selftest-ref FETCH_HEAD && echo \"framework at $REF: \$(git -C $FW log --oneline -1)\""
+            "REQ=\$(sha256sum $FW/requirements.txt | cut -c1-16); if [ \"\$(cat $ENV_DIR/.req 2>/dev/null)\" != \"\$REQ\" ]; then echo 'installing the test deps into $ENV_DIR (pip --target; no system change)'; python3 -m pip install -q --target $ENV_DIR -r $FW/requirements.txt && echo \$REQ > $ENV_DIR/.req; fi"
+            "cd $FW && rc=0; for m in \$(echo $MODS | tr , ' '); do out=\$(PYTHONPATH=.:modules:$ENV_DIR timeout 3600 python3 -m \$m 2>&1); line=\$(printf '%s\\n' \"\$out\" | grep -E 'checks passed|passed\$' | tail -1); echo \"  \$m: \${line:-NO SUMMARY (crashed or timed out) — last lines:}\"; [ -n \"\$line\" ] || { printf '%s\\n' \"\$out\" | tail -5; rc=1; }; case \"\$line\" in *\"checks passed\"*) n=\${line%%/*}; d=\${line#*/}; d=\${d%% *}; [ \"\$n\" = \"\$d\" ] || rc=1 ;; esac; done; git checkout -q -- modules/cmod/custom/glue_builds/ 2>/dev/null; exit \$rc"
+        )
+        pol_box "selftest on $NODE: framework @ $REF — $MODS"
+        RC=0
+        for s in "${STEPS[@]}"; do
+            if $DRY; then echo "  [dry-run] ssh $SSH '$s'"; else ssh "$SSH" "$s" || { RC=$?; [ "$s" = "${STEPS[-1]}" ] || die "step failed on $NODE: ${s:0:80}"; }; fi
+        done
+        $DRY || { [ $RC = 0 ] && log_success "all suites passed on $NODE (@ $REF)" || log_warn "some suites failed on $NODE (@ $REF) — see above (manifests' known pspp/testing failure counts as a failure here)"; }
+        exit $RC ;;
     install)
         NODE=${1:?node required (pol deploy nodes)}; shift || true
         ROUTE=""; PROFILE="lean"; DOMAIN=""; DRY=false; HOST_FLAG=""; YES=false
