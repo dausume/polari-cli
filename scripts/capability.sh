@@ -28,6 +28,10 @@ ${BOLD}pol capability${NC} — the thread across a Firmware Solution + a Cross-D
                                        criteria, evidence per field); a Mission's roll-up: pol capability pins-mission <mission>
   ${CYAN}pins-mission${NC} <mission> [--purposes a,b] [--json]  the Mission's de-duplicated profiles with importance per Purpose
 
+  ${CYAN}colocation${NC} <mission> [--purposes a,b] [--json]  pp-1: which of a Mission's pin profiles can share a pin or a net, the minimum pin count, the conflicts
+
+  ${CYAN}approach${NC} <mission> [--board B] [--tier T] [--json]   rt-0: the recommended RUNTIME TIER (bare-c / freertos / zephyr) with its reasons, each tier checked on the board, a priority preview
+
   <name> = temp-sensor-to-os | blink-on-command (the two hw priorities P1 seeds) or a live CapabilityDefinition row.
   Page: /display/firmware-solutions (the Tasks section groups by Capability) · API: /api/capabilities
   Selftest: pol modules selftest cmod · Related: pol firmware (the Firmware Solution a capability's c-device tasks build)
@@ -79,5 +83,9 @@ case "$cmd" in
           name="$1"; shift; py -m cmod.custom.pin_profiles purpose "$name" "$@" ;;
     pins-mission) [ -n "${1:-}" ] || die "usage: pol capability pins-mission <mission> [--purposes a,b] [--json]   (e.g. uno-light-mission)"
           name="$1"; shift; py -m cmod.custom.pin_profiles mission "$name" "$@" ;;
+    colocation) [ -n "${1:-}" ] || die "usage: pol capability colocation <mission> [--purposes a,b] [--json]   (e.g. uno-light-mission)"
+          name="$1"; shift; py -m cmod.custom.mission_colocation colocation "$name" "$@" ;;
+    approach) [ -n "${1:-}" ] || die "usage: pol capability approach <mission> [--board B] [--tier T] [--json]   (e.g. uno-light-mission)"
+          name="$1"; shift; py -m cmod.custom.approach_profile mission "$name" "$@" ;;
     *) log_error "unknown verb: pol capability $cmd"; usage; exit 1 ;;
 esac

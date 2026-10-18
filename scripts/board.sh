@@ -119,6 +119,8 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
                                       rp-0: the memory map — register file, I/O, extended I/O, SRAM, flash (application + boot loader), EEPROM; firmware use
   pin-view surfaces|pins|connections|view <board> [--system S] [--binding B] [--stage base|after-init|tasks-assigned|firmware-committed] [--protocol P] [--json]
                                       pv-0: the pin view's data — every pin at every level, pin-to-pin connections (drive / signal / use)
+  overlap table|kinds|rules <soc> [--a KIND] [--b KIND] [--scope pin|net|peripheral] [--verdict V] [--json]
+                                      pp-1: which pin-profile kinds may share a pin / a net / a peripheral (cited)
   systems [--json]                    hsp-1: the Hardware Systems (stage, participants)
   system <system> [--json]            hsp-1: one Hardware System (e.g. uno-light-system)
   links <system> [--json]             hsp-1: its links (traces, series parts, USB, serial, gRPC) with the crossings they ride on
@@ -191,6 +193,8 @@ case "$cmd" in
                py -m board.custom.register_profile memory "${ARGS[@]}" $( [ "$JSON" = 1 ] && echo --json ) ;;
     pin-view) [ -n "${ARGS[1]:-}" ] || die "usage: pol board pin-view surfaces|pins|connections|view <board> [--system S] [--binding B] [--stage ST] [--protocol P] [--phase PH] [--mission M] [--json]"
               py -m board.custom.pin_view "${ARGS[@]}" $( [ "$JSON" = 1 ] && echo --json ) ;;
+    overlap)  [ -n "${ARGS[1]:-}" ] || die "usage: pol board overlap table|kinds|rules <soc> [--a KIND] [--b KIND] [--scope S] [--verdict V] [--json]   (e.g. table atmega328p)"
+              py -m board.custom.profile_overlap "${ARGS[@]}" $( [ "$JSON" = 1 ] && echo --json ) ;;
     systems)  py -m board.custom.hardware_system list $( [ "$JSON" = 1 ] && echo --json ) ;;
     system)   [ -n "${ARGS[0]:-}" ] || die "usage: pol board system <system> [--json]"
               py -m board.custom.hardware_system show "${ARGS[@]}" $( [ "$JSON" = 1 ] && echo --json ) ;;
