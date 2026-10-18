@@ -123,6 +123,9 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
                                       pp-1: which pin-profile kinds may share a pin / a net / a peripheral (cited)
   events <board> [--instance I] [--system S] [--binding B] [--no-pins] [--json]
                                       pv-4/5: configuration events (flash, wiring, shield, binding) and the pins each changed
+  retire-derived [--apply] [--api URL]
+                                      c3-derive: drop the STORED copies of rows the code now derives (the C3's GPIO-matrix PinFunctions) on a server
+                                      seeded before — a dry run unless --apply; edited rows are never touched
   systems [--json]                    hsp-1: the Hardware Systems (stage, participants)
   system <system> [--json]            hsp-1: one Hardware System (e.g. uno-light-system)
   links <system> [--json]             hsp-1: its links (traces, series parts, USB, serial, gRPC) with the crossings they ride on
@@ -199,6 +202,13 @@ case "$cmd" in
               py -m board.custom.profile_overlap "${ARGS[@]}" $( [ "$JSON" = 1 ] && echo --json ) ;;
     events)   [ -n "${ARGS[0]:-}" ] || die "usage: pol board events <board> [--instance I] [--system S] [--binding B] [--no-pins] [--json]"
               py -m board.custom.config_events list "${ARGS[@]}" $( [ "$JSON" = 1 ] && echo --json ) ;;
+    retire-derived)
+              if printf '%s\n' "${ARGS[@]}" | grep -qx -- '--apply'; then
+                  $CURL -X POST -H 'Content-Type: application/json' -d '{"apply": true}' "$API/api/board/maintenance/retire-derived-rows"; echo
+              else
+                  $CURL "$API/api/board/maintenance/retire-derived-rows"; echo
+                  echo "(dry run — add --apply to retire the identical rows)"
+              fi ;;
     systems)  py -m board.custom.hardware_system list $( [ "$JSON" = 1 ] && echo --json ) ;;
     system)   [ -n "${ARGS[0]:-}" ] || die "usage: pol board system <system> [--json]"
               py -m board.custom.hardware_system show "${ARGS[@]}" $( [ "$JSON" = 1 ] && echo --json ) ;;
