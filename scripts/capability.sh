@@ -24,6 +24,10 @@ ${BOLD}pol capability${NC} — the thread across a Firmware Solution + a Cross-D
                                        priorities P2) — with no board plugged in it REFUSES with the readiness reason,
                                        never a faked pass. Default --twin.
 
+  ${CYAN}pins${NC} <purpose> [--json]                 pp-0: the PIN PROFILES a Purpose needs (kind, role, signal + drive needs, timing from its
+                                       criteria, evidence per field); a Mission's roll-up: pol capability pins-mission <mission>
+  ${CYAN}pins-mission${NC} <mission> [--purposes a,b] [--json]  the Mission's de-duplicated profiles with importance per Purpose
+
   <name> = temp-sensor-to-os | blink-on-command (the two hw priorities P1 seeds) or a live CapabilityDefinition row.
   Page: /display/firmware-solutions (the Tasks section groups by Capability) · API: /api/capabilities
   Selftest: pol modules selftest cmod · Related: pol firmware (the Firmware Solution a capability's c-device tasks build)
@@ -71,5 +75,9 @@ case "$cmd" in
             name="$1"; shift; py -m cmod.custom.capability_cli attest "$name" "$@" ;;
     prove) [ -n "${1:-}" ] || die "usage: pol capability prove <name> [--twin|--hardware]   (pol capability list)"
            name="$1"; shift; py -m cmod.custom.capability_cli prove "$name" "$@" ;;
+    pins) [ -n "${1:-}" ] || die "usage: pol capability pins <purpose> [--json]   (pol capability list)"
+          name="$1"; shift; py -m cmod.custom.pin_profiles purpose "$name" "$@" ;;
+    pins-mission) [ -n "${1:-}" ] || die "usage: pol capability pins-mission <mission> [--purposes a,b] [--json]   (e.g. uno-light-mission)"
+          name="$1"; shift; py -m cmod.custom.pin_profiles mission "$name" "$@" ;;
     *) log_error "unknown verb: pol capability $cmd"; usage; exit 1 ;;
 esac
