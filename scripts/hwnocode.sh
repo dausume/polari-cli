@@ -18,6 +18,8 @@ printf '%b\n' "$(cat <<EOF2
 ${BOLD}pol hwnocode${NC} — one no-code graph across a board, the bridge, the backend and a screen (hn arc)
 
   ${CYAN}solutions${NC}                        the HardwareSolutions: subgraph, interface, firmware_runtime, placement, status
+  ${CYAN}demo-prepare${NC} --api URL [--dry-run] [--json]   the UNO light demo on a server: the uno-light bridge row, LightState stabilized + exposed,
+                                   the bridge generated (idempotent) — then the demo's readiness; the bridge stays never-run until the bench
   ${CYAN}place${NC} <solution>                 the placement report: every node → board | twin | bridge | backend | browser, and WHY
                                     (a Python node on the device side is REFUSED, named, with the way to move it)
   ${CYAN}render${NC} <solution> [--work W]     hn-split: the board half through cmod-glue into W/project — its files_sha256 must EQUAL
@@ -41,6 +43,7 @@ py() { (cd "$FW" && PYTHONPATH=.:modules python3 "$@"); }
 case "$cmd" in
     help|-h|--help) usage ;;
     solutions) py -m hwnocode.custom.hwnocode_cli solutions ;;
+    demo-prepare) py -m hwnocode.custom.demo_prepare "$@" ;;   # the UNO light demo: bridge row + LightState stabilized + exposure + generate (idempotent; --dry-run)
     place|render|build|suggest) py -m hwnocode.custom.hwnocode_cli "$cmd" "${1:-uno-temp-split}" "${@:2}" ;;
     runtime) [ -n "${2:-}" ] || die "usage: pol hwnocode runtime <solution> <bare-c|freertos|esp-idf|zephyr>"
              py -m hwnocode.custom.hwnocode_cli runtime "$1" "$2" ;;
