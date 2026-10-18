@@ -32,6 +32,10 @@ ${BOLD}pol capability${NC} — the thread across a Firmware Solution + a Cross-D
 
   ${CYAN}approach${NC} <mission> [--board B] [--tier T] [--json]   rt-0: the recommended RUNTIME TIER (bare-c / freertos / zephyr) with its reasons, each tier checked on the board, a priority preview
 
+  ${CYAN}solve${NC} <mission> [--board B] [--tier T] [--objective minimum-resources|fastest-cycle] [--occupy D6,D7] [--prefer bench-wiring] [--json]
+                                       sol-0: THE ATTEMPT ENGINE — hardware x runtime tier x isotope variants -> pins, scored by the Mission's objective;
+                                       candidates, score card, pruned branches with reasons, Designed for / Also runs on
+
   <name> = temp-sensor-to-os | blink-on-command (the two hw priorities P1 seeds) or a live CapabilityDefinition row.
   Page: /display/firmware-solutions (the Tasks section groups by Capability) · API: /api/capabilities
   Selftest: pol modules selftest cmod · Related: pol firmware (the Firmware Solution a capability's c-device tasks build)
@@ -87,5 +91,7 @@ case "$cmd" in
           name="$1"; shift; py -m cmod.custom.mission_colocation colocation "$name" "$@" ;;
     approach) [ -n "${1:-}" ] || die "usage: pol capability approach <mission> [--board B] [--tier T] [--json]   (e.g. uno-light-mission)"
           name="$1"; shift; py -m cmod.custom.approach_profile mission "$name" "$@" ;;
+    solve) [ -n "${1:-}" ] || die "usage: pol capability solve <mission> [--board B] [--tier T] [--objective O] [--occupy D6,D7] [--prefer bench-wiring] [--json]   (e.g. uno-light-mission)"
+          name="$1"; shift; py -m cmod.custom.solve mission "$name" "$@" ;;
     *) log_error "unknown verb: pol capability $cmd"; usage; exit 1 ;;
 esac
