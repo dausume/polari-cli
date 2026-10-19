@@ -164,12 +164,14 @@ EOF
         SSH=$(node_field "$NODE" ssh); DIR=$(node_field "$NODE" repo_dir); URL=$(node_field "$NODE" repo_url)
         [ -n "$SSH" ] || die "$NODE is this machine — run the suites here, or pick another node (pol deploy nodes)"
         TDIR="${DIR}-test"; ENV_DIR='$HOME/.polari-test-env'; FW="$TDIR/polari-rf-node/polari-framework"
+        # Each run gets its OWN framework worktree (2026-10-18: two agents' runs shared one checkout and one tested the other's branch)
+        RUN="${TDIR}-runs/$(printf '%s' "$REF" | tr -c 'A-Za-z0-9._-' '_')-$$"
         STEPS=(
             "if [ -d $TDIR/.git ]; then git -C $TDIR fetch -q origin && git -C $TDIR checkout -q -B dev origin/dev; else git clone -q --branch dev $URL $TDIR; fi"
             "cd $TDIR && ./bootstrap-dev.sh polari-rf-node polari-cli >/dev/null"
-            "git -C $FW fetch -q origin $REF && git -C $FW checkout -q -B pol-selftest-ref FETCH_HEAD && echo \"framework at $REF: \$(git -C $FW log --oneline -1)\""
+            "git -C $FW fetch -q origin $REF && mkdir -p ${TDIR}-runs && git -C $FW worktree add -q -f --detach $RUN FETCH_HEAD && echo \"framework at $REF: \$(git -C $RUN log --oneline -1) (own worktree $RUN)\""
             "REQ=\$(sha256sum $FW/requirements.txt | cut -c1-16); if [ \"\$(cat $ENV_DIR/.req 2>/dev/null)\" != \"\$REQ\" ]; then echo 'installing the test deps into $ENV_DIR (pip --target; no system change)'; python3 -m pip install -q --target $ENV_DIR -r $FW/requirements.txt && echo \$REQ > $ENV_DIR/.req; fi"
-            "cd $FW && rc=0; for m in \$(echo $MODS | tr , ' '); do out=\$(PYTHONPATH=.:modules:$ENV_DIR timeout 3600 python3 -m \$m 2>&1); line=\$(printf '%s\\n' \"\$out\" | grep -E 'checks passed|passed\$' | tail -1); echo \"  \$m: \${line:-NO SUMMARY (crashed or timed out) — last lines:}\"; [ -n \"\$line\" ] || { printf '%s\\n' \"\$out\" | tail -5; rc=1; }; case \"\$line\" in *\"checks passed\"*) n=\${line%%/*}; d=\${line#*/}; d=\${d%% *}; [ \"\$n\" = \"\$d\" ] || rc=1 ;; esac; done; git checkout -q -- modules/cmod/custom/glue_builds/ 2>/dev/null; exit \$rc"
+            "cd $RUN && rc=0; for m in \$(echo $MODS | tr , ' '); do out=\$(PYTHONPATH=.:modules:$ENV_DIR timeout 3600 python3 -m \$m 2>&1); line=\$(printf '%s\\n' \"\$out\" | grep -E 'checks passed|passed\$' | tail -1); echo \"  \$m: \${line:-NO SUMMARY (crashed or timed out) — last lines:}\"; [ -n \"\$line\" ] || { printf '%s\\n' \"\$out\" | tail -5; rc=1; }; case \"\$line\" in *\"checks passed\"*) n=\${line%%/*}; d=\${line#*/}; d=\${d%% *}; [ \"\$n\" = \"\$d\" ] || rc=1 ;; esac; done; cd / && git -C $FW worktree remove -f $RUN; exit \$rc"
         )
         pol_box "selftest on $NODE: framework @ $REF — $MODS"
         RC=0
