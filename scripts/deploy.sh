@@ -65,6 +65,29 @@ Targets: pol-build/manifests/nodes.yml
 "
 }
 
+engines_env() {  # engines_env <node> -> "BOARD_ENGINES_URL=http://<ip>:9830 ESP_ENGINES_URL=..." from the node's `engines:` map
+    # (sim-1, 2026-10-19: a STANDALONE node cannot reach a worker through the topology provider - that builds a URL only for
+    # swarm placements - so the sanctioned fallback is the *_ENGINES_URL knob; the ip is resolved over ssh at deploy time and
+    # never written into the registry, per the privacy rule)
+    python3 - "$NODES_FILE" "$1" <<'EOF2'
+import subprocess, sys, yaml
+reg = yaml.safe_load(open(sys.argv[1])); n = reg["nodes"].get(sys.argv[2]) or {}
+ips = {}
+def ip_of(node):
+    if node not in ips:
+        alias = (reg["nodes"].get(node) or {}).get("ssh", "")
+        cmd = ["ssh", alias, "hostname -I | awk '{print $1}'"] if alias else ["sh", "-c", "hostname -I | awk '{print $1}'"]
+        ips[node] = subprocess.run(cmd, capture_output=True, text=True, timeout=20).stdout.strip()
+    return ips[node]
+out = []
+for fam, ref in (n.get("engines") or {}).items():
+    ip = ip_of(ref["node"])
+    if ip:
+        out.append("%s_ENGINES_URL=http://%s:%s" % (fam.upper().replace("-", "_"), ip, ref["port"]))
+print(" ".join(out))
+EOF2
+}
+
 node_field() {  # node_field <node> <field>
     python3 - "$NODES_FILE" "$1" "$2" <<'EOF'
 import sys, yaml
@@ -122,7 +145,8 @@ EOF
                 # keycloak image build COPYs prf-keycloak/certs/prf-kc.{crt,key}, which staging-setup.sh
                 # does not make — a fresh target without them fails the build (2026-10-11, econ-core).
                 # (setup-polari-security.sh --skip-subs makes only the SUITE's pol-* certs, not these.)
-                UP_CMD="cd $DIR/polari-rf-node && bash generate-prf-certs.sh dev < /dev/null && LOCAL_IP=\$(hostname -I | awk '{print \$1}') ./staging-setup.sh && LOCAL_IP=\$(hostname -I | awk '{print \$1}') docker compose -f docker-compose.staging-nip.yml up -d --build" ;;
+                ENGINES_ENV=$(engines_env "$NODE")     # the node's engine workers by knob (nodes.yml `engines:`), ips resolved now
+                UP_CMD="cd $DIR/polari-rf-node && bash generate-prf-certs.sh dev < /dev/null && LOCAL_IP=\$(hostname -I | awk '{print \$1}') ./staging-setup.sh && $ENGINES_ENV LOCAL_IP=\$(hostname -I | awk '{print \$1}') docker compose -f docker-compose.staging-nip.yml up -d --build" ;;
             *) die "unknown role '$ROLE' (engines|remote-worker|node)" ;;
         esac
 
