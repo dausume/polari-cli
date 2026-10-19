@@ -66,6 +66,21 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
     twin session events <id> [--seconds S] [--limit N] [--replay N]
                                       the watched pins' edges as they happen (cycle, pin, level)
 
+  ${CYAN}the breadboard layout${NC} (lay-0/lay-1: boards are objects; a built config is laid out on a breadboard, gated, and walked through)
+    layout boards [--json] [--api URL]
+                                      the board family: breadboard half (400 ties) / full (830), the UNO, protoboard + pcb
+                                      (reserved), and the boards on the bench
+    layout <config> [--board B] [--scheme S] [--steps] [--json] [--api URL]
+                                      where every part and wire of a built config (e.g. uno-light) goes on a breadboard beside
+                                      the UNO; the NETLIST GATE (the layout's nets must equal the design's) and the electrical
+                                      rules say OK or refuse in words; --steps = the build walkthrough (derived, never typed)
+    layout <config> edit <part:REF|wire:NAME> holes|colour <value...> [--who W] [--note N] [--dry-run] [--clear] --api URL
+                                      keep a change BESIDE the derived value (a part in other holes, a wire in another colour);
+                                      re-gated
+    wire-colors show [--json] [--api URL]
+    wire-colors copy <from> <new> [key=colour ...] --api URL     (the seeded scheme is copied before an edit)
+    wire-colors set <name> <key> <colour> --api URL              (red = 5 V, black = GND, signals in the pin view's colours)
+
   ${CYAN}the ESP32-C3${NC} (sc-3; D-sc-4 ruled — ESP-IDF v5.5.5 C, FreeRTOS; the prf-esp-engines worker; twin-first)
     gen c3 [--variant V] [--api URL] [--rig-name N] [--device-id N] [--out DIR]
                                       the ESP-IDF C project around the generated header (c_twin target=host — the
@@ -191,6 +206,10 @@ case "$cmd" in
                [ -n "${ARGS[1]:-}" ] || die "usage: pol board twin uno up|down|status   (or: twin session start|list|stop|inject|events)"
                py -m board.custom.twin "${ARGS[@]}"
            fi ;;
+    layout|wire-colors)   # lay-0/lay-1: the board family, the layout of a built config + its gate + steps, wire colour schemes (electrodevice.custom.layout_cli)
+           [ -n "${ARGS[0]:-}" ] || [ "$cmd" = wire-colors ] || die "usage: pol board layout <config> [--board B] [--steps] [--json] [--api URL]   (or: layout boards | layout <config> edit ... | wire-colors show|copy|set)"
+           mapfile -t A < <(api_arg)
+           py -m electrodevice.custom.layout_cli "$cmd" "${ARGS[@]}" "${A[@]}" $( [ "$JSON" = 1 ] && echo --json ) ;;
     cost)  py -m board.custom.sim_cost "${ARGS[@]}" ;;   # sc-3: `cost uno` | `cost c3` (the board word is read by sim_cost)
     pins|render|ingest|conflicts|assign)   # brd-bo: THE BOARD OBJECT (rows = the seeds offline; views/conflicts in the local ledger)
            py -m board.custom.board_object_cli "$cmd" "${ARGS[@]}" ;;
