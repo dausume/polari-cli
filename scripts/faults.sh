@@ -19,7 +19,7 @@ ${BOLD}pol faults${NC} — force a firmware fault on purpose, see where it goes 
     list [--api URL]                  the scenarios (runnable or why not), the step kinds the harness can force today
                                       (sc-0: irq-at-pc, irq-at-cycle, corrupt-word; sc-1: respond, drop-nth-frame, inject-bytes,
                                       uart-ber, rx-noise, reset-at, jump-at, eeprom-preload) and why the rest cannot yet, the runs
-    run <scenario> [--before|--after|--both|--natural|--control] [--seconds S] [--seed N] [--api URL]
+    run <scenario> [--before|--after|--both|--natural|--control] [--seconds S] [--seed N] [--variant V] [--api URL]
                                       build the variant(s), resolve each step against the build's own disassembly, run the
                                       twin, decode the frames, read the VCD window → outcome (failed | passed | inapplicable |
                                       undetermined), the claim it writes (refuted | witnessed | …), and for --both the cost
@@ -30,6 +30,9 @@ ${BOLD}pol faults${NC} — force a firmware fault on purpose, see where it goes 
                                       blink-on-command-acceptance) proves a Capability's GOAL under normal operation
                                       instead: no before/after/natural/control sides, just [--hardware] for the stopgap
                                       flash/detect route (default digital-twin) — see also `pol capability prove`
+                                      --variant V (acceptance only, fsc-6): run a Purpose's own scenario on built config V's firmware; the run
+                                      is stored with variant = V and --api pushes it to the Purpose door (refused when V is not a built config
+                                      of the Mission). All four Purposes for one config: pol firmware prove <config> --api URL
     stats <scenario> [--seeds N] [--bers 1e-3,1e-4,1e-5] [--verbose] [--api URL]
                                       the statistics tier: uart-residual-frame-loss under --uart-ber (500 commands x N seeds per
                                       BER, BEFORE and AFTER, the residual apart) or torn-millis-read's phase sweep (asynchronous RX

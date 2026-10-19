@@ -44,6 +44,12 @@ ${BOLD}pol firmware${NC} — a CGraph + a board in, a firmware build out (fs-0 a
                                        bottom (finished | plan), the deciding terms; failures listed with the Purpose and reason, never
                                        scored. --top = the top scorer of each profile. Competitive: per term the best compared solution is
                                        100 and the worst 0, then each profile column again. Default mission uno-light-mission.
+  ${CYAN}prove${NC} <config> [--mission M] [--api URL] [--dry-run] [--json] [--hardware]
+                                       fsc-6: make a built config FINISHED: run the Mission's four Purposes' own acceptance scenarios on THAT
+                                       config's firmware (the twin, here), store the runs, and with --api push each to that server's Purpose door
+                                       (variant = the config), then ask the scores page if the config reads finished. --dry-run lists what would
+                                       run and where it would be pushed (nothing runs). Configs: uno-light-sense-poll, uno-light-sense-pcint.
+                                       One scenario alone: pol faults run <scenario> --variant <config> --api URL
   ${CYAN}profile${NC} show [<name>] | create <name> [--copy-of P] [--weight term=w ...] [--purpose-weight purpose:term=w ...]
                                        | weight <name> term=w [...]       (create / weight need --api URL: the profile is a row there;
                                        seeded profiles are copied before they are edited, never changed in place)
@@ -83,6 +89,8 @@ case "$cmd" in
     bind) [ -n "${1:-}" ] || die "usage: pol firmware bind <solution> --board <board>"
           t="$1"; shift; py bind "$t" "$@" ;;
     scores) py_fsc scores "$@" ;;
+    prove) [ -n "${1:-}" ] || die "usage: pol firmware prove <config> [--mission M] [--api URL] [--dry-run] [--json]   (configs: uno-light-sense-poll, uno-light-sense-pcint)"
+           (cd "$FW" && PYTHONPATH=.:modules python3 -m cmod.custom.fsc_prove_cli "$@") ;;
     profile) [ -n "${1:-}" ] || die "usage: pol firmware profile show [<name>] | create <name> [--copy-of P] [--weight term=w ...] | weight <name> term=w ..."
              py_fsc profile "$@" ;;
     score-values) [ -n "${1:-}" ] || die "usage: pol firmware score-values refresh [--mission M] [--limit N] --api URL"
