@@ -8,6 +8,7 @@
 # computer<->firmware mapping — gen --instance-index, twin --tag (several twins side by side), interface <instance>.
 # sc-3: the ESP32-C3 — gen / build / flash / twin / cost c3 (ESP-IDF + FreeRTOS through prf-esp-engines; the QEMU twin).
 # brd-bo: THE BOARD OBJECT — pins / render / ingest / conflicts / assign (one board shared by KiCad, Zephyr, ESP-IDF, bare C).
+# sim-1: twin SESSIONS — `twin session start|list|show|stop|inject|events` (a simulated board with a live control port, through the server).
 #
 #   pol board help
 set -eu
@@ -55,6 +56,15 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
                                       source=serial, serialDevice=<link>. --tag runs another twin beside the first
                                       (its own --work, --tcp, --link: uno-pair = tags 0 and 1)
     cost uno [--write]                re-measure the twin's object cost (rows, simavr state bytes, cycles/s)
+    twin session start <config> [--ttl S] [--owner O] [--watch PD6,PB5] [--free] [--api URL]
+                                      sim-1: a SIMULATED BOARD with a live control port, started on the engines worker through
+                                      the server (config = a firmware variant, e.g. uno-light; its .hex sha is the LOCKED
+                                      firmware; a participant twin:<board>#<n>); the control token is shown once
+    twin session list|show <id>|stop <id> [--api URL]
+    twin session inject <id> set PD2 0|1 | adc 0 750 | reset | watch PD6,PB5 | run true|false | status
+                                      press/release a pin, hold a sensor voltage in mV, power-reset, change the watch list, pause
+    twin session events <id> [--seconds S] [--limit N] [--replay N]
+                                      the watched pins' edges as they happen (cycle, pin, level)
 
   ${CYAN}the ESP32-C3${NC} (sc-3; D-sc-4 ruled — ESP-IDF v5.5.5 C, FreeRTOS; the prf-esp-engines worker; twin-first)
     gen c3 [--variant V] [--api URL] [--rig-name N] [--device-id N] [--out DIR]
@@ -173,8 +183,14 @@ case "$cmd" in
            py -m board.custom.build "${ARGS[@]}" ;;
     flash) [ -n "${ARGS[0]:-}" ] || die "usage: pol board flash uno [--port P] [--yes]"
            mapfile -t A < <(api_arg); py -m board.custom.flash "${ARGS[@]}" "${A[@]}" ;;
-    twin)  [ -n "${ARGS[1]:-}" ] || die "usage: pol board twin uno up|down|status"
-           py -m board.custom.twin "${ARGS[@]}" ;;
+    twin)  if [ "${ARGS[0]:-}" = session ]; then   # sim-1: twin SESSIONS (a client of /api/board/twins)
+               [ -n "${ARGS[1]:-}" ] || die "usage: pol board twin session start <config>|list|show <id>|stop <id>|inject <id> set PD2 0|adc 0 750|events <id> [--api URL]"
+               # a --json seen by the generic parser above is passed on
+               py -m board.custom.twin_sessions_cli "${ARGS[@]:1}" --api "$API" $( [ "$JSON" = 1 ] && echo --json )
+           else
+               [ -n "${ARGS[1]:-}" ] || die "usage: pol board twin uno up|down|status   (or: twin session start|list|stop|inject|events)"
+               py -m board.custom.twin "${ARGS[@]}"
+           fi ;;
     cost)  py -m board.custom.sim_cost "${ARGS[@]}" ;;   # sc-3: `cost uno` | `cost c3` (the board word is read by sim_cost)
     pins|render|ingest|conflicts|assign)   # brd-bo: THE BOARD OBJECT (rows = the seeds offline; views/conflicts in the local ledger)
            py -m board.custom.board_object_cli "$cmd" "${ARGS[@]}" ;;
