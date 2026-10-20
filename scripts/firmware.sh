@@ -44,6 +44,12 @@ ${BOLD}pol firmware${NC} — a CGraph + a board in, a firmware build out (fs-0 a
                                        bottom (finished | plan), the deciding terms; failures listed with the Purpose and reason, never
                                        scored. --top = the top scorer of each profile. Competitive: per term the best compared solution is
                                        100 and the worst 0, then each profile column again. Default mission uno-light-mission.
+  ${CYAN}state${NC} <config> [--fields|--enums|--findings] [--json]
+                                       fst-2: EVERY STATE OBJECT of one firmware config, derived from its sources (never typed): the wire
+                                       struct (tags, C types, command vs telemetry, the pin a field controls, EEPROM persistence), the rx
+                                       parser, every static, the enums and enum-like defines with their meanings, and per field WHO WRITES
+                                       and WHO READS it (pointer hand-offs followed); a field nobody writes or reads is a finding.
+                                       Page: /display/firmware-state?config=<config>
   ${CYAN}prove${NC} <config> [--mission M] [--api URL] [--dry-run] [--json] [--hardware]
                                        fsc-6: make a built config FINISHED: run the Mission's four Purposes' own acceptance scenarios on THAT
                                        config's firmware (the twin, here), store the runs, and with --api push each to that server's Purpose door
@@ -89,6 +95,8 @@ case "$cmd" in
     bind) [ -n "${1:-}" ] || die "usage: pol firmware bind <solution> --board <board>"
           t="$1"; shift; py bind "$t" "$@" ;;
     scores) py_fsc scores "$@" ;;
+    state) [ -n "${1:-}" ] || die "usage: pol firmware state <config> [--fields|--enums|--findings] [--json]   (e.g. uno-light)"
+           (cd "$FW" && PYTHONPATH=.:modules python3 -m board.custom.firmware_state "$@") ;;
     prove) [ -n "${1:-}" ] || die "usage: pol firmware prove <config> [--mission M] [--api URL] [--dry-run] [--json]   (configs: uno-light-sense-poll, uno-light-sense-pcint)"
            (cd "$FW" && PYTHONPATH=.:modules python3 -m cmod.custom.fsc_prove_cli "$@") ;;
     profile) [ -n "${1:-}" ] || die "usage: pol firmware profile show [<name>] | create <name> [--copy-of P] [--weight term=w ...] | weight <name> term=w ..."
