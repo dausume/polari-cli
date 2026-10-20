@@ -111,12 +111,19 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
   ${CYAN}the firmware installer${NC} (brd-fi; different things to test on the one UNO)
     variants [--api URL]              the firmware variants: what each tests, what to watch for (offline: the seeded five
                                       — uno-sim-rig, uno-blink-only, uno-adc-sweep, uno-pair, uno-echo)
-    install uno [--variant V] [--twin] [--dry-run | --yes] [--api URL]
+    install uno --sim|--real [--variant V] [--dry-run | --yes] [--anyway REASON] [--api URL]
                                       plan + run + attach in one, through the server on the host holding the port:
                                       picks (or builds) the variant's compatible build, prints the plan's argv (the
                                       DRY-RUN, the default); --yes installs, attaches the bridge, prints the first
-                                      frames. --twin = the simavr twin. Exit 3 = refused (stale-header /
-                                      unknown-class firmware, no board, the wrong host)
+                                      frames. ins-0: --sim = the simavr twin (--twin still works), --real = a detected
+                                      board. ins-1: a --real install of a Mission config is offered only past THE
+                                      CONFIRMED-SIM GATE (four Purposes passed on the twin + a person's tick for this
+                                      hex) — else the words say what is missing and offer the sim install (exit 3);
+                                      --anyway "reason" records the reason and installs regardless. Exit 3 = refused
+    gate <config> [--api URL]         the Real side's verdict for a config: offered | not offered, what is missing
+    confirm-sim <config> [--hex SHA | --build B] [--words W] [--api URL]
+                                      the person's tick "I checked the simulated board does what the firmware says"
+                                      for the config's newest build (a SimInstallConfirmation row; a new hex voids it)
     result [RECORD] [--api URL]       an install's result: verdict, read-back, bridge, frames/s, the row now
     attach uno --variant uno-button-clock --twin [--api URL] [--seconds N] [--presses N]
                                       ucd-frames+bundle: builds the variant and runs the twin ON THIS HOST (a twin
@@ -214,9 +221,13 @@ case "$cmd" in
     pins|render|ingest|conflicts|assign)   # brd-bo: THE BOARD OBJECT (rows = the seeds offline; views/conflicts in the local ledger)
            py -m board.custom.board_object_cli "$cmd" "${ARGS[@]}" ;;
     variants) mapfile -t A < <(api_arg); py -m board.custom.install_cli variants "${A[@]}" ;;
-    install) [ -n "${ARGS[0]:-}" ] || die "usage: pol board install uno [--variant V] [--twin] [--dry-run|--yes] [--api URL]"
+    install) [ -n "${ARGS[0]:-}" ] || die "usage: pol board install uno --sim|--real [--variant V] [--dry-run|--yes] [--anyway REASON] [--api URL]"
              py -m board.custom.install_cli install "${ARGS[@]}" --api "$API" ;;
     result)  py -m board.custom.install_cli result "${ARGS[@]}" --api "$API" ;;
+    gate)    [ -n "${ARGS[0]:-}" ] || die "usage: pol board gate <config> [--api URL]"   # ins-1: the confirmed-sim gate's verdict
+             py -m board.custom.install_cli gate "${ARGS[@]}" --api "$API" ;;
+    confirm-sim) [ -n "${ARGS[0]:-}" ] || die "usage: pol board confirm-sim <config> [--hex SHA | --build B] [--words W] [--api URL]"
+             py -m board.custom.install_cli confirm-sim "${ARGS[@]}" --api "$API" ;;
     attach)  [ -n "${ARGS[0]:-}" ] || die "usage: pol board attach uno --variant uno-button-clock --twin [--api URL] [--seconds N] [--presses N]"
              mapfile -t A < <(api_arg); py -m board.custom.attach_cli "${ARGS[@]}" "${A[@]}" ;;
     chain) [ -n "${ARGS[1]:-}" ] || die "usage: pol board chain <board> <pin> [--json]   (e.g. arduino-uno-r3 D3)"
