@@ -38,14 +38,14 @@ ${BOLD}HOW IT STAYS SECURE${NC}
   ${CYAN}install${NC} <node> --route swarm-worker|swarm-server|isle-member|isle-core [--profile lean|full --domain D] [--dry-run]
               put a Polari instance on a nodes.yml machine over ssh:
                 swarm-worker  docker + join THIS manager's swarm (work is placed by pol allocate)
-                swarm-server  docker + the suite checkout + pol, then `pol prod apply --yes` THERE
+                swarm-server  docker + the suite checkout + pol, then \`pol prod apply --yes\` THERE
                 isle-member   fetch this isle's bootstrap from its core and run it (sudo; --host to host apps)
-                isle-core     ship the polari-complete deb, install it, run `isle core-install` (interactive)
+                isle-core     ship the polari-complete deb, install it, run \`isle core-install\` (interactive)
   ${CYAN}status${NC} <node>   what runs there: swarm node + tasks placed on it, or the isle (router, agent,
               polari.isle answering, open doors, hardware guests) — read-only, over ssh
   ${CYAN}uninstall${NC} <node> --route swarm-worker|swarm-server|isle-member|isle-core [--yes] [--dry-run]
               the reverse of install: leave the swarm / pol prod down / the isle's own full
-              wipe (`isle uninstall --everything`, ISLE_CONFIRM_DELETE=yes only with --yes)
+              wipe (\`isle uninstall --everything\`, ISLE_CONFIRM_DELETE=yes only with --yes)
   ${CYAN}grant${NC} <node> --group remote|app [--user U]
               install a permission group on the machine (one password prompt, once):
                 remote  ssh + swarm + AI-assisted setup — exactly the commands pol deploy sends

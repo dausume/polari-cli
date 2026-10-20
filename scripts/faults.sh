@@ -29,7 +29,7 @@ ${BOLD}pol faults${NC} — force a firmware fault on purpose, see where it goes 
                                       an ACCEPTANCE scenario (hw priorities P1, D-hw-2 — temp-sensor-to-os-acceptance,
                                       blink-on-command-acceptance) proves a Capability's GOAL under normal operation
                                       instead: no before/after/natural/control sides, just [--hardware] for the stopgap
-                                      flash/detect route (default digital-twin) — see also `pol capability prove`
+                                      flash/detect route (default digital-twin) — see also \`pol capability prove\`
                                       --variant V (acceptance only, fsc-6): run a Purpose's own scenario on built config V's firmware; the run
                                       is stored with variant = V and --api pushes it to the Purpose door (refused when V is not a built config
                                       of the Mission). All four Purposes for one config: pol firmware prove <config> --api URL
