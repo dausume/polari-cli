@@ -10,12 +10,20 @@
 #                     [--registry-port 5000] [--ca <root.crt>]
 #                     [--yes]
 #
-# Defaults target this repo's staging isle (isle-core @ 192.168.0.24,
-# registry on the home-LAN address). Override for another isle.
+# Defaults target this repo's staging isle: the isle host is the `ssh`
+# target of node isle-core in pol-build/manifests/nodes.yml (else the
+# ssh alias `isle-core`); the registry is the isle's own name,
+# registry.isle. Override for another isle.
 set -u
 SUITE_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-ISLE_HOST="${ISLE_HOST:-192.168.0.24}"
-REGISTRY_HOST="${REGISTRY_HOST:-192.168.0.24}"
+ISLE_HOST="${ISLE_HOST:-$(python3 - "$SUITE_ROOT/pol-build/manifests/nodes.yml" 2>/dev/null <<'PYEOF' || true
+import sys, yaml
+n = (yaml.safe_load(open(sys.argv[1])).get("nodes") or {}).get("isle-core") or {}
+print(n.get("ssh", ""))
+PYEOF
+)}"
+ISLE_HOST="${ISLE_HOST:-isle-core}"
+REGISTRY_HOST="${REGISTRY_HOST:-registry.isle}"
 REGISTRY_PORT="${REGISTRY_PORT:-5000}"
 CA="${ISLE_CA:-$SUITE_ROOT/polari-rf-node/ca/root_ca.crt}"
 ASSUME_YES=0

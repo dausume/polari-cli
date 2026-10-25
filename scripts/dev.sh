@@ -11,7 +11,9 @@
 #   pol dev status                   isle deployment + registry health
 #
 # Config (env or ~/.config/polari/isle-dev.env, written by setup):
-#   ISLE_HOST (default 192.168.0.24)  REGISTRY_HOST  REGISTRY_PORT
+#   ISLE_HOST (default: the `ssh` target of node isle-core in
+#   pol-build/manifests/nodes.yml, else the ssh alias `isle-core`)
+#   ISLE_USER  REGISTRY_HOST (default registry.isle)  REGISTRY_PORT (5000)
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUITE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -19,13 +21,22 @@ source "$SCRIPT_DIR/lib/log.sh" 2>/dev/null || { CYAN=""; NC=""; }
 
 CONF="$HOME/.config/polari/isle-dev.env"
 [ -f "$CONF" ] && . "$CONF"
-ISLE_HOST="${ISLE_HOST:-192.168.0.24}"
+_nodes_field() {  # _nodes_field <field> -> nodes.yml value for node isle-core ("" if absent/unreadable)
+    python3 - "$SUITE_ROOT/pol-build/manifests/nodes.yml" "$1" 2>/dev/null <<'PYEOF' || true
+import sys, yaml
+n = (yaml.safe_load(open(sys.argv[1])).get("nodes") or {}).get("isle-core") or {}
+print(n.get(sys.argv[2], ""))
+PYEOF
+}
+ISLE_HOST="${ISLE_HOST:-$(_nodes_field ssh)}"
+ISLE_HOST="${ISLE_HOST:-isle-core}"
+ISLE_USER="${ISLE_USER:-$(_nodes_field user)}"
 ISLE_USER="${ISLE_USER:-detts}"
-REGISTRY_HOST="${REGISTRY_HOST:-192.168.0.24}"
+REGISTRY_HOST="${REGISTRY_HOST:-registry.isle}"
 REGISTRY_PORT="${REGISTRY_PORT:-5000}"
 REGISTRY="$REGISTRY_HOST:$REGISTRY_PORT"
 
-show_help() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; }
+show_help() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; }
 
 deploy_one() {
     local img="${1:-backend}"
