@@ -111,6 +111,9 @@ else:sys.exit(3)
                 self.assertTrue(installs);self.assertTrue(all('tool=2' in c and '--no-download' in c and '--no-remove' in c for c in installs))
     def test_apt_simulation_failure_before_mode_or_image_load(self):
         r=self.run_install(TEST_APT_FAIL='1');self.assertNotEqual(r.returncode,0);self.assertFalse(self.host.exists());self.assertFalse(any(c[:2]==['docker','load'] for c in self.commands()))
+    def test_newer_platform_refused_without_downgrade(self):
+        self.state.write_text(json.dumps({'images':{'test/core:release':self.iid},'installed':{'tool':'installed\t3','polari-complete-offline':'installed 2'}}))
+        r=self.run_install();self.assertNotEqual(r.returncode,0);self.assertIn('no downgrade',r.stderr);self.assert_unmodified()
     def test_installed_alternative_preserved(self):
         self.manifest['requiredPackages']=['tool (>= 2) | compatible-tool (>= 3)']
         self.state.write_text(json.dumps({'images':{'test/core:release':self.iid},'installed':{'compatible-tool':'installed\t4','polari-complete-offline':'installed 1'}}))

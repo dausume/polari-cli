@@ -56,6 +56,9 @@ PY
 )
 DEB_VERSION=$(dpkg-deb -f "$DEB" Version)
 INSTALLED=$(dpkg-query -W -f='${db:Status-Status} ${Version}' polari-complete-offline 2>/dev/null || true)
+if [[ "$INSTALLED" = installed\ * ]] && dpkg --compare-versions "${INSTALLED#installed }" gt "$DEB_VERSION"; then
+    refuse "a newer offline platform is installed; use a matching/newer medium (no downgrade attempted)"
+fi
 INSTALL_DEB=1
 [ "$INSTALLED" != "installed $DEB_VERSION" ] || INSTALL_DEB=0
 
