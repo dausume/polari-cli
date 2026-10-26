@@ -14,6 +14,7 @@ def path(name):
     return p
 try:
     path('ISLE_OFFLINE_BUNDLE')
+    path('scripts/offline-apt.sh')
     m=json.loads(path('manifest.json').read_text())
     need(m.get('flavor')=='offline','manifest flavor must be offline')
     need(m.get('polari'),'manifest missing polari version')

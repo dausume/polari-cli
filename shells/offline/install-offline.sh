@@ -77,39 +77,17 @@ for e in entries:
     print(ref+'\t'+e['file']+'\t'+e['id'])
 PY
 
-# Isolate apt configuration, sources, indexes and caches. Download-only
-# staging uses copy: so local packages populate the cache (file: uses them
-# in place and leaves no cached path for --no-download). Then --no-download
-# installation cannot fetch a missing package. System apt hooks are excluded.
-mkdir -p "$WORK/lists/partial" "$WORK/archives/partial" "$WORK/sourceparts" "$WORK/log" "$WORK/cache"
-printf 'deb [trusted=yes] copy:%s/apt ./\n' "$POOL" > "$WORK/sources.list"
-chmod 755 "$WORK" "$WORK/lists" "$WORK/lists/partial" "$WORK/archives" "$WORK/archives/partial"
-cat > "$WORK/apt.conf" <<'APTCONF'
-Dir::Etc::main "/dev/null";
-Dir::Etc::parts "/dev/null";
-APTCONF
-APT_OPTS=(-o "Dir::Etc::SourceList=$WORK/sources.list" -o "Dir::Etc::SourceParts=$WORK/sourceparts"
-    -o "Dir::State::lists=$WORK/lists" -o "Dir::Cache::archives=$WORK/archives"
-    -o "Dir::Log=$WORK/log" -o "Dir::Cache=$WORK/cache"
-    -o "Dir::State::extended_states=$WORK/extended_states"
-    -o Acquire::Retries=0 -o APT::Get::List-Cleanup=0)
+# Plan and stage local files before changing host configuration. The shared
+# transaction helper is exercised with REAL apt/dpkg in a network-none container.
+source "$HERE/offline-apt.sh"
 TARGETS=("${NEED[@]}")
 [ "$INSTALL_DEB" = 0 ] || TARGETS+=("$DEB")
-if [ "${#TARGETS[@]}" -gt 0 ]; then
-    APT_CONFIG="$WORK/apt.conf" apt-get "${APT_OPTS[@]}" update -qq || refuse "local apt/ index could not be read"
-    APT_CONFIG="$WORK/apt.conf" apt-get "${APT_OPTS[@]}" --simulate --no-download --no-remove install --no-install-recommends "${TARGETS[@]}" \
-        || refuse "apt/ does not satisfy platform dependencies; host configuration unchanged"
-    APT_CONFIG="$WORK/apt.conf" apt-get "${APT_OPTS[@]}" --download-only --no-remove install -y --no-install-recommends "${TARGETS[@]}" \
-        || refuse "apt/: local package staging failed; host configuration unchanged"
-fi
+offline_apt_prepare || refuse "apt/ does not satisfy platform dependencies; host configuration unchanged"
 
 mkdir -p /etc/polari
 printf 'offline\n' > /etc/polari/install-mode
 printf '%s\n' "$POOL" > /etc/polari/offline-source
-if [ "${#TARGETS[@]}" -gt 0 ]; then
-    APT_CONFIG="$WORK/apt.conf" DEBIAN_FRONTEND=noninteractive apt-get "${APT_OPTS[@]}" --no-download --no-remove install -y --no-install-recommends "${TARGETS[@]}" \
-        || refuse "installation from local apt/ failed; see apt output"
-fi
+offline_apt_install || refuse "installation from local apt/ failed; see apt output"
 systemctl enable --now docker || refuse "Docker could not start"
 while IFS=$'\t' read -r ref file expected; do
     [ -n "$ref" ] || continue

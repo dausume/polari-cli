@@ -12,7 +12,7 @@ class OfflineCore(unittest.TestCase):
         self.iid='sha256:'+hashlib.sha256(self.config).hexdigest()
         self.state.write_text(json.dumps({'images':{},'installed':{}}))
         for section in ('debs','apt','images','router','modules','engines','hardware','scripts'):(self.pool/section).mkdir()
-        for name in ('install-offline.sh','verify-offline.sh'):
+        for name in ('install-offline.sh','verify-offline.sh','offline-apt.sh'):
             text=(SOURCE/name).read_text().replace('/etc/polari',str(self.host))
             (self.pool/'scripts'/name).write_text(text)
         (self.pool/'ISLE_OFFLINE_BUNDLE').write_text('fixture')
@@ -103,6 +103,8 @@ else:sys.exit(3)
     def commands(self):return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
     def assert_unmodified(self):
         self.assertFalse(self.host.exists());self.assertFalse(any(c[0] in ('systemctl','apt-get') or c[:2]==['docker','load'] for c in self.commands()))
+    def test_missing_apt_helper_refused_before_mutation(self):
+        (self.pool/'scripts/offline-apt.sh').unlink();r=self.run_install();self.assertNotEqual(r.returncode,0);self.assert_unmodified()
     def test_missing_router_refused_before_mutation(self):
         (self.pool/'router/router.qcow2').unlink();r=self.run_install();self.assertNotEqual(r.returncode,0,r.stdout);self.assert_unmodified()
     def test_wrong_os_and_arch_refused(self):
@@ -126,7 +128,7 @@ else:sys.exit(3)
         for installed in ('config-files\t3','installed\t1'):
             with self.subTest(installed=installed):
                 self.state.write_text(json.dumps({'images':{},'installed':{'tool':installed}}));r=self.run_install();self.assertEqual(r.returncode,0,r.stderr+r.stdout)
-                installs=[c for c in self.commands() if c[0]=='apt-get' and 'install' in c and '--download-only' not in c]
+                installs=[c for c in self.commands() if c[0]=='apt-get' and 'install' in c and '--download-only' not in c and '--simulate' not in c]
                 self.assertTrue(installs);self.assertTrue(all('tool=2' in c and '--no-download' in c and '--no-remove' in c for c in installs))
     def test_apt_simulation_failure_before_mode_or_image_load(self):
         r=self.run_install(TEST_APT_FAIL='1');self.assertNotEqual(r.returncode,0);self.assertFalse(self.host.exists());self.assertFalse(any(c[:2]==['docker','load'] for c in self.commands()))
