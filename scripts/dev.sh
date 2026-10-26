@@ -9,14 +9,16 @@
 #   pol dev deploy [backend|frontend]  build → push registry → deploy
 #   pol dev deploy <worker>          board-engines | formal-engines | esp-engines
 #                                    | pcb-engines | bridge-engines | msci-engines
-#                                    | cad-engines: build its image (compose build
-#                                    in polari-rf-node), tag + push it to the mesh
-#                                    registry under its own tag, then on the isle
-#                                    core `sudo isle store install <name> --yes`
+#                                    | cad-engines | scope-engines: build its image
+#                                    (compose build in polari-rf-node), tag + push it
+#                                    to the mesh registry under its own tag, then on
+#                                    the isle core `sudo isle store install <name> --yes`
 #                                    (needs the core polari up — isle-polari-deploy
 #                                    provides it, so deploy backend first).
 #                                    bridge-engines builds ON the isle host
-#                                    (prf-bridge-engines/build.sh), no push.
+#                                    (prf-bridge-engines/build.sh), no push;
+#                                    scope-engines builds here through its build.sh
+#                                    (it vendors the framework's emulator first).
 #   pol dev deploy all               backend, frontend, then every worker
 #   --dry-run (anywhere in the args) print each command instead of running it
 #   pol dev teardown [--keep-data]   tear the isle deployment down
@@ -54,10 +56,11 @@ for _a in "$@"; do [ "$_a" = "--dry-run" ] && DRY=1 || _args+=("$_a"); done
 set -- "${_args[@]}"
 run() { if [ "$DRY" = 1 ]; then echo "+ $*"; else "$@"; fi; }
 
-WORKERS="board-engines formal-engines esp-engines pcb-engines bridge-engines msci-engines cad-engines"
+WORKERS="board-engines formal-engines esp-engines pcb-engines bridge-engines msci-engines cad-engines scope-engines"
 _worker_image() {  # name -> image:tag (the compose file's own tag)
     case "$1" in
         board-engines)  echo prf-board-engines:trixie ;;
+        scope-engines)  echo prf-scope-engines:trixie ;;
         formal-engines) echo prf-formal-engines:trixie ;;
         esp-engines)    echo prf-esp-engines:noble ;;
         pcb-engines)    echo prf-pcb-engines:trixie ;;
@@ -85,6 +88,13 @@ deploy_worker() {
     if [ "$name" = bridge-engines ]; then
         echo -e "${CYAN}==> build $image ON the isle host (prf-bridge-engines/build.sh)${NC}"
         BRIDGE_BUILD_HOST="$ISLE_HOST" run bash "$SUITE_ROOT/polari-rf-node/prf-bridge-engines/build.sh"
+    elif [ "$name" = scope-engines ]; then
+        # osc-5: build.sh vendors the framework's emulator (one source of truth) before docker build, so a plain compose build is not enough
+        echo -e "${CYAN}==> build $image here (prf-scope-engines/build.sh vendors modules/instruments first)${NC}"
+        run bash "$SUITE_ROOT/polari-rf-node/prf-scope-engines/build.sh"
+        echo -e "${CYAN}==> push $image -> $REGISTRY${NC}"
+        run docker tag  "$image" "$REGISTRY/$image"
+        run docker push "$REGISTRY/$image"
     else
         echo -e "${CYAN}==> build $image (compose -p $name)${NC}"
         run docker compose -p "$name" -f "$SUITE_ROOT/polari-rf-node/docker-compose.$name.yml" \
