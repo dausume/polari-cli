@@ -3,7 +3,7 @@
 set -eu
 POOL="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 python3 - "$POOL" <<'PYVERIFY'
-import hashlib,io,json,pathlib,re,subprocess,sys,tarfile
+import hashlib,io,json,pathlib,re,subprocess,sys,tarfile,zipfile
 root=pathlib.Path(sys.argv[1]).resolve()
 def need(ok,msg):
     if not ok: raise ValueError(msg)
@@ -74,6 +74,49 @@ try:
     deb=path('debs/'+debname)
     need(subprocess.check_output(['dpkg-deb','-f',str(deb),'Package'],text=True).strip()=='polari-complete-offline','debs/: wrong platform package')
     need(subprocess.check_output(['dpkg-deb','-f',str(deb),'Architecture'],text=True).strip() in (arch,'all'),'debs/: wrong architecture')
+    runtime=m.get('desktopRuntime')
+    need(isinstance(runtime,dict) and runtime.get('package')=='polari-shell-core','debs/: mandatory desktopRuntime package inventory missing')
+    runtime_name=runtime.get('file')
+    need(isinstance(runtime_name,str) and pathlib.PurePosixPath(runtime_name).name==runtime_name,'debs/: invalid desktopRuntime filename')
+    runtime_deb=path('debs/'+runtime_name)
+    need(subprocess.check_output(['dpkg-deb','-f',str(runtime_deb),'Package'],text=True).strip()=='polari-shell-core','debs/: desktopRuntime is not polari-shell-core')
+    need(arch=='amd64' and subprocess.check_output(['dpkg-deb','-f',str(runtime_deb),'Architecture'],text=True).strip()=='amd64','debs/: desktopRuntime requires linux-amd64')
+    def validate_jcef(package_deb):
+        native_prefix='opt/polari-shell/lib/jcef-natives/'
+        native_names={'libcef.so','libjcef.so','jcef_helper','icudtl.dat','resources.pak','build_meta.json'}
+        found=set();native_metadata=None;api_metadata=None
+        process=subprocess.Popen(['dpkg-deb','--fsys-tarfile',str(package_deb)],stdout=subprocess.PIPE)
+        try:
+            # Stream past the large native binaries. Only small JSON/JAR members
+            # are retained, with explicit limits; never unpack or execute natives.
+            with tarfile.open(fileobj=process.stdout,mode='r|*') as filesystem:
+                for member in filesystem:
+                    name=str(pathlib.PurePosixPath(member.name))
+                    if name.startswith(native_prefix) and name[len(native_prefix):] in native_names:
+                        leaf=name[len(native_prefix):]
+                        need(member.isfile() and member.size>0 and leaf not in found,'debs/: missing/invalid bundled JCEF native: '+leaf)
+                        found.add(leaf)
+                        if leaf=='build_meta.json':
+                            need(member.size<=65536,'debs/: oversized native build metadata')
+                            native_metadata=json.load(filesystem.extractfile(member))
+                    if name.startswith('opt/polari-shell/lib/app/jcef-api') and name.endswith('.jar'):
+                        need(api_metadata is None and member.isfile() and member.size<=16*1024*1024,'debs/: invalid/duplicate JCEF API JAR')
+                        with zipfile.ZipFile(io.BytesIO(filesystem.extractfile(member).read())) as jar:
+                            info=jar.getinfo('build_meta.json')
+                            need(info.file_size<=65536,'debs/: oversized JCEF API metadata')
+                            api_metadata=json.loads(jar.read(info))
+            process.stdout.close()
+            need(process.wait()==0,'debs/: could not read desktop runtime filesystem')
+        finally:
+            process.stdout.close()
+            if process.poll() is None:process.terminate()
+            process.wait()
+        need(found==native_names,'debs/: bundled JCEF native files missing: '+', '.join(sorted(native_names-found)))
+        need(isinstance(native_metadata,dict) and native_metadata.get('platform')=='linux-amd64','debs/: JCEF native platform must be linux-amd64')
+        need(isinstance(api_metadata,dict) and native_metadata.get('release_tag') and native_metadata['release_tag']==api_metadata.get('release_tag'),'debs/: JCEF native/API release tags differ or API metadata missing')
+        return native_metadata['release_tag']
+    runtime_release=validate_jcef(runtime_deb)
+    need(validate_jcef(deb)==runtime_release,'debs/: merged platform JCEF release differs from selected desktopRuntime')
     entries=json.loads(path('images/images.json').read_text());required=m.get('requiredImages')
     need(isinstance(required,list) and required,'images/: requiredImages must be nonempty')
     refs={}
@@ -141,6 +184,6 @@ try:
         need(package in versions,'router/: missing dependency: '+requirement)
         need(not operator or subprocess.run(['dpkg','--compare-versions',versions[package],operator,wanted]).returncode==0,'router/: unsatisfied dependency version: '+requirement)
     print('[ OK ] complete offline core medium verified: '+str(root))
-except (ValueError,KeyError,TypeError,OSError,tarfile.TarError,subprocess.SubprocessError) as e:
+except (ValueError,KeyError,TypeError,OSError,tarfile.TarError,zipfile.BadZipFile,subprocess.SubprocessError) as e:
     print('[FAIL] '+str(e),file=sys.stderr);sys.exit(1)
 PYVERIFY

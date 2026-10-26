@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Isolated complete-medium and installer tests; no services or host writes."""
-import hashlib,io,json,os,pathlib,shutil,subprocess,tarfile,tempfile,unittest
+import hashlib,io,json,os,pathlib,shutil,subprocess,tarfile,tempfile,unittest,zipfile
 SOURCE=pathlib.Path(__file__).resolve().parent
 class OfflineCore(unittest.TestCase):
     def setUp(self):
@@ -17,6 +17,11 @@ class OfflineCore(unittest.TestCase):
             (self.pool/'scripts'/name).write_text(text)
         (self.pool/'ISLE_OFFLINE_BUNDLE').write_text('fixture')
         (self.pool/'debs/platform.deb').write_bytes(b'fixture platform')
+        (self.pool/'debs/runtime.deb').write_bytes(b'fixture shared runtime')
+        self.runtime_archive=self.work/'runtime.tar'
+        self.merged_archive=self.work/'merged.tar'
+        self.runtime_filesystem()
+        self.runtime_filesystem(merged=True)
         content=b'fixture apt package';digest=hashlib.sha256(content).hexdigest()
         (self.pool/'apt/tool_2_all.deb').write_bytes(content)
         (self.pool/'apt/Packages').write_text('Package: tool\nVersion: 2\nArchitecture: all\nFilename: ./tool_2_all.deb\nSHA256: '+digest+'\n\n')
@@ -29,7 +34,7 @@ class OfflineCore(unittest.TestCase):
         self.image_archive()
         (self.pool/'images/images.json').write_text(json.dumps([{'name':'test/core','tag':'release','file':'core.tar','id':self.iid}]))
         osinfo=dict(line.split('=',1) for line in pathlib.Path('/etc/os-release').read_text().splitlines() if '=' in line)
-        self.manifest={'polari':'test','flavor':'offline','target':osinfo['ID'].strip('"')+'-'+osinfo['VERSION_ID'].strip('"'),'architecture':'amd64','sections':{s:{'present':True} for s in ('debs','apt','images','router','scripts')},'requiredPackages':['tool (>= 2)'],'requiredImages':['test/core:release'],'debs':{'polari-complete-offline':'platform.deb'},'router':{'file':'router.qcow2','packages':['packages/a.ipk'],'metadata':'build.json'}}
+        self.manifest={'polari':'test','flavor':'offline','target':osinfo['ID'].strip('"')+'-'+osinfo['VERSION_ID'].strip('"'),'architecture':'amd64','sections':{s:{'present':True} for s in ('debs','apt','images','router','scripts')},'requiredPackages':['tool (>= 2)'],'requiredImages':['test/core:release'],'debs':{'polari-complete-offline':'platform.deb'},'desktopRuntime':{'package':'polari-shell-core','file':'runtime.deb'},'router':{'file':'router.qcow2','packages':['packages/a.ipk'],'metadata':'build.json'}}
         stub='''#!/usr/bin/python3
 import json,os,pathlib,subprocess,sys
 name=pathlib.Path(sys.argv[0]).name;a=sys.argv[1:]
@@ -40,7 +45,9 @@ elif name=='dpkg':
  if a==['--print-architecture']:print('amd64')
  else:sys.exit(subprocess.run(['/usr/bin/dpkg']+a).returncode)
 elif name=='dpkg-deb':
- field=a[-1];print({'Package':'polari-complete-offline','Architecture':'amd64','Version':'1'}[field])
+ if a[0]=='--fsys-tarfile':sys.stdout.buffer.write(pathlib.Path(os.environ['TEST_RUNTIME_TAR' if pathlib.Path(a[1]).name=='runtime.deb' else 'TEST_MERGED_TAR']).read_bytes())
+ else:
+  field=a[-1];print({'Package':('polari-shell-core' if pathlib.Path(a[1]).name=='runtime.deb' else 'polari-complete-offline'),'Architecture':'amd64','Version':'1'}[field])
 elif name=='dpkg-query':
  value=s['installed'].get(a[-1])
  if not value:sys.exit(1)
@@ -59,7 +66,19 @@ else:sys.exit(3)
 '''
         for name in ('id','dpkg','dpkg-deb','dpkg-query','docker','apt-get','systemctl'):
             f=self.bin/name;f.write_text(stub);f.chmod(0o755)
-        self.env=dict(os.environ,PATH=str(self.bin)+':'+os.environ['PATH'],TEST_LOG=str(self.log),TEST_STATE=str(self.state),TEST_IID=self.iid)
+        self.env=dict(os.environ,PATH=str(self.bin)+':'+os.environ['PATH'],TEST_LOG=str(self.log),TEST_STATE=str(self.state),TEST_IID=self.iid,TEST_RUNTIME_TAR=str(self.runtime_archive),TEST_MERGED_TAR=str(self.merged_archive))
+    def runtime_filesystem(self,omit=None,platform='linux-amd64',native_tag='matching',api_tag='matching',merged=False):
+        members={}
+        for name in ('libcef.so','libjcef.so','jcef_helper','icudtl.dat','resources.pak'):
+            if name!=omit:members['./opt/polari-shell/lib/jcef-natives/'+name]=b'fixture '+name.encode()
+        if omit!='build_meta.json':members['./opt/polari-shell/lib/jcef-natives/build_meta.json']=json.dumps({'platform':platform,'release_tag':native_tag}).encode()
+        if omit!='api.jar':
+            buffer=io.BytesIO()
+            with zipfile.ZipFile(buffer,'w') as jar:jar.writestr('build_meta.json',json.dumps({'platform':'*','release_tag':api_tag}))
+            members['./opt/polari-shell/lib/app/jcef-api-fixture.jar']=buffer.getvalue()
+        with tarfile.open(self.merged_archive if merged else self.runtime_archive,'w') as tar:
+            for name,data in members.items():
+                info=tarfile.TarInfo(name);info.size=len(data);tar.addfile(info,io.BytesIO(data))
     def router_ipk(self,depends='libc (>= 1)',version='2'):
         package='avahi-dbus-daemon'
         control=('Package: '+package+'\nVersion: '+version+'\nArchitecture: x86_64\nDepends: '+depends+'\n').encode()
@@ -141,6 +160,26 @@ else:sys.exit(3)
     def test_router_metadata_required(self):
         del self.manifest['router']['metadata']
         r=self.run_install();self.assertNotEqual(r.returncode,0);self.assertIn('build metadata',r.stderr);self.assert_unmodified()
+    def test_desktop_runtime_is_mandatory(self):
+        del self.manifest['desktopRuntime']
+        r=self.run_install();self.assertNotEqual(r.returncode,0);self.assertIn('desktopRuntime',r.stderr);self.assert_unmodified()
+    def test_jcef_missing_native_file_refused(self):
+        for missing in ('libcef.so','jcef_helper','build_meta.json','api.jar'):
+            with self.subTest(missing=missing):
+                self.runtime_filesystem(omit=missing)
+                r=self.run_install();self.assertNotEqual(r.returncode,0);self.assertIn('JCEF',r.stderr);self.assert_unmodified()
+    def test_jcef_native_platform_must_match(self):
+        self.runtime_filesystem(platform='linux-arm64')
+        r=self.run_install();self.assertNotEqual(r.returncode,0);self.assertIn('platform',r.stderr);self.assert_unmodified()
+    def test_jcef_api_and_native_release_must_match(self):
+        self.runtime_filesystem(native_tag='different')
+        r=self.run_install();self.assertNotEqual(r.returncode,0);self.assertIn('release tags differ',r.stderr);self.assert_unmodified()
+    def test_merged_platform_missing_natives_refused_despite_good_runtime(self):
+        self.runtime_filesystem(omit='libcef.so',merged=True)
+        r=self.run_install();self.assertNotEqual(r.returncode,0);self.assertIn('JCEF',r.stderr);self.assert_unmodified()
+    def test_merged_platform_release_must_match_selected_runtime(self):
+        self.runtime_filesystem(native_tag='other-release',api_tag='other-release',merged=True)
+        r=self.run_install();self.assertNotEqual(r.returncode,0);self.assertIn('merged platform JCEF release differs',r.stderr);self.assert_unmodified()
     def test_checksum_omission_rejected(self):
         self.seal();p=self.pool/'SHA256SUMS';p.write_text('\n'.join(line for line in p.read_text().splitlines() if 'router.qcow2' not in line)+'\n')
         r=subprocess.run(['bash',str(self.pool/'scripts/verify-offline.sh'),str(self.pool)],env=self.env,capture_output=True,text=True);self.assertNotEqual(r.returncode,0);self.assertIn('omitted',r.stderr)
