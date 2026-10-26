@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the installer's real apt cache layout and dpkg path, offline.
 
-Installs one small dependency inside a disposable, network-disabled container.
+Installs one small dependency and a direct-path local DEB inside a disposable, network-disabled container.
 Unlike the fixture tests and closure simulation, this reaches real dpkg.
 """
 import argparse
@@ -21,13 +21,17 @@ script = r'''set -euo pipefail
 POOL=/medium
 WORK=$(mktemp -d)
 source /test/offline-apt.sh
-TARGETS=(libinotifytools0)
+mkdir -p /tmp/cache-fixture/DEBIAN
+printf 'Package: polari-cache-fixture\nVersion: 1\nArchitecture: all\nMaintainer: Test <test@localhost>\nDescription: offline transaction fixture\n' > /tmp/cache-fixture/DEBIAN/control
+dpkg-deb --build /tmp/cache-fixture /tmp/polari-cache-fixture_1_all.deb
+TARGETS=(libinotifytools0 /tmp/polari-cache-fixture_1_all.deb)
 offline_apt_prepare
 find "$WORK/archives" -maxdepth 1 -name 'libinotifytools0_*.deb' -print -quit | grep -q .
 offline_apt_install
 test "$(dpkg-query -W -f='${db:Status-Status}' libinotifytools0)" = installed
 offline_apt_prepare
 offline_apt_install
+test "$(dpkg-query -W -f='${db:Status-Status}' polari-cache-fixture)" = installed
 '''
 subprocess.run([
     'docker', 'run', '--rm', '--pull', 'never', '--network', 'none',

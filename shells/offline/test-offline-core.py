@@ -46,6 +46,8 @@ elif name=='dpkg':
  else:sys.exit(subprocess.run(['/usr/bin/dpkg']+a).returncode)
 elif name=='dpkg-deb':
  if a[0]=='--fsys-tarfile':sys.stdout.buffer.write(pathlib.Path(os.environ['TEST_RUNTIME_TAR' if pathlib.Path(a[1]).name=='runtime.deb' else 'TEST_MERGED_TAR']).read_bytes())
+ elif len(a)==2:
+  print('Package: polari-complete-offline\\nVersion: 1\\nArchitecture: amd64\\nDescription: fixture')
  else:
   field=a[-1];print({'Package':('polari-shell-core' if pathlib.Path(a[1]).name=='runtime.deb' else 'polari-complete-offline'),'Architecture':'amd64','Version':'1'}[field])
 elif name=='dpkg-query':
