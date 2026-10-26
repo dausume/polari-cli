@@ -78,10 +78,11 @@ for e in entries:
 PY
 
 # Isolate apt configuration, sources, indexes and caches. Download-only
-# staging uses only the verified flat file repository, then --no-download
+# staging uses copy: so local packages populate the cache (file: uses them
+# in place and leaves no cached path for --no-download). Then --no-download
 # installation cannot fetch a missing package. System apt hooks are excluded.
 mkdir -p "$WORK/lists/partial" "$WORK/archives/partial" "$WORK/sourceparts" "$WORK/log" "$WORK/cache"
-printf 'deb [trusted=yes] file:%s/apt ./\n' "$POOL" > "$WORK/sources.list"
+printf 'deb [trusted=yes] copy:%s/apt ./\n' "$POOL" > "$WORK/sources.list"
 chmod 755 "$WORK" "$WORK/lists" "$WORK/lists/partial" "$WORK/archives" "$WORK/archives/partial"
 cat > "$WORK/apt.conf" <<'APTCONF'
 Dir::Etc::main "/dev/null";
