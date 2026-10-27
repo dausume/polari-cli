@@ -138,6 +138,21 @@ else:sys.exit(3)
         self.state.write_text(json.dumps({'images':{'test/core:release':self.iid},'installed':{'tool':'installed\t3','polari-complete-offline':'installed 1'}}))
         r=self.run_install('--skip-apt','--skip-images',EXISTING_CORE='1',FAIL_REPO_PUBLISH='1')
         self.assertNotEqual(r.returncode,0);self.assertIn('refreshing the shared dependency repository failed',r.stderr)
+    def upstream_proof(self):
+        archive=self.pool/'apt/tool_2_all.deb'
+        self.manifest.update(schemaVersion=2,upstreamAptMetadata='apt/CLOSURE_METADATA.json')
+        (self.pool/'apt/CLOSURE_METADATA.json').write_text(json.dumps({'schemaVersion':1,'source':'signed-apt-print-uris-SHA256','packages':[{'file':archive.name,'size':archive.stat().st_size,'sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}]}))
+    def test_new_schema_requires_authenticated_upstream_inventory(self):
+        self.manifest['schemaVersion']=2
+        r=self.run_install();self.assertNotEqual(r.returncode,0);self.assertIn('authenticated upstream inventory missing',r.stderr);self.assert_unmodified()
+    def test_authenticated_upstream_inventory_accepts_matching_pool(self):
+        self.upstream_proof()
+        r=self.run_install();self.assertEqual(r.returncode,0,r.stderr+r.stdout)
+    def test_resealed_package_tampering_still_fails_upstream_digest(self):
+        self.upstream_proof()
+        archive=self.pool/'apt/tool_2_all.deb';before=hashlib.sha256(archive.read_bytes()).hexdigest();changed=b'corrupt apt package';archive.write_bytes(changed)
+        index=self.pool/'apt/Packages';index.write_text(index.read_text().replace(before,hashlib.sha256(changed).hexdigest()))
+        r=self.run_install();self.assertNotEqual(r.returncode,0);self.assertIn('authenticated upstream archive',r.stderr);self.assert_unmodified()
     def test_wrong_os_and_arch_refused(self):
         for key,value in [('target','ubuntu-0'),('architecture','arm64')]:
             with self.subTest(key=key):
