@@ -13,7 +13,7 @@ class OfflineCore(unittest.TestCase):
         self.state.write_text(json.dumps({'images':{},'installed':{}}))
         for section in ('debs','apt','images','router','modules','engines','hardware','scripts'):(self.pool/section).mkdir()
         for name in ('install-offline.sh','verify-offline.sh','offline-apt.sh'):
-            text=(SOURCE/name).read_text().replace('/etc/polari',str(self.host))
+            text=(SOURCE/name).read_text().replace('/etc/polari',str(self.host)).replace('/etc/isle-mesh',str(self.work/'isle-mesh'))
             (self.pool/'scripts'/name).write_text(text)
         (self.pool/'ISLE_OFFLINE_BUNDLE').write_text('fixture')
         (self.pool/'debs/platform.deb').write_bytes(b'fixture platform')
@@ -55,7 +55,9 @@ elif name=='dpkg-query':
  if not value:sys.exit(1)
  print(value,end='')
 elif name=='docker':
- if a[:2]==['image','inspect']:
+ if a[:2]==['inspect','--format']:
+  print('true' if os.environ.get('EXISTING_CORE') else 'false')
+ elif a[:2]==['image','inspect']:
   image=s['images'].get(a[-1])
   if not image:sys.exit(1)
   print(image)
@@ -63,10 +65,13 @@ elif name=='docker':
  else:sys.exit(2)
 elif name=='apt-get':
  if '--simulate' in a and os.environ.get('TEST_APT_FAIL'):sys.exit(100)
+elif name=='isle':
+ if a[:2]==['apt-repo','publish'] and os.environ.get('FAIL_REPO_PUBLISH'):sys.exit(1)
+ elif a[:2] not in (['apt-repo','publish'],['apt-repo','enable']):sys.exit(90)
 elif name=='systemctl':pass
 else:sys.exit(3)
 '''
-        for name in ('id','dpkg','dpkg-deb','dpkg-query','docker','apt-get','systemctl'):
+        for name in ('id','dpkg','dpkg-deb','dpkg-query','docker','apt-get','systemctl','isle'):
             f=self.bin/name;f.write_text(stub);f.chmod(0o755)
         self.env=dict(os.environ,PATH=str(self.bin)+':'+os.environ['PATH'],TEST_LOG=str(self.log),TEST_STATE=str(self.state),TEST_IID=self.iid,TEST_RUNTIME_TAR=str(self.runtime_archive),TEST_MERGED_TAR=str(self.merged_archive))
     def runtime_filesystem(self,omit=None,platform='linux-amd64',native_tag='matching',api_tag='matching',merged=False):
@@ -121,6 +126,18 @@ else:sys.exit(3)
         self.state.write_text(json.dumps({'images':{'test/core:release':self.iid},'installed':{'tool':'installed\t3','polari-complete-offline':'installed 1'}}))
         r=self.run_install('--skip-apt');self.assertEqual(r.returncode,0,r.stderr+r.stdout)
         self.assertFalse(any(c[0]=='apt-get' for c in self.commands()))
+    def test_existing_core_refreshes_shared_dependency_pool(self):
+        marker=self.work/'isle-mesh/agent';marker.mkdir(parents=True);(marker/'agent.mode').write_text('core\n')
+        self.state.write_text(json.dumps({'images':{'test/core:release':self.iid},'installed':{'tool':'installed\t3','polari-complete-offline':'installed 1'}}))
+        r=self.run_install('--skip-apt','--skip-images',EXISTING_CORE='1');self.assertEqual(r.returncode,0,r.stderr+r.stdout)
+        publish=[c for c in self.commands() if c[:3]==['isle','apt-repo','publish']]
+        self.assertTrue(publish);self.assertIn('--dependencies-from',publish[0]);self.assertIn(str(self.pool/'apt'),publish[0])
+        self.assertIn(['isle','apt-repo','enable'],self.commands())
+    def test_existing_core_publish_failure_is_reported(self):
+        marker=self.work/'isle-mesh/agent';marker.mkdir(parents=True);(marker/'agent.mode').write_text('core\n')
+        self.state.write_text(json.dumps({'images':{'test/core:release':self.iid},'installed':{'tool':'installed\t3','polari-complete-offline':'installed 1'}}))
+        r=self.run_install('--skip-apt','--skip-images',EXISTING_CORE='1',FAIL_REPO_PUBLISH='1')
+        self.assertNotEqual(r.returncode,0);self.assertIn('refreshing the shared dependency repository failed',r.stderr)
     def test_wrong_os_and_arch_refused(self):
         for key,value in [('target','ubuntu-0'),('architecture','arm64')]:
             with self.subTest(key=key):

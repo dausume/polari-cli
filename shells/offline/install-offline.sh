@@ -105,6 +105,14 @@ for e in json.load(open(sys.argv[1]+'/images/images.json')):
     if actual!=e['id']:sys.exit('offline images/: final image ID mismatch: '+ref)
 PY
 printf '%s\n' "$POOL" > /etc/polari/offline-source
+# Refresh an existing core's shared supply as part of an installer upgrade;
+# users must not need a separate terminal publish step after adding a medium.
+if [ "$(cat /etc/isle-mesh/agent/agent.mode 2>/dev/null)" = core ] \
+        && [ "$(docker inspect --format '{{.State.Running}}' isle-vlan-agent 2>/dev/null)" = true ]; then
+    isle apt-repo publish --from "$POOL/debs" --dependencies-from "$POOL/apt" \
+        || refuse "platform installed, but refreshing the shared dependency repository failed"
+    isle apt-repo enable || refuse "shared repository published, but local source configuration failed"
+fi
 if [ "$CORE_INSTALL" = 1 ]; then
     isle core-install
 else
