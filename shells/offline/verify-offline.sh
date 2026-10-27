@@ -50,6 +50,8 @@ try:
     arch=subprocess.check_output(['dpkg','--print-architecture'],text=True).strip()
     need(m.get('architecture')==arch,'incompatible/missing architecture: medium %s, host %s'%(m.get('architecture'),arch))
     deps=m.get('requiredPackages');need(isinstance(deps,list) and deps,'apt/: requiredPackages must be nonempty')
+    cached=m.get('cachedPackages',[]);need(isinstance(cached,list),'apt/: cachedPackages must be a list')
+    deps=deps+cached
     for dep in deps:
         need(isinstance(dep,str) and all(re.fullmatch(r'[a-z0-9][a-z0-9+.-]*(?::[a-z0-9-]+)?(?: \((?:>=|<=|=|>>|<<) [A-Za-z0-9.+:~_-]+\))?',alternative.strip()) for alternative in dep.split('|')),'unsupported requiredPackages dependency: '+str(dep))
     path('apt/Packages');need(any((root/'apt').glob('*.deb')),'apt/: no closure debs')

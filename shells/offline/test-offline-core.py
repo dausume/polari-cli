@@ -109,6 +109,18 @@ else:sys.exit(3)
         (self.pool/'scripts/offline-apt.sh').unlink();r=self.run_install();self.assertNotEqual(r.returncode,0);self.assert_unmodified()
     def test_missing_router_refused_before_mutation(self):
         (self.pool/'router/router.qcow2').unlink();r=self.run_install();self.assertNotEqual(r.returncode,0,r.stdout);self.assert_unmodified()
+    def test_cached_optional_dependency_must_be_present(self):
+        self.manifest['cachedPackages']=['absent-tool']
+        r=self.run_install();self.assertNotEqual(r.returncode,0);self.assertIn('required dependency absent',r.stderr);self.assert_unmodified()
+    def test_cached_optional_dependency_is_not_automatically_installed(self):
+        content=b'optional package fixture';digest=hashlib.sha256(content).hexdigest()
+        (self.pool/'apt/optional.deb').write_bytes(content)
+        with (self.pool/'apt/Packages').open('a') as index:
+            index.write('Package: optional-tool\nVersion: 2\nArchitecture: all\nFilename: ./optional.deb\nSHA256: '+digest+'\n\n')
+        self.manifest['cachedPackages']=['optional-tool (>= 2)']
+        self.state.write_text(json.dumps({'images':{'test/core:release':self.iid},'installed':{'tool':'installed\t3','polari-complete-offline':'installed 1'}}))
+        r=self.run_install('--skip-apt');self.assertEqual(r.returncode,0,r.stderr+r.stdout)
+        self.assertFalse(any(c[0]=='apt-get' for c in self.commands()))
     def test_wrong_os_and_arch_refused(self):
         for key,value in [('target','ubuntu-0'),('architecture','arm64')]:
             with self.subTest(key=key):

@@ -23,7 +23,7 @@ for stanza in (medium / 'apt/Packages').read_text().split('\n\n'):
     if match:
         packages.add(match[1])
 roots = []
-for dependency in manifest['requiredPackages']:
+for dependency in manifest['requiredPackages']+manifest.get('cachedPackages',[]):
     for alternative in dependency.split('|'):
         name = alternative.strip().split()[0].split(':')[0]
         if name in packages:
