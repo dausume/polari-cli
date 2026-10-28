@@ -1,17 +1,7 @@
 #!/bin/bash
-# install-offline.sh — install Polari from an OFFLINE medium (the
-# `offline-build/<ver>/` tree; AI-Notes/guides/OFFLINE_BUILD_TEMPLATE.md
-# §3). Run as root FROM THE MEDIUM: sudo bash <medium>/scripts/install-offline.sh
-#
-# The no-fallback rule (OFFLINE_INSTALL_PLAN.md §C): every part comes
-# from a SECTION of this medium or the step refuses naming the section.
-# This script never calls apt against the internet, never `docker pull`s,
-# never curls anything that is not 127.0.0.1 / .isle.
-#
-#   --core-install      run `isle core-install` at the end (interactive)
-#   --skip-images       do not docker-load images/ (already loaded)
-#   --skip-apt          do not touch apt (closure already installed)
-set -eu
+# A complete core medium is mandatory even when this host already has some
+# dependencies. Never fall back to system apt sources or Docker pulls.
+set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 POOL="$(cd "$HERE/.." && pwd)"
 CORE_INSTALL=0; SKIP_IMAGES=0; SKIP_APT=0
@@ -21,105 +11,111 @@ while [ $# -gt 0 ]; do case "$1" in
     --skip-apt) SKIP_APT=1; shift ;;
     *) echo "unknown arg $1" >&2; exit 1 ;;
 esac; done
-G="\033[0;32m"; R="\033[0;31m"; Y="\033[1;33m"; C="\033[0;36m"; N="\033[0m"
-ok(){ echo -e "${G}[ OK ]${N} $*"; }
-warn(){ echo -e "${Y}[WARN]${N} $*"; }
-step(){ echo; echo -e "${C}==> $*${N}"; }
-refuse(){ echo -e "${R}[REFUSED]${N} offline: $*" >&2; exit 2; }
-[ "$(id -u)" = 0 ] || { echo "run as root: sudo bash $0" >&2; exit 1; }
+ok(){ printf '[ OK ] %s\n' "$*"; }
+refuse(){ printf '[REFUSED] offline: %s\n' "$*" >&2; exit 2; }
+[ "$(id -u)" = 0 ] || refuse "run as root: sudo bash $0"
+bash "$HERE/verify-offline.sh" "$POOL" || refuse "medium verification failed; host configuration unchanged"
 
-step "0/6 verify the medium ($POOL)"
-bash "$HERE/verify-offline.sh" "$POOL" || refuse "medium failed verification — nothing installed"
-VER=$(python3 -c "import json;print(json.load(open('$POOL/manifest.json'))['polari'])")
-TARGET=$(python3 -c "import json;print(json.load(open('$POOL/manifest.json')).get('target',''))")
-HOST_REL="ubuntu-$(. /etc/os-release && echo "$VERSION_ID")"
-[ "$TARGET" = "$HOST_REL" ] || warn "medium built for $TARGET, this host is $HOST_REL — the apt section may not fit"
-ok "Polari $VER ($TARGET), sections verified"
+# Only temporary planning files are written until completeness, compatibility,
+# installed versions and the local apt transaction have all been checked.
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+python3 - "$POOL" > "$WORK/plan" <<'PY'
+import json,pathlib,re,subprocess,sys
+root=pathlib.Path(sys.argv[1]);m=json.loads((root/'manifest.json').read_text())
+def satisfies(v,op,wanted):
+    return not op or subprocess.run(['dpkg','--compare-versions',v,op,wanted]).returncode==0
+for dep in m['requiredPackages']:
+    alternatives=[re.fullmatch(r'([^ (]+)(?: \(([^ ]+) ([^)]+)\))?',part.strip()).groups() for part in dep.split('|')]
+    satisfied=False
+    for pkg,op,version in alternatives:
+        installed=subprocess.run(['dpkg-query','-W','-f=${db:Status-Status}\t${Version}',pkg],capture_output=True,text=True)
+        state,_,current=installed.stdout.partition('\t')
+        if installed.returncode==0 and state=='installed' and satisfies(current,op,version): satisfied=True;break
+    if satisfied: continue
+    for pkg,op,version in alternatives:
+        choices=[]
+        for stanza in (root/'apt/Packages').read_text().split('\n\n'):
+            f=dict(line.split(': ',1) for line in stanza.splitlines() if ': ' in line and not line.startswith(' '))
+            if f.get('Package')==pkg.split(':')[0] and satisfies(f['Version'],op,version): choices.append(f['Version'])
+        if not choices: continue
+        best=choices[0]
+        for candidate in choices[1:]:
+            if subprocess.run(['dpkg','--compare-versions',candidate,'gt',best]).returncode==0: best=candidate
+        print(pkg+'='+best);break
 
-step "1/6 install mode → offline (the one file every later step reads)"
+PY
+mapfile -t NEED < "$WORK/plan"
+if [ "$SKIP_APT" = 1 ] && [ "${#NEED[@]}" -gt 0 ]; then
+    refuse "--skip-apt requires satisfied installed versions; missing: ${NEED[*]} (section apt/)"
+fi
+DEB=$(python3 - "$POOL" <<'PY'
+import json,sys
+p=sys.argv[1];print(p+'/debs/'+json.load(open(p+'/manifest.json'))['debs']['polari-complete-offline'])
+PY
+)
+DEB_VERSION=$(dpkg-deb -f "$DEB" Version)
+INSTALLED=$(dpkg-query -W -f='${db:Status-Status} ${Version}' polari-complete-offline 2>/dev/null || true)
+if [[ "$INSTALLED" = installed\ * ]] && dpkg --compare-versions "${INSTALLED#installed }" gt "$DEB_VERSION"; then
+    refuse "a newer offline platform is installed; use a matching/newer medium (no downgrade attempted)"
+fi
+INSTALL_DEB=1
+[ "$INSTALLED" != "installed $DEB_VERSION" ] || INSTALL_DEB=0
+
+# --skip-images means VERIFY installed content IDs, not blindly accept tags.
+# Without this flag an incorrect existing tag is replaced from the archive.
+python3 - "$POOL" "$SKIP_IMAGES" > "$WORK/images" <<'PY'
+import json,subprocess,sys
+root,skip=sys.argv[1:];entries=json.load(open(root+'/images/images.json'))
+for e in entries:
+    ref=e['name']+':'+e['tag']
+    try:r=subprocess.run(['docker','image','inspect','--format','{{.Id}}',ref],capture_output=True,text=True)
+    except FileNotFoundError:r=None
+    if r is not None and r.returncode==0 and r.stdout.strip()==e['id']: continue
+    if skip=='1':
+        print('[REFUSED] offline: missing/incorrect installed image '+ref+' (--skip-images)',file=sys.stderr);sys.exit(2)
+    print(ref+'\t'+e['file']+'\t'+e['id'])
+PY
+
+# Plan and stage local files before changing host configuration. The shared
+# transaction helper is exercised with REAL apt/dpkg in a network-none container.
+source "$HERE/offline-apt.sh"
+TARGETS=("${NEED[@]}")
+[ "$INSTALL_DEB" = 0 ] || TARGETS+=("$DEB")
+offline_apt_prepare || refuse "apt/ does not satisfy platform dependencies; host configuration unchanged"
+
 mkdir -p /etc/polari
 printf 'offline\n' > /etc/polari/install-mode
 printf '%s\n' "$POOL" > /etc/polari/offline-source
-ok "/etc/polari/install-mode=offline, offline-source=$POOL"
-
-step "2/6 apt section (distro closure from the medium, file: source only)"
-APT_LIST=/etc/apt/sources.list.d/polari-offline.list
-APT_OPTS="-o Dir::Etc::SourceList=$APT_LIST -o Dir::Etc::SourceParts=/dev/null -o Acquire::Retries=0"
-if [ "$SKIP_APT" = 1 ]; then
-    warn "apt skipped (--skip-apt)"
-elif [ -f "$POOL/apt/EMPTY" ]; then
-    warn "apt section EMPTY: $(cat "$POOL/apt/EMPTY")"
-else
-    echo "deb [trusted=yes] file:$POOL/apt ./" > "$APT_LIST"
-    # ONLY our file: source is consulted — the system's internet
-    # sources are not read (no network, no timeouts, no fallback).
-    apt-get $APT_OPTS update -qq 2>&1 | grep -v '^W:' || true
-    WANT="socat dpkg-dev avahi-daemon avahi-utils apt-utils gnupg"
-    command -v docker >/dev/null 2>&1 || WANT="$WANT docker.io docker-compose-v2 containerd runc"
-    docker compose version >/dev/null 2>&1 || WANT="$WANT docker-compose-v2"
-    NEED=""
-    for p in $WANT; do dpkg -s "$p" >/dev/null 2>&1 || NEED="$NEED $p"; done
-    if [ -n "$NEED" ]; then
-        DEBIAN_FRONTEND=noninteractive apt-get $APT_OPTS install -y --no-install-recommends $NEED \
-            || refuse "a distro package is not in the medium's apt/ section (needed:$NEED) — add it to the bundle (build-offline-medium.sh --closure) or install the online package"
-        ok "installed from the medium:$NEED"
-    else
-        ok "distro closure already satisfied"
-    fi
-    systemctl enable --now docker >/dev/null 2>&1 || true
-fi
-
-step "3/6 images section (docker load — no pulls, ever)"
-if [ "$SKIP_IMAGES" = 1 ]; then
-    warn "images skipped (--skip-images)"
-elif [ -f "$POOL/images/EMPTY" ]; then
-    refuse "images section EMPTY ($(cat "$POOL/images/EMPTY")) — a base install needs prf-backend/prf-frontend/nginx:alpine/isle-sample-app-sample here"
-else
-    python3 - "$POOL/images/images.json" <<'PY' | while read -r ref file; do
-import json, sys
-for e in json.load(open(sys.argv[1])):
-    print(e['name'] + ':' + e['tag'], e['file'])
+offline_apt_install || refuse "installation from local apt/ failed; see apt output"
+systemctl enable --now docker || refuse "Docker could not start"
+while IFS=$'\t' read -r ref file expected; do
+    [ -n "$ref" ] || continue
+    docker load -q -i "$POOL/images/$file" || refuse "images/: load failed for $file"
+    actual=$(docker image inspect --format '{{.Id}}' "$ref") || refuse "images/: loaded archive did not provide $ref"
+    [ "$actual" = "$expected" ] || refuse "images/: loaded $ref has incorrect content ID"
+    ok "loaded verified image $ref"
+done < "$WORK/images"
+# Check all identities once more; an archive containing multiple tags must not
+# silently replace an earlier required image with different content.
+python3 - "$POOL" <<'PY'
+import json,subprocess,sys
+for e in json.load(open(sys.argv[1]+'/images/images.json')):
+    ref=e['name']+':'+e['tag'];actual=subprocess.check_output(['docker','image','inspect','--format','{{.Id}}',ref],text=True).strip()
+    if actual!=e['id']:sys.exit('offline images/: final image ID mismatch: '+ref)
 PY
-        if docker image inspect "$ref" >/dev/null 2>&1; then
-            ok "$ref already present"
-        else
-            docker load -q -i "$POOL/images/$file" >/dev/null && ok "loaded $ref" \
-                || refuse "docker load failed for $file (section images/)"
-        fi
-    done
-fi
-
-step "4/6 the platform deb (polari-complete-offline) from debs/"
-DEB=$(ls "$POOL"/debs/polari-complete-offline_*.deb 2>/dev/null | sort -V | tail -1 || true)
-[ -n "$DEB" ] || refuse "no polari-complete-offline deb in debs/ (section debs/)"
-if dpkg -s polari-complete-offline >/dev/null 2>&1; then
-    ok "polari-complete-offline already installed ($(dpkg-query -W -f='${Version}' polari-complete-offline))"
-else
-    if [ "$SKIP_APT" = 1 ] || [ -f "$POOL/apt/EMPTY" ]; then
-        dpkg -i "$DEB" || refuse "dpkg -i failed — missing Depends must come from the apt/ section"
-    else
-        DEBIAN_FRONTEND=noninteractive apt-get $APT_OPTS install -y "$DEB" \
-            || refuse "the deb's Depends could not be met from the medium's apt/ section"
-    fi
-    ok "installed $(basename "$DEB")"
-fi
-# the deb's postinst wrote the same mode file; keep the source path
 printf '%s\n' "$POOL" > /etc/polari/offline-source
-
-step "5/6 engines + modules staged for later (nothing goes live here)"
-[ -f "$POOL/engines/EMPTY" ] && warn "engines: $(cat "$POOL/engines/EMPTY")" \
-    || ok "engines available: $(ls "$POOL/engines" | tr '\n' ' ')"
-[ -f "$POOL/modules/EMPTY" ] && warn "modules: $(cat "$POOL/modules/EMPTY")" \
-    || ok "module debs: $(ls "$POOL"/modules/*.deb 2>/dev/null | xargs -n1 basename | sed 's/_.*//' | tr '\n' ' ')"
-echo "   install one later:  sudo bash $HERE/install-app-offline.sh <module>"
-
-step "6/6 the isle"
+# Refresh an existing core's shared supply as part of an installer upgrade;
+# users must not need a separate terminal publish step after adding a medium.
+if [ "$(cat /etc/isle-mesh/agent/agent.mode 2>/dev/null)" = core ] \
+        && [ "$(docker inspect --format '{{.State.Running}}' isle-vlan-agent 2>/dev/null)" = true ]; then
+    isle apt-repo publish --from "$POOL/debs" --dependencies-from "$POOL/apt" \
+        || refuse "platform installed, but refreshing the shared dependency repository failed"
+    isle apt-repo enable || refuse "shared repository published, but local source configuration failed"
+fi
 if [ "$CORE_INSTALL" = 1 ]; then
     isle core-install
 else
-    echo "Next (the normal user route): open the Isle App Store → 'Create my own isle'"
-    echo "  or in a terminal:  sudo isle core-install"
-    echo "Everything it needs is loaded; in offline mode it refuses instead of fetching."
+    echo "Next: open Isle App Store → Create my own isle. Router artifacts and dependencies are on this medium."
 fi
-echo
-ok "offline install of Polari $VER staged from $POOL (mode file: $(cat /etc/polari/install-mode))"
+ok "offline platform staged; every image content ID verified"
