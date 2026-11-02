@@ -1,6 +1,6 @@
 #!/bin/bash
 # hwnocode.sh — `pol hwnocode`: hardware as no-code (the hn arc, AI-Notes/plans/HARDWARE_NOCODE_PLAN.md; module hwnocode). ONE
-# no-code model across frontend, backend and hardware: a HardwareSolution spans a cmod CGraph (the hardware SUBGRAPH), the
+# no-code model across frontend, backend and hardware: a HardwareNoCodeSolution (was HardwareSolution) spans a cmod CGraph (the hardware SUBGRAPH), the
 # hw-interface (the split point — a grpcbridge binding), the backend solution and the configured displays. The placement rule
 # derives where each node runs and refuses Python on a device (RULE 2); hn-split renders the board half through cmod-glue
 # (unchanged output) and the backend half as its own solution; the runtime suggestion is shown, never applied (D-hn-3).
@@ -17,7 +17,7 @@ usage() {
 printf '%b\n' "$(cat <<EOF2
 ${BOLD}pol hwnocode${NC} — one no-code graph across a board, the bridge, the backend and a screen (hn arc)
 
-  ${CYAN}solutions${NC}                        the HardwareSolutions: subgraph, interface, firmware_runtime, placement, status
+  ${CYAN}solutions${NC}                        the HardwareNoCodeSolutions: subgraph, interface, firmware_runtime, placement, status
   ${CYAN}demo-prepare${NC} --api URL [--dry-run] [--json]   the UNO light demo on a server: the uno-light bridge row, LightState stabilized + exposed,
                                    the bridge generated (idempotent) — then the demo's readiness; the bridge stays never-run until the bench
   ${CYAN}place${NC} <solution>                 the placement report: every node → board | twin | bridge | backend | browser, and WHY
