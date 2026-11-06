@@ -60,6 +60,21 @@ pol isle
 # Service accountability                                [alias: reg, services]
 pol registry list|show <kind>|interconnects|check
 
+# Bench Solutions over a backend's HTTP API (cis arc)     [alias: benches]
+pol bench list|show|legs|status <bench>        rows, legs, one-screen status (exit 1 = NOT GREEN)
+pol bench topology|events|predicted <bench>    nodes/edges/events, a predicted chain
+pol bench specs|apply-spec <bench> [--spec N]  shipped specs -> applied
+pol bench node add|edge add <bench> ...        define a node / another path (--file or flags)
+pol bench run <bench> <node> [--pin]           one twin run (--pin keeps its capture); run-all, retest
+pol bench runs|signals|edges|captures|vcd|diff ...   a node's runs, one run's rows and captures
+pol bench coverage <bench> [untested|...]      what is tested ('untested' exits 1 when NOT GREEN)
+pol bench confirm|hardware-record|check add|profiles|canvas|structs|step-rules ...
+   shared: --api https://api.<name>.isle (else POL_API, else the local backend)  --json   exit 0/1/2
+
+# Plans from one place (cis arc; aliases only)           [alias: plan]
+pol plans task show|set|also-runs-on <name> [--file]    mission task plans
+pol plans app <name> | spec list|apply ...              = pol apps plan | pol bench specs|apply-spec
+
 # Topology as core-instance data (top-1..8)              [alias: top, topo]
 pol topology status|graph|validate|diff        read views (drift + findings)
 pol topology pull|push [file]                  rows <-> topologies/*.topology.yml
