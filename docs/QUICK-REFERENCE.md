@@ -71,6 +71,9 @@ pol bench coverage <bench> [untested|...]      what is tested ('untested' exits 
 pol bench confirm|hardware-record|check add|profiles|canvas|structs|step-rules ...
    shared: --api https://api.<name>.isle (else POL_API, else the local backend)  --json   exit 0/1/2
 
+# Engines bound from the isle registry (fix 11)          [alias: engine]
+pol engines list|sync [--api URL] [--json]     GET /api/islemesh/engines | POST .../engines/sync (exit 1 = registry unreachable)
+
 # Plans from one place (cis arc; aliases only)           [alias: plan]
 pol plans task show|set|also-runs-on <name> [--file]    mission task plans
 pol plans app <name> | spec list|apply ...              = pol apps plan | pol bench specs|apply-spec
