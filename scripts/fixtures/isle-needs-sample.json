@@ -1,0 +1,215 @@
+{
+ "ok": true,
+ "evaluatedAt": "2026-11-06T19:00:00+00:00",
+ "maxAgeS": 86400,
+ "clockSkewS": 300,
+ "isle": {
+  "configured": "https://api.polari.isle",
+  "reported": {
+   "devices": [
+    "econ-core",
+    "isle-core"
+   ],
+   "lastSeen": "2026-11-06T18:59:00+00:00"
+  },
+  "words": "configured: ISLE_CORE_API = https://api.polari.isle; reported: 2 devices (econ-core, isle-core), newest report 2026-11-06T18:59:00+00:00; 1 dated in the future (clock skew)"
+ },
+ "features": [
+  {
+   "key": "placement",
+   "title": "Module placement (which modules each instance runs)",
+   "layer": "polari",
+   "requiresIsle": false,
+   "state": "supported",
+   "observedAt": "",
+   "ageSeconds": null,
+   "evidence": [],
+   "words": "Polari-only: works with or without an isle",
+   "fallback": ""
+  },
+  {
+   "key": "dependencies",
+   "title": "Module dependencies and their providers",
+   "layer": "polari",
+   "requiresIsle": false,
+   "state": "supported",
+   "observedAt": "",
+   "ageSeconds": null,
+   "evidence": [],
+   "words": "Polari-only: works with or without an isle",
+   "fallback": ""
+  },
+  {
+   "key": "ownership",
+   "title": "Object ownership (class -> module -> instance -> database)",
+   "layer": "polari",
+   "requiresIsle": false,
+   "state": "supported",
+   "observedAt": "",
+   "ageSeconds": null,
+   "evidence": [],
+   "words": "Polari-only: works with or without an isle",
+   "fallback": ""
+  },
+  {
+   "key": "apps",
+   "title": "Polari Apps (module compositions)",
+   "layer": "polari",
+   "requiresIsle": false,
+   "state": "supported",
+   "observedAt": "",
+   "ageSeconds": null,
+   "evidence": [],
+   "words": "Polari-only: works with or without an isle",
+   "fallback": ""
+  },
+  {
+   "key": "engine-ladder",
+   "title": "Engine resolution (knob -> local -> binding row -> topology provider)",
+   "layer": "polari",
+   "requiresIsle": false,
+   "state": "supported",
+   "observedAt": "",
+   "ageSeconds": null,
+   "evidence": [],
+   "words": "Polari-only: works with or without an isle",
+   "fallback": ""
+  },
+  {
+   "key": "connections",
+   "title": "Service connections and their generated artifacts",
+   "layer": "polari",
+   "requiresIsle": false,
+   "state": "supported",
+   "observedAt": "",
+   "ageSeconds": null,
+   "evidence": [],
+   "words": "Polari-only: works with or without an isle",
+   "fallback": ""
+  },
+  {
+   "key": "drift",
+   "title": "Drift and reallocation suggestions",
+   "layer": "polari",
+   "requiresIsle": false,
+   "state": "supported",
+   "observedAt": "",
+   "ageSeconds": null,
+   "evidence": [],
+   "words": "Polari-only: works with or without an isle",
+   "fallback": ""
+  },
+  {
+   "key": "testing",
+   "title": "Testing over the topology",
+   "layer": "polari",
+   "requiresIsle": false,
+   "state": "supported",
+   "observedAt": "",
+   "ageSeconds": null,
+   "evidence": [],
+   "words": "Polari-only: works with or without an isle",
+   "fallback": ""
+  },
+  {
+   "key": "discovery",
+   "title": "Finding other devices and their Polari instances",
+   "layer": "isle",
+   "requiresIsle": true,
+   "state": "last-reported",
+   "observedAt": "2026-11-06T18:59:00+00:00",
+   "ageSeconds": 60,
+   "evidence": [
+    {
+     "source": "IsleDevice:isle-core",
+     "observedAt": "2026-11-06T18:59:00+00:00",
+     "words": "the isle reported isle-core",
+     "ageSeconds": 60
+    },
+    {
+     "source": "IsleDevice:econ-core",
+     "observedAt": "2099-01-01T00:00:00+00:00",
+     "words": "the isle reported econ-core",
+     "ageSeconds": -2276917200,
+     "clockSkew": true
+    }
+   ],
+   "words": "the isle reported isle-core; ignored 1 report dated in the future",
+   "fallback": ""
+  },
+  {
+   "key": "engine-auto-routing",
+   "title": "Routing to an engine on another device with no URL knob",
+   "layer": "isle",
+   "requiresIsle": true,
+   "state": "configured",
+   "observedAt": "",
+   "ageSeconds": null,
+   "evidence": [],
+   "words": "configured; no engine bound from the isle registry yet (see `pol engines list`)",
+   "fallback": "set the engine URL knob (e.g. BOARD_ENGINES_URL)"
+  },
+  {
+   "key": "trusted-names",
+   "title": "Trusted HTTPS names (<name>.isle) for cross-device calls",
+   "layer": "isle",
+   "requiresIsle": true,
+   "state": "configured",
+   "observedAt": "",
+   "ageSeconds": null,
+   "evidence": [],
+   "words": "configured; not yet evaluated (no observation recorded here); configured is not trusted",
+   "fallback": "your own TLS, or plain dev URLs"
+  },
+  {
+   "key": "device-resources",
+   "title": "Device resources observed by the isle agents",
+   "layer": "isle",
+   "requiresIsle": true,
+   "state": "configured",
+   "observedAt": "",
+   "ageSeconds": null,
+   "evidence": [],
+   "words": "configured; devices reported but no resources observed yet",
+   "fallback": "`pol topology observe` over ssh, or \"capacity unknown\""
+  },
+  {
+   "key": "run-placement",
+   "title": "Running a placement change (moving a module or instance)",
+   "layer": "isle",
+   "requiresIsle": true,
+   "state": "configured",
+   "observedAt": "",
+   "ageSeconds": null,
+   "evidence": [],
+   "words": "supported operation: `isle polari module move <m> --from A --to B` / `isle polari instance deploy` (the shared CLI; authorized by sudo over SSH, or pkexec from the Isle App); not evaluated as executable from here",
+   "fallback": "the suggestions plus `pol allocate` by hand"
+  },
+  {
+   "key": "network-view",
+   "title": "The Isle Topology tab (devices, addresses, routes)",
+   "layer": "isle",
+   "requiresIsle": true,
+   "state": "last-reported",
+   "observedAt": "2026-11-06T18:59:00+00:00",
+   "ageSeconds": 60,
+   "evidence": [
+    {
+     "source": "IsleDevice:isle-core",
+     "observedAt": "2026-11-06T18:59:00+00:00",
+     "words": "the isle reported isle-core",
+     "ageSeconds": 60
+    },
+    {
+     "source": "IsleDevice:econ-core",
+     "observedAt": "2099-01-01T00:00:00+00:00",
+     "words": "the isle reported econ-core",
+     "ageSeconds": -2276917200,
+     "clockSkew": true
+    }
+   ],
+   "words": "the isle reported isle-core; ignored 1 report dated in the future",
+   "fallback": ""
+  }
+ ]
+}

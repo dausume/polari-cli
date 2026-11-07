@@ -7,9 +7,29 @@
 # (pull/push), reports OBSERVED state (report), and shows drift
 # (diff). Nothing here deploys anything — apply/export-to-manifests
 # land in top-3/4 and refuse honestly below.
+#
+# cis arc (AI-Notes/plans/COHERENT_ISLE_WORK_SPLIT.md): every READ/SYNC/WRITE verb also works against ANY
+# backend by URL, `--api https://api.<name>.isle`, over lib/pol-api.sh (verified TLS, no -k), with `--json`
+# for the backend's body verbatim. Exit codes are the shared ones: 0 ok / 1 refused / 2 unreachable or usage.
+# Verbs that RUN things on this machine (apply, deploy, allocate) refuse with --api: placing an instance on
+# another device is an isle operation (`sudo isle polari instance deploy`, `isle polari module move`).
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/log.sh"
+source "$SCRIPT_DIR/lib/pol-api.sh"
+COMMAND=${1:-}; shift || true
+pol_api_flags "$@" || exit 2
+set -- "${ARGS[@]+"${ARGS[@]}"}"
+# With --api the pipelines below carry the transport's exit code (be_call | pretty): 1 refused, 2 unreachable.
+[ -n "${POL_API:-}" ] && set -o pipefail
+# --json: stdout carries only the backend's body; the human lines move to stderr.
+if [ "$JSON" = 1 ]; then
+    eval "_box() $(declare -f pol_box | tail -n +2)"
+    pol_box() { _box "$@" >&2; }
+    log_info() { echo -e "[INFO] $*" >&2; }
+    log_success() { echo -e "[ OK ] $*" >&2; }
+    log_warn() { echo -e "[WARN] $*" >&2; }
+fi
 
 NODES_FILE="$POL_SUITE_ROOT/pol-build/manifests/nodes.yml"
 PACKAGES_DIR="$POL_SUITE_ROOT/topologies"
@@ -44,6 +64,20 @@ ${BOLD}WRITE (rows only — deploys stay human-invoked)${NC}
                        Swarm/staging deploys read THIS — a hand-set
                        POLARI_MODULES is a warned override
 
+${BOLD}ISLE (what this backend has observed from an isle; tpl-4)${NC}
+  ${CYAN}isle-needs${NC}           which topology features need an isle, each one's
+                       state from timestamped observations (not-configured /
+                       configured / last-reported / stale / clock-skew) and
+                       its fallback; Polari-only features show 'supported'
+
+${BOLD}ANY BACKEND (cis)${NC}
+  ${CYAN}--api https://api.<name>.isle${NC}   run a READ/SYNC/WRITE/ISLE verb against
+                       that backend (verified TLS; else \$POL_API / \$POLARI_API)
+  ${CYAN}--json${NC}               print the backend's body verbatim
+  Exit: 0 ok · 1 refused (the backend said no) · 2 unreachable / usage.
+  apply / deploy / allocate refuse with --api: placement on another device
+  is an isle operation (sudo isle polari instance deploy / module move).
+
 ${BOLD}BUILD + RUN (top-3)${NC}
   ${CYAN}render${NC} [name]        topology rows -> pol-build/manifests/topology-<name>/
                        (bundle manifests + stacks + ordered actions), then
@@ -68,21 +102,46 @@ need_pyyaml() {
 # compose prf-backend OR swarm polari-node_backend container).
 source "$SCRIPT_DIR/lib/core-api.sh"
 be_call() {
-    core_api "$@" || die "no local backend container (compose prf-backend or swarm polari-node_backend) and POLARI_CORE_URL unset — start the node/suite or point POLARI_CORE_URL at the core"
+    if [ -n "${POL_API:-}" ]; then
+        local body=''
+        [ "$1" = "POST" ] && body=$(cat)
+        pol_api "$1" "$2" "$body"     # words on stderr; body on stdout even when refused; rc 0/1/2
+        return
+    fi
+    core_api "$@" || die "no local backend container (compose prf-backend or swarm polari-node_backend) and POLARI_CORE_URL unset — start the node/suite, point POLARI_CORE_URL at the core, or pass --api https://api.<name>.isle"
 }
 
-# pretty PYTHON_SNIPPET — feeds be_call output through a formatter.
-pretty() { python3 -c "import json,sys; d=json.load(sys.stdin); $1"; }
+# pretty PYTHON_SNIPPET — feeds be_call output through a formatter. No body = the transport already said why
+# (exit 2). --json prints the body verbatim. A body with {"ok": false} exits 1 after its words are printed.
+pretty() {
+    python3 -c "
+import json, sys
+raw = sys.stdin.read()
+if not raw.strip(): sys.exit(2)
+d = json.loads(raw)
+if sys.argv[1] == '1':
+    print(raw.rstrip('\n'))
+    sys.exit(1 if isinstance(d, dict) and d.get('ok') is False else 0)
+$1
+if isinstance(d, dict) and d.get('ok') is False: sys.exit(1)" "${JSON:-0}"
+}
 
 resolve_name() {  # $1 = explicit name or empty -> active topology
     if [ -n "$1" ]; then echo "$1"; return; fi
-    be_call GET /api/topology/summary | pretty "print(d.get('activeTopology',''))"
+    be_call GET /api/topology/summary | JSON=0 pretty "print(d.get('activeTopology',''))"
 }
 
-COMMAND=$1; shift || true
+# The verbs that act on THIS machine refuse against another backend (the CLI boundary, cis).
+local_only() {
+    if [ -n "${POL_API:-}" ]; then
+        log_error "pol topology $COMMAND runs on this machine and cannot target --api $POL_API: placing or moving an instance on another device is an isle operation (sudo isle polari instance deploy / isle polari module move)"
+        exit 2
+    fi
+}
+
 case "$COMMAND" in
     status)
-        pol_box "topology status"
+        [ "$JSON" = 1 ] || pol_box "topology status${POL_API:+ ($POL_API)}"
         be_call GET /api/topology/summary | pretty "
 print('  active topology:', d.get('activeTopology') or '(none)')
 for t in d.get('topologies', []):
@@ -185,7 +244,7 @@ for r in d['rows']:
     print(f\"      suggested: {r['suggestedCommand']}\")"
         # package-file drift: committed package vs live rows
         PKG="$PACKAGES_DIR/$NAME.topology.yml"
-        if [ -f "$PKG" ]; then
+        if [ -f "$PKG" ] && [ "$JSON" != 1 ]; then
             need_pyyaml
             be_call GET "/api/topology/export?name=$NAME" | python3 -c "
 import json, sys, yaml
@@ -264,6 +323,7 @@ print(f\"  {d['instance']} @ {d['topology']} — {d['count']} modules\")
 print('  assigned:', ', '.join(d['assigned']))
 for mod, why in sorted((d.get('addedByRequires') or {}).items()):
     print(f\"  + {mod} (required by {', '.join(why)})\")"
+        [ "$JSON" = 1 ] && exit 0
         # topo-closure-1: the backend's closure comes from the manifests
         # baked into ITS OWN (possibly old) image — a module assigned on a
         # newer checkout but absent there contributes no requires at all
@@ -284,6 +344,21 @@ print(','.join(d.get('assigned') or []) if d.get('ok') else '')")
 print(f\"  {d['edges']} edges checked, {len(d['changed'])} changed\" if d.get('ok') else '  failed: ' + str(d.get('error')))
 for c in d.get('changed', []):
     print(f\"    {c['edge']}: -> {c['to']['provider'] or '(none)'} [{c['to']['status']}]\")" ;;
+    isle-needs)
+        be_call GET /api/topology/isle-needs | pretty "
+isle = d.get('isle') or {}
+print('  isle:', isle.get('words') or '(no isle words)')
+print('  evaluated %s; evidence older than %s s is stale; reports more than %s s in the future are clock skew'
+      % (d.get('evaluatedAt'), d.get('maxAgeS'), d.get('clockSkewS')))
+for f in d.get('features', []):
+    if not f.get('requiresIsle'): continue
+    age = f.get('ageSeconds')
+    when = (' (%s, %s s ago)' % (f['observedAt'], age)) if f.get('observedAt') and age is not None else ''
+    print('  [%-14s] %s%s' % (f['state'], f['title'], when))
+    print('      ' + f.get('words', ''))
+    if f.get('fallback'): print('      without it: ' + f['fallback'])
+polari = [f['key'] for f in d.get('features', []) if not f.get('requiresIsle')]
+print('  Polari-only (supported with or without an isle): ' + ', '.join(polari))" ;;
     render)
         need_pyyaml
         NAME=$(resolve_name "$1"); [ -n "$NAME" ] || die "no active topology"
@@ -302,6 +377,7 @@ for c in d.get('changed', []):
         fi
         log_success "topology '$NAME' rendered -> pol-build/manifests/topology-$NAME/ (parity OK)" ;;
     apply)
+        local_only
         need_pyyaml
         PLAN=""; NAME_ARG=""
         for arg in "$@"; do
@@ -361,7 +437,8 @@ print(' '.join(out))" "$STACKS" 2>/dev/null || true)
         done
         log_success "topology '$NAME' applied — pol topology report && pol topology diff to verify" ;;
     deploy)
-        TARGET=$1; shift || true
+        local_only
+        TARGET=${1:-}; shift || true
         [ -n "$TARGET" ] || die "usage: pol topology deploy <package-file|name> [--plan]"
         if [ -f "$TARGET" ]; then PKG="$TARGET";
         elif [ -f "$PACKAGES_DIR/$TARGET.topology.yml" ]; then PKG="$PACKAGES_DIR/$TARGET.topology.yml";
@@ -380,6 +457,7 @@ print(' '.join(out))" "$STACKS" 2>/dev/null || true)
         # targeted-deploy path (top-4). Module -> instance rewrites the
         # assignment (rows only); instance -> machine moves the
         # instance, re-renders, and re-deploys THAT group.
+        local_only
         need_pyyaml
         WHAT=$1; WHERE=$2; GRACEFUL=""
         [ "${3:-}" = "--graceful" ] && GRACEFUL=1
@@ -524,5 +602,5 @@ print(' '.join(out))" "$STACKS")
                 die "cannot interpret 'pol allocate $WHAT $WHERE' — first arg must be a module or instance, second an instance or machine (pol topology graph)" ;;
         esac ;;
     help|-h|--help|"") show_help ;;
-    *) log_error "Unknown topology command: $COMMAND"; show_help; exit 1 ;;
+    *) log_error "Unknown topology command: $COMMAND"; show_help; exit 2 ;;
 esac

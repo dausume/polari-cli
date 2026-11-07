@@ -12,6 +12,7 @@ bad() { FAIL=$((FAIL+1)); printf '  MISS %s\n     expected: %s\n     got: %s\n' 
 has() { case "$3" in *"$2"*) ok "$1" ;; *) bad "$1" "…$2…" "$3" ;; esac; }
 hasnt() { case "$3" in *"$2"*) bad "$1" "no …$2…" "$3" ;; *) ok "$1" ;; esac; }
 eq()  { [ "$2" = "$3" ] && ok "$1" || bad "$1" "$2" "$3"; }
+no_insecure() { if grep -Eq '(^| )(-[a-zA-Z]*k[a-zA-Z]*|--insecure)( |$)' <<<"$2"; then bad "$1" "no -k / --insecure" "$2"; else ok "$1"; fi; }
 S="$T/suite"; mkdir -p "$S"; touch "$S/setup-polari-security.sh"
 BIN="$T/bin"; mkdir -p "$BIN"; LOG="$T/curl.log"; BODY="$T/curl-body"; CANNED="$T/canned"; CODE="$T/code"; CURLRC="$T/curlrc"
 cat > "$BIN/curl" <<SH
@@ -36,7 +37,7 @@ has "list: GET /api/islemesh/engines" "$API/api/islemesh/engines" "$(cat "$LOG")
 has "list: prints the engine, bound" "board-engines@board" "$out"
 has "list: an empty device prints as unknown, never a guessed host" "device unknown" "$out"
 has "list: HTTP/1.1 forced" "--http1.1" "$(cat "$LOG")"
-hasnt "list: TLS never bypassed" " -k " " $(cat "$LOG") "
+no_insecure "list: TLS never bypassed (-k, -sSk, --insecure)" "$(cat "$LOG")"
 out=$(pol list --api $API --json 2>&1); has "list --json: verbatim body" '"bound_to": "EngineProviderBinding:board"' "$out"
 
 set_reply '{"ok": true, "source": "refresh", "origin": "https://api.polari.isle", "seen": 2, "bound": [{"engine": "board-engines@board", "bound_to": "EngineProviderBinding:board", "url": "https://board-engines.isle", "device": "unknown"}], "unbound": [], "skipped_mock": ["fake@scope"], "retired": ["old@cad"], "words": "2 listed, 1 bound, 0 unbound, 1 mock skipped, 1 retired (https://api.polari.isle)"}'
