@@ -70,6 +70,13 @@ ${BOLD}ISLE (what this backend has observed from an isle; tpl-4)${NC}
                        configured / last-reported / stale / clock-skew) and
                        its fallback; Polari-only features show 'supported'
 
+${BOLD}PEERS (tpl-2: backends see each other without an isle)${NC}
+  ${CYAN}self${NC}                 what this backend publishes about itself (GET /api/topology/self)
+  ${CYAN}peers${NC} [pull]         its peers: from the agreement handshake and the configured
+                       list (POLARI_TOPOLOGY_PEERS / POLARI_TOPOLOGY_PEERS_FILE, for a
+                       pre-made configuration), each one's last pull, age and copies;
+                       'pull' pulls them now
+
 ${BOLD}EXAMPLE ROWS (tpl-6: the 2026-07-09 snapshot on a backend it does not describe)${NC}
   ${CYAN}example-rows${NC} [plan]   dry run: which rows retire / stay (and why) / move;
                        prints the planDigest. Changes nothing
@@ -377,6 +384,29 @@ for f in d.get('features', []):
     if f.get('fallback'): print('      without it: ' + f['fallback'])
 polari = [f['key'] for f in d.get('features', []) if not f.get('requiresIsle')]
 print('  Polari-only (supported with or without an isle): ' + ', '.join(polari))" ;;
+    self)
+        # tpl-2: what this backend publishes about itself to its peers
+        be_call GET /api/topology/self | pretty "
+print('  %s on %s, described %s' % (d.get('instance'), d.get('machine') or '(machine unknown)', d.get('describedAt')))
+for cls, rows in (d.get('rows') or {}).items():
+    if rows: print('    %-22s %s' % (cls, ', '.join(r['name'] for r in rows)))" ;;
+    peers)
+        # tpl-2: peers from the agreement handshake AND the configured list (POLARI_TOPOLOGY_PEERS / _FILE)
+        if [ "${1:-}" = "pull" ]; then
+            echo '{}' | be_call POST /api/topology/peers/pull | pretty "
+print('  ' + d.get('words', ''))
+for p in d.get('peers', []):
+    for c in p.get('conflicts') or []: print('    conflict %s:%s  %s' % (c['class'], c['name'], c['why']))
+for x in d.get('problems') or []: print('  PROBLEM ' + x)"
+        else
+            be_call GET /api/topology/peers | pretty "
+print('  ' + d.get('words', ''))
+for p in d.get('peers', []):
+    age = '' if p.get('ageSeconds') is None else ', %s s ago' % p['ageSeconds']
+    print('    %-16s %-14s %-36s from %s; %d copies%s' % (p.get('name'), p.get('state'), p.get('url'), '+'.join(p.get('sources') or []), p.get('copies', 0), age))
+    print('        ' + str(p.get('words', '')))
+print('  pulls every %s s (POLARI_TOPOLOGY_PEER_PULL_S; 0 = off); stale after %s s' % (d.get('pullEveryS'), d.get('maxAgeS')))"
+        fi ;;
     example-rows)
         # tpl-6: the 2026-07-09 example snapshot's rows — one backend operation, this is its CLI door
         SUB=${1:-plan}; shift || true

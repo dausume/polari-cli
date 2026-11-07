@@ -136,6 +136,23 @@ out=$(pol status --api ftp://x 2>&1); rc=$?; eq "--api must be http(s): exit 2" 
 out=$(pol status --api 2>&1); rc=$?; eq "--api with no URL: exit 2" 2 "$rc"
 out=$(pol bogus --api $API 2>&1); rc=$?; eq "unknown verb: exit 2" 2 "$rc"
 
+# ---- tpl-2 self / peers / peers pull
+reset; route /api/topology/self 200 '{"ok": true, "kind": "polari-topology-self", "instance": "polari-pol", "machine": "pol-core", "describedAt": "2026-11-07T04:00:00+00:00", "rows": {"InstanceDefinition": [{"name": "polari-pol"}], "ModuleAssignment": [{"name": "board@polari-pol"}]}}'
+out=$(pol self --api $API 2>&1); rc=$?
+eq  "self: exit 0" 0 "$rc"
+has "self: GET the door" "$API/api/topology/self" "$(cat "$LOG")"
+has "self: instance on machine" "polari-pol on pol-core" "$out"
+has "self: the rows by class" "board@polari-pol" "$out"
+reset; route /api/topology/peers 200 '{"ok": true, "maxAgeS": 86400, "pullEveryS": 300, "peers": [{"name": "polari", "url": "https://api.polari.isle", "sources": ["agreed", "configured-env"], "state": "ok", "ageSeconds": 12, "copies": 7, "words": "polari (https://api.polari.isle): 7 created"}], "words": "1 peer (polari ok)"}'
+out=$(pol peers --api $API 2>&1); rc=$?
+eq  "peers: exit 0" 0 "$rc"
+has "peers: the peer, its state, both sources, copies, age" "agreed+configured-env; 7 copies, 12 s ago" "$out"
+has "peers: the pull interval knob" "POLARI_TOPOLOGY_PEER_PULL_S" "$out"
+reset; route /api/topology/peers/pull 200 '{"ok": false, "peers": [{"conflicts": [{"class": "InstanceDefinition", "name": "electronics", "why": "a row here already has this name (different values); kept, the peer copy not written"}]}], "problems": [], "words": "1 peer pulled: unreachable"}'
+out=$(pol peers pull --api $API 2>&1); rc=$?
+eq  "peers pull: ok false -> exit 1" 1 "$rc"
+has "peers pull: POSTs the pull door" "/api/topology/peers/pull" "$(cat "$LOG")"
+
 # ---- tpl-6 example-rows: plan (GET) shows the digest; retire POSTs it; usage refusals
 reset; route /api/topology/example-rows 200 '{"ok": true, "instance": "polari", "retire": [{"class": "InstanceDefinition", "name": "prf-a"}], "keep": [{"class": "PolariNodeMachine", "name": "isle-core", "why": "a 2026-07-09 example row still referred to by kept InstanceDefinition:polari (machine_name)"}], "rehome": [{"class": "InstanceDefinition", "name": "polari", "from": "staging-a", "to": "polari"}], "planDigest": "abc123", "plannedAction": {"summary": "retire 1 unchanged July example row on polari", "appRun": "not built yet: the Isle App bulk run of planned actions is planned (Isle side); today run operatorCommand on the device"}, "words": "polari: retire 1 unchanged example row, keep 1, move 1 kept row onto topology polari"}'
 out=$(pol example-rows --api $API 2>&1); rc=$?
