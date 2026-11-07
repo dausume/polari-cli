@@ -75,6 +75,11 @@ err=$(run POL_TLS_INSECURE=1 -- bash -c "source '$HERE/lib/tls.sh'; pol_curl -s 
 eq  "timeout lib/pol-curl: exit 0 (not 127), curl invoked with the argv" "0|-s -X POST --data-binary @- --max-time 4 https://x.invalid/quiesce" "$rc|$(cat "$LOG")"
 : > "$LOG"; err=$(run POL_TLS_INSECURE=1 -- bash -c "source '$HERE/lib/tls.sh'; timeout 5 '$HERE/lib/pol-curl' -s https://x.invalid/p >/dev/null 2>&1" 2>&1)
 has "timeout lib/pol-curl with the bypass: -k" "-k -s https://x.invalid/p" "$(cat "$LOG")"; has "… and the run-level notice is on the CLI's stderr even with >/dev/null 2>&1 around the executor" "for this pol run" "$err"
+err=$(run POL_TLS_INSECURE=1 -- bash -c "source '$HERE/lib/tls.sh'; timeout 5 '$HERE/lib/pol-curl' -s https://x.invalid/p >/dev/null; timeout 5 '$HERE/lib/pol-curl' -s https://x.invalid/q >/dev/null" 2>&1)
+eq  "run notice said ONCE per run, not again by each child executable" 1 "$(grep -c 'for this pol run' <<<"$err")"; eq "… while each call still warns" 2 "$(grep -c 'verification OFF (POL_TLS_INSECURE=1): https' <<<"$err")"
+err=$(run POL_TLS_INSECURE=1 -- python3 -c "import sys; sys.path.insert(0,'$HERE/lib'); import pol_tls; pol_tls.tls_context('https://x/p'); pol_tls.tls_context('https://x/p'); pol_tls.tls_context('https://x/q')" 2>&1)
+eq  "py: once per distinct message per process (not per request)" 2 "$(grep -c 'OFF (POL_TLS_INSECURE=1): https' <<<"$err")"; eq "py started alone: says the run notice once" 1 "$(grep -c 'for this pol run' <<<"$err")"
+err=$(run POL_TLS_INSECURE=1 POL_TLS_ANNOUNCED=1 -- python3 -c "import sys; sys.path.insert(0,'$HERE/lib'); import pol_tls; pol_tls.tls_context('https://x/p')" 2>&1); eq "py under a pol run: no second run notice" 0 "$(grep -c 'for this pol run' <<<"$err")"
 has "swarm.sh quiesce uses the executable" 'timeout 30 "$SCRIPT_DIR/lib/pol-curl"' "$(cat "$HERE/swarm.sh")"
 # 2d. the python side (lib/pol_tls.py): the same two names, the alias, the precedence, the warning, the refusal
 PYL="$HERE/lib"

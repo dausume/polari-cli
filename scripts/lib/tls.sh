@@ -4,7 +4,7 @@
 #   POL_TLS_CA=<pem>     a PEM file to trust INSTEAD (self-signed / private deployments): curl --cacert. This is the
 #                        VERIFYING answer to a self-signed target; prefer it over the bypass.
 #   POL_TLS_INSECURE=1   an explicit, announced bypass for intended non-isle lightweight / dev settings: curl -k, plus
-#                        a [WARN] once when the CLI starts and on every call, written to the CLI's ORIGINAL stderr
+#                        a [WARN] once per run when the CLI starts and once per curl call, on the CLI's ORIGINAL stderr
 #                        (saved when this file is sourced), so a script's own `2>/dev/null` around one call never
 #                        hides it. A caller that discards the CLI's stderr as a whole discards the notice too.
 #   Both set             POL_TLS_CA wins (the safer explicit choice) and the ignored bypass is said once.
@@ -38,11 +38,15 @@ pol_tls_mode() {
 pol_tls_say() { printf '%s\n' "$*" >&"$POL_TLS_ERRFD" 2>/dev/null || printf '%s\n' "$*" >&2; }
 pol_tls_warn() { pol_tls_say "[WARN] TLS verification OFF (POL_TLS_INSECURE=1): ${1:-curl}"; }
 
-# said once per CLI process, at source time, whatever the call sites do with their stderr
-case "$(pol_tls_mode)" in
-    insecure) pol_tls_say "[WARN] TLS verification OFF for this pol run (POL_TLS_INSECURE=1): every HTTPS call below is unverified" ;;
-    cacert)   case "${POL_TLS_INSECURE:-}" in 1|true|yes|on) pol_tls_say "[WARN] POL_TLS_INSECURE ignored: POL_TLS_CA=$POL_TLS_CA is set and verification against it wins" ;; esac ;;
-esac
+# said once per CLI RUN, at source time, whatever the call sites do with their stderr; a child process the run starts
+# (lib/pol-curl under timeout, a python helper) inherits POL_TLS_ANNOUNCED and does not say it again
+if [ -z "${POL_TLS_ANNOUNCED:-}" ]; then
+    case "$(pol_tls_mode)" in
+        insecure) pol_tls_say "[WARN] TLS verification OFF for this pol run (POL_TLS_INSECURE=1): every HTTPS call below is unverified" ;;
+        cacert)   case "${POL_TLS_INSECURE:-}" in 1|true|yes|on) pol_tls_say "[WARN] POL_TLS_INSECURE ignored: POL_TLS_CA=$POL_TLS_CA is set and verification against it wins" ;; esac ;;
+    esac
+    export POL_TLS_ANNOUNCED=1
+fi
 
 # pol_tls_flags — exit 2 in words when POL_TLS_CA names a file that is not there (a wrong path must not fall through).
 pol_tls_flags() {

@@ -5,7 +5,9 @@
 
 Reads the same two names as the shell: POL_TLS_CA=<pem> -> a verifying context trusting that file (wins when both
 are set, and says that the bypass was ignored); POL_TLS_INSECURE=1 -> an unverified context plus the same [WARN]
-on stderr; neither -> None (the system trust store). POLARI_INSECURE=1 is the alias of the old name; a script's
+on stderr - said once per DISTINCT message per process (the url is part of it), not once per request, because callers
+build one context and reuse it; neither -> None (the system trust store). The shell side's once-per-run notice
+(POL_TLS_ANNOUNCED) is honoured: a python helper started by a pol script does not repeat it. POLARI_INSECURE=1 is the alias of the old name; a script's
 --insecure flag sets POL_TLS_INSECURE=1 before importing. This is the only place the CLI may build an unverified
 context (tls-selftest.sh audits the tree)."""
 import os
@@ -34,6 +36,9 @@ def tls_mode():
 
 def tls_context(url=''):
     mode = tls_mode()
+    if mode == 'insecure' and not os.environ.get('POL_TLS_ANNOUNCED'):
+        _say('[WARN] TLS verification OFF for this pol run (POL_TLS_INSECURE=1): every HTTPS call below is unverified')
+        os.environ['POL_TLS_ANNOUNCED'] = '1'
     if mode == 'cacert':
         ca = os.environ['POL_TLS_CA']
         if os.environ.get('POL_TLS_INSECURE', '') in _TRUE:
