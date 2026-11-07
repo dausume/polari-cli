@@ -168,7 +168,8 @@ Gotchas:
 default                 verified against the system trust store (an isle's root comes from `isle trust`)
 POL_TLS_CA=<pem>        trust THAT file instead (self-signed / private deployments: the VERIFYING choice) -> curl --cacert / ssl cafile
 POL_TLS_INSECURE=1      explicit bypass for intended non-isle lightweight settings -> curl -k / unverified ssl context,
-                        [WARN] once per run and on every call, on the CLI's original stderr (a call site's own 2>/dev/null
+                        [WARN] once per run and once per curl call (python: once per distinct URL per process, since a
+                        context is built once and reused), on the CLI's original stderr (a call site's own 2>/dev/null
                         does not hide it; a caller discarding the whole CLI stderr does)
 both set                POL_TLS_CA wins; the ignored bypass is said once
 POLARI_INSECURE=1, --insecure   aliases of POL_TLS_INSECURE=1 (one knob, one name)
