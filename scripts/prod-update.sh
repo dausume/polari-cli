@@ -38,6 +38,7 @@
 # Exit: 0 done / already at / dry run · 1 failed (rolled back where it could) · 2 usage · 3 refused · 4 verify failed, rolled back.
 PU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ "$(type -t log_info)" = function ] || source "$PU_DIR/lib/log.sh"
+source "$PU_DIR/lib/tls.sh"
 [ "$(type -t official_release_sources)" = function ] || source "$PU_DIR/lib/providers.sh"
 source "$PU_DIR/lib/prod-sources.sh"
 PU_GEN="$POL_SUITE_ROOT/.generated"; PU_UPDATES="$PU_GEN/updates"; PU_AGENT="$PU_DIR/prod-agent.sh"
@@ -77,7 +78,7 @@ elif "layers" in d: print("bytes", sum(int(l.get("size", 0)) for l in d["layers"
 pu_cert_fp() { [ -s "$PU_GEN/certs/edge/fullchain.pem" ] && sha256sum "$PU_GEN/certs/edge/fullchain.pem" | cut -c1-16 || echo none; }
 pu_health() {  # the pol prod status reading: /api/health through the proxy, with the answered domain's API name
     local dom; dom="$(sed -n 's/^POL_PROD_DOMAIN=//p' "$PU_GEN/prod-answers.env" 2>/dev/null | tail -1)"   # read-only, one key
-    curl -sk --max-time 10 ${dom:+-H "Host: api.prf.$dom"} https://127.0.0.1/api/health 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('phase'), '—', d.get('onlineCount'), '/', d.get('moduleCount'), 'modules online')" 2>/dev/null
+    pol_curl -s --max-time 10 ${dom:+--resolve "api.prf.$dom:443:127.0.0.1"} "https://${dom:+api.prf.$dom}${dom:-127.0.0.1}/api/health" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('phase'), '—', d.get('onlineCount'), '/', d.get('moduleCount'), 'modules online')" 2>/dev/null
 }
 
 pu_history() {

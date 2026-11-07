@@ -296,7 +296,7 @@ check_mesh_formed() {  # check_mesh_formed <needle: node ip or hostname>
 _curl_elapsed() {
     local url=$1 to=$2 t0 t1 rc
     t0=$(date +%s.%N)
-    curl -sk --max-time "$to" -o /dev/null "$url" >/dev/null 2>&1 && rc=0 || rc=$?
+    pol_curl -s --max-time "$to" -o /dev/null "$url" >/dev/null 2>&1 && rc=0 || rc=$?
     t1=$(date +%s.%N)
     if [ "$rc" = 0 ]; then
         python3 -c "print(f'{$t1-$t0:.2f} s ok')" 2>/dev/null || echo "ok"
@@ -587,7 +587,7 @@ print('\n'.join(n for n, v in d['nodes'].items() if v.get('ssh')))
                 IMG="prf-mariadb:staging"
                 KCSVC="polari-node_prf-keycloak"
                 TO_DB=$TO
-                api() { if [ "$1" = "POST" ]; then curl -sk -X POST -H 'Content-Type: application/json' --data-binary @- "$POLARI_CORE_URL$2"; else curl -sk "$POLARI_CORE_URL$2"; fi; }
+                api() { if [ "$1" = "POST" ]; then pol_curl -s -X POST -H 'Content-Type: application/json' --data-binary @- "$POLARI_CORE_URL$2"; else pol_curl -s "$POLARI_CORE_URL$2"; fi; }
                 db_stable() {
                     local st
                     st=$(docker service inspect "$1" --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}' 2>/dev/null || true)
@@ -712,7 +712,7 @@ for c in json.load(sys.stdin) or []:
                 IMG="prf-keycloak:staging"
                 DBSVC="polari-node_prf-mariadb"
                 TO_KC=$TO
-                api() { if [ "$1" = "POST" ]; then curl -sk -X POST -H 'Content-Type: application/json' --data-binary @- "$POLARI_CORE_URL$2"; else curl -sk "$POLARI_CORE_URL$2"; fi; }
+                api() { if [ "$1" = "POST" ]; then pol_curl -s -X POST -H 'Content-Type: application/json' --data-binary @- "$POLARI_CORE_URL$2"; else pol_curl -s "$POLARI_CORE_URL$2"; fi; }
                 kc_stable() {
                     local st
                     st=$(docker service inspect "$1" --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}' 2>/dev/null || true)
@@ -778,7 +778,7 @@ print('1' if any(m['kind'] == 'database-move' or m['subject'] == 'prf-mariadb'
                 # every existing token/session stays valid; a raw
                 # access token expires in ~60s, shorter than any
                 # move — comparing kids is the honest check).
-                PRE_KIDS=$(curl -sk --max-time 8 "$JWKS" | python3 -c "import json,sys; print(','.join(sorted(k['kid'] for k in json.load(sys.stdin).get('keys',[]))))" 2>/dev/null || true)
+                PRE_KIDS=$(pol_curl -s --max-time 8 "$JWKS" | python3 -c "import json,sys; print(','.join(sorted(k['kid'] for k in json.load(sys.stdin).get('keys',[]))))" 2>/dev/null || true)
                 mv_step service-update running
                 docker service update --update-order start-first \
                     --constraint-rm "node.labels.polari.machine==$FROM" \
@@ -796,7 +796,7 @@ print('1' if any(m['kind'] == 'database-move' or m['subject'] == 'prf-mariadb'
                 [ -n "$READY" ] || mv_fail "relocated keycloak never answered realm/JWKS on $TO_KC"
                 mv_step readiness done "task on $TO_KC; realm + JWKS answer through the proxy (issuer unchanged)"
                 mv_step verify running
-                POST_KIDS=$(curl -sk --max-time 8 "$JWKS" | python3 -c "import json,sys; print(','.join(sorted(k['kid'] for k in json.load(sys.stdin).get('keys',[]))))" 2>/dev/null || true)
+                POST_KIDS=$(pol_curl -s --max-time 8 "$JWKS" | python3 -c "import json,sys; print(','.join(sorted(k['kid'] for k in json.load(sys.stdin).get('keys',[]))))" 2>/dev/null || true)
                 if [ -n "$PRE_KIDS" ]; then
                     [ "$POST_KIDS" = "$PRE_KIDS" ] || mv_fail "SIGNING KEYS CHANGED across the move ($PRE_KIDS -> $POST_KIDS) — token continuity broken; did the DB move too?"
                     TOKOK="signing keys identical (kids unchanged) — existing tokens/sessions stay valid"
@@ -813,7 +813,7 @@ print('1' if any(m['kind'] == 'database-move' or m['subject'] == 'prf-mariadb'
             *) die "unknown service '$WHATSVC' (backend|file-store|keydb|keycloak|mariadb)" ;;
         esac
         api() { # method path [json-stdin]
-            if [ "$1" = "POST" ]; then curl -sk -X POST -H 'Content-Type: application/json' --data-binary @- "$POLARI_CORE_URL$2"; else curl -sk "$POLARI_CORE_URL$2"; fi
+            if [ "$1" = "POST" ]; then pol_curl -s -X POST -H 'Content-Type: application/json' --data-binary @- "$POLARI_CORE_URL$2"; else pol_curl -s "$POLARI_CORE_URL$2"; fi
         }
         # gm-safety guard: NEVER start a move while a service update
         # is converging — a raced move's gate gets wiped by the
@@ -878,7 +878,7 @@ for c in json.load(sys.stdin) or []:
         # the BACKEND gate is the upload gate — writes flow through
         # it. Idempotent per moveName -> a crashed move resumes.
         mv_step quiesce running
-        printf '{"reason":"%s relocation","moveName":"%s"}' "$SUBJECT" "$MOVE" | timeout 30 curl -sk -X POST -H 'Content-Type: application/json' --data-binary @- --max-time 25 "$POLARI_CORE_URL/api/quiesce" >/dev/null 2>&1 || true
+        printf '{"reason":"%s relocation","moveName":"%s"}' "$SUBJECT" "$MOVE" | timeout 30 "$SCRIPT_DIR/lib/pol-curl" -s -X POST -H 'Content-Type: application/json' --data-binary @- --max-time 25 "$POLARI_CORE_URL/api/quiesce" >/dev/null 2>&1 || true
         QOK=""
         for i in $(seq 1 720); do
             ST=$(api GET /api/quiesce/status | python3 -c "

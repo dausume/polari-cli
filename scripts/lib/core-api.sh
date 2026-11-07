@@ -21,6 +21,8 @@
 # nothing had ever run the CLI on an isle box. The pipeline's own in-guest
 # runner (polari-jenkins/isle/guest-selftests.sh) still cannot use this — `pol`
 # is not installed by polari-complete at all — but a PERSON on an isle can now.
+# shellcheck source=tls.sh
+source "$(dirname "${BASH_SOURCE[0]}")/tls.sh"
 core_backend_container() {
     docker ps --format '{{.Names}}' | grep -x prf-backend && return 0
     docker ps --format '{{.Names}}' | grep -x prf-isle-backend && return 0
@@ -34,9 +36,9 @@ core_api() {
     local method=$1 path=$2
     if [ -n "${POLARI_CORE_URL:-}" ]; then
         if [ "$method" = "POST" ]; then
-            curl -sk -X POST -H 'Content-Type: application/json' --data-binary @- "$POLARI_CORE_URL$path"
+            pol_curl -s -X POST -H 'Content-Type: application/json' --data-binary @- "$POLARI_CORE_URL$path"
         else
-            curl -sk "$POLARI_CORE_URL$path"
+            pol_curl -s "$POLARI_CORE_URL$path"
         fi
         return
     fi

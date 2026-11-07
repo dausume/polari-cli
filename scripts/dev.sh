@@ -32,6 +32,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUITE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/lib/log.sh" 2>/dev/null || { CYAN=""; NC=""; }
+source "$SCRIPT_DIR/lib/tls.sh"
 
 CONF="$HOME/.config/polari/isle-dev.env"
 [ -f "$CONF" ] && . "$CONF"
@@ -150,7 +151,7 @@ EOF
         echo "isle host:  $ISLE_USER@$ISLE_HOST"
         echo "registry:   $REGISTRY"
         echo "--- registry catalog ---"
-        curl -sk "https://$REGISTRY/v2/_catalog" 2>/dev/null | python3 -m json.tool 2>/dev/null \
+        pol_curl -s "https://$REGISTRY/v2/_catalog" 2>/dev/null | python3 -m json.tool 2>/dev/null \
             || echo "  (registry unreachable / not trusted — pol dev setup)"
         echo "--- prf-isle health (via the isle) ---"
         ssh -o ConnectTimeout=6 "$ISLE_USER@$ISLE_HOST" \

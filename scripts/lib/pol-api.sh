@@ -17,9 +17,12 @@
 #      its body still on stdout so --json callers can read it
 #   2  UNREACHABLE or usage — no backend answered (curl failed, no local container, bad URL)
 #
-# TLS is verified against the system trust store. There is NO -k here on purpose (the isle root
-# is installed by `isle trust`; a per-host exception or -k is never the accepted workflow).
+# TLS (ruling 2026-11-07, lib/tls.sh): verified against the system trust store by default; POL_TLS_CA=<pem> trusts
+# that file instead (the verifying answer to a self-signed target); POL_TLS_INSECURE=1 is the explicit, announced
+# bypass for non-isle lightweight settings. Never a silent -k.
 # HTTP/1.1 is forced: the isle proxies have shown HTTP/2 framing errors (item 15).
+# shellcheck source=tls.sh
+source "$(dirname "${BASH_SOURCE[0]}")/tls.sh"
 
 pol_api_base() { printf '%s' "${POL_API:-${POLARI_API:-}}"; }
 
@@ -47,11 +50,18 @@ pol_api() {
     tmp=$(mktemp)
     if [ -n "$base" ]; then
         case "$base" in http://*|https://*) ;; *) echo "[FAIL] --api must be an http(s) URL, got: $base" >&2; rm -f "$tmp"; return 2 ;; esac
+        # TLS (lib/tls.sh): verified by default; POL_TLS_CA -> --cacert; POL_TLS_INSECURE=1 -> -k, said here (to the
+        # CLI's original stderr) because curl's own stderr is captured below and only shown on failure.
+        local -a tls=(); mapfile -t tls < <(pol_tls_flags 2>/dev/null)
+        case "$(pol_tls_mode)" in
+            cacert)   [ -r "$POL_TLS_CA" ] || { echo "[FAIL] POL_TLS_CA=$POL_TLS_CA is not a readable PEM file" >&2; rm -f "$tmp"; return 2; } ;;
+            insecure) pol_tls_warn "$base$path" ;;
+        esac
         if [ "$method" = "POST" ] || [ "$method" = "PUT" ]; then
-            code=$(printf '%s' "${body:-{\}}" | curl -sS --http1.1 --max-time "${POL_API_TIMEOUT:-120}" -X "$method" \
+            code=$(printf '%s' "${body:-{\}}" | curl "${tls[@]}" -sS --http1.1 --max-time "${POL_API_TIMEOUT:-120}" -X "$method" \
                    -H 'Content-Type: application/json' --data-binary @- -o "$tmp" -w '%{http_code}' "$base$path" 2>"$tmp.err") || rc=$?
         else
-            code=$(curl -sS --http1.1 --max-time "${POL_API_TIMEOUT:-120}" -o "$tmp" -w '%{http_code}' "$base$path" 2>"$tmp.err") || rc=$?
+            code=$(curl "${tls[@]}" -sS --http1.1 --max-time "${POL_API_TIMEOUT:-120}" -o "$tmp" -w '%{http_code}' "$base$path" 2>"$tmp.err") || rc=$?
         fi
         if [ -n "${rc:-}" ]; then
             echo "[FAIL] $base unreachable: $(tr -d '\n' < "$tmp.err")" >&2; rm -f "$tmp" "$tmp.err"; return 2

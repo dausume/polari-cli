@@ -13,15 +13,16 @@
 #   pol iso ventoy /dev/sdX                                 make a stick a Ventoy stick (his decision D-P1) — erases it; needs sudo
 #   pol iso keys init|show                                  the core's outward ssh key: placed on every image built afterwards
 #   pol iso ssh <hash|hostname> [--jump host] [--port n] [-- cmd]   a session on a device the core built (the address it reported at first boot)
-# --from <core url> (default $POLARI_API or http://127.0.0.1:3300); --insecure for a self-signed home core.
+# --from <core url> (default $POLARI_API or http://127.0.0.1:3300); --insecure = POL_TLS_INSECURE=1 (lib/tls.sh; POL_TLS_CA=<pem> is the verifying choice).
 set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CMD=${1:-help}; shift || true
-FROM="${POLARI_API:-http://127.0.0.1:3300}"; INSECURE="${POLARI_INSECURE:-0}"; ARGS=()
-while [ $# -gt 0 ]; do case "$1" in --from|--api) FROM="$2"; shift 2 ;; --insecure) INSECURE=1; shift ;; *) ARGS+=("$1"); shift ;; esac; done
+source "$SCRIPT_DIR/lib/tls.sh"
+FROM="${POLARI_API:-http://127.0.0.1:3300}"; ARGS=()
+while [ $# -gt 0 ]; do case "$1" in --from|--api) FROM="$2"; shift 2 ;; --insecure) export POL_TLS_INSECURE=1; shift ;; *) ARGS+=("$1"); shift ;; esac; done
 set -- "${ARGS[@]+"${ARGS[@]}"}"
 FROM=${FROM%/}
-py() { POLARI_ISO_FROM="$FROM" POLARI_INSECURE="$INSECURE" python3 "$SCRIPT_DIR/lib/iso_cli.py" "$@"; }
+py() { POLARI_ISO_FROM="$FROM" python3 "$SCRIPT_DIR/lib/iso_cli.py" "$@"; }
 case "$CMD" in
     kit)         py kit "$@" ;;
     probe)       py probe "$@" ;;

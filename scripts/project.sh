@@ -19,6 +19,7 @@
 set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/log.sh"
+source "$SCRIPT_DIR/lib/tls.sh"
 VERB="${1:-help}"; shift || true
 DIR="${POL_CWD:-$(pwd)}"   # the caller's directory (the pol launcher runs scripts from the suite root)
 CFG="$DIR/.polari/project.json"
@@ -42,7 +43,7 @@ fi
 in_image(){ # run a python module inside the backend image with the project mounted AS modules/<id>
     docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e PYTHONPATH=/app:/app/modules "${TOOLS_MOUNT[@]}" -v "$DIR:/app/modules/$ID" -w /app "$@" ; }
 requires(){ python3 -c "import json; m=json.load(open('$DIR/polari-app.json')); print(','.join(m.get('requires',{}).get('modules',[])))" 2>/dev/null || true; }
-curl_api(){ curl -sk --max-time 120 "$@"; }
+curl_api(){ pol_curl -s --max-time 120 "$@"; }
 case "$VERB" in
     init)
         NEW="$(echo ${POS:-} | awk '{print $1}')"

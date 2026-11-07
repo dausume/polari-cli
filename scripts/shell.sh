@@ -9,6 +9,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/log.sh
 source "$SCRIPT_DIR/lib/log.sh"
+source "$SCRIPT_DIR/lib/tls.sh"
 # shellcheck source=lib/export-publish.sh
 source "$SCRIPT_DIR/lib/export-publish.sh"
 
@@ -54,7 +55,7 @@ bearer() {
     kc_host="${API_BASE/api.prf./auth.prf.}"
     # The auth vhost lives beside the api vhost on the same proxy.
     kc_host="${kc_host/api./auth.}"
-    curl -sk -X POST "$kc_host/realms/Polari/protocol/openid-connect/token" \
+    pol_curl -s -X POST "$kc_host/realms/Polari/protocol/openid-connect/token" \
         -d "grant_type=client_credentials&client_id=polari-backend&client_secret=$secret" \
         | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("access_token") or exit("no token: " + json.dumps(d)))'
 }
@@ -69,14 +70,14 @@ $1"
 CMD=${1:-help}; shift || true
 case "$CMD" in
     catalog)
-        curl -sk "$API_BASE/api/appstore" | pretty "
+        pol_curl -s "$API_BASE/api/appstore" | pretty "
 if not d.get('ok'): exit(json.dumps(d))
 for s in d['shells']:
     plats = ', '.join(f\"{k}{'' if v['available'] else ' (unavailable)'}\" for k, v in s['platforms'].items())
     print(f\"{s['name']} [{s['scope']}] — {plats}\")
 print(f\"apps covered: {sum(1 for a in d['apps'] if a['installable'])}/{len(d['apps'])}\")" ;;
     identity)
-        curl -sk "$API_BASE/api/appstore/identity" | python3 -m json.tool ;;
+        pol_curl -s "$API_BASE/api/appstore/identity" | python3 -m json.tool ;;
     build)
         require_repo
         (cd "$SHELL_REPO" && ./gradlew build srcDistTar)
@@ -138,7 +139,7 @@ print(f\"apps covered: {sum(1 for a in d['apps'] if a['installable'])}/{len(d['a
         docker exec "$FC" sh -c 'curl -sf -F "file=@/tmp/pol-shell-artifact" "http://localhost:9001/buckets/shell-artifacts/'"$KEY"'" >/dev/null && rm -f /tmp/pol-shell-artifact' || die "upload into the file store failed (prf-file-store filer :9001)"
         SHA=$(sha256sum "$FILE" | cut -d' ' -f1)
         TOK=$(bearer)
-        curl -sk -X POST "$API_BASE/api/appstore/artifacts" \
+        pol_curl -s -X POST "$API_BASE/api/appstore/artifacts" \
             -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
             -d "{\"action\":\"commit\",\"shellName\":\"polari-instance-shell\",\"platform\":\"$PLATFORM\",\"version\":\"$VERSION\",\"objectKey\":\"$KEY\",\"sha256\":\"$SHA\"}" \
             | pretty "
@@ -148,7 +149,7 @@ print(f\"published {d['artifact']} ({d['sizeBytes']} bytes)\")" ;;
         SHELL_NAME=${1:?shell name required (see pol shell catalog)}
         TTL=${2:-900}
         TOK=$(bearer)
-        curl -sk -X POST "$API_BASE/api/appstore/$SHELL_NAME/enroll" \
+        pol_curl -s -X POST "$API_BASE/api/appstore/$SHELL_NAME/enroll" \
             -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
             -d "{\"ttlSeconds\": $TTL, \"deviceLabel\": \"pol-cli\"}" \
             | pretty "

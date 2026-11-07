@@ -27,7 +27,7 @@ import ssl
 import urllib.error
 import urllib.request
 
-INSECURE = False   # --insecure / POLARI_INSECURE=1: accept a self-signed core (a home stack) — never the default
+from pol_tls import tls_context   # lib/pol_tls.py: --insecure / POLARI_INSECURE=1 -> POL_TLS_INSECURE=1 (announced); POL_TLS_CA=<pem> verifies
 DISTRIBUTION_POINT = os.environ.get('POLARI_DISTRIBUTION_POINT', 'https://polari-systems.org')   # where the platform deb always is
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -95,7 +95,7 @@ def cmd_list():
 
 
 def _ctx():
-    return ssl._create_unverified_context() if INSECURE else None
+    return tls_context()
 
 
 def call(base, method, path, timeout=600):
@@ -339,8 +339,6 @@ def cmd_watch(args):
 
 def main(argv):
     sub = argv[0] if argv else 'list'
-    global INSECURE
-    INSECURE = os.environ.get('POLARI_INSECURE') == '1'
     if sub == 'list':
         return cmd_list()
     if sub == 'write':
@@ -357,7 +355,7 @@ def main(argv):
             elif rest[0] in ('--from', '--api') and len(rest) > 1: base = rest[1]; rest = rest[2:]
             elif rest[0] == '--platform' and len(rest) > 1: platform = rest[1]; rest = rest[2:]
             elif rest[0] == '--platform-from' and len(rest) > 1: platform_from = rest[1]; rest = rest[2:]
-            elif rest[0] == '--insecure': INSECURE = True; rest = rest[1:]
+            elif rest[0] == '--insecure': os.environ['POL_TLS_INSECURE'] = '1'; rest = rest[1:]
             else: rest = rest[1:]
         if platform not in ('auto', 'yes', 'no'):
             sys.exit('--platform takes auto | yes | no')

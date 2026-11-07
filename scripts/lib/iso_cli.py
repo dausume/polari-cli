@@ -17,7 +17,8 @@ import urllib.request
 import zipfile
 
 B = os.environ.get('POLARI_ISO_FROM', 'http://127.0.0.1:3300').rstrip('/')
-CTX = ssl._create_unverified_context() if os.environ.get('POLARI_INSECURE') == '1' else None
+from pol_tls import tls_context   # lib/pol_tls.py: verified | POL_TLS_CA | announced POL_TLS_INSECURE (POLARI_INSECURE is the alias)
+CTX = tls_context(B)
 
 
 def call(method, path, body=None, timeout=120):

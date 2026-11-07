@@ -60,6 +60,7 @@
 set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/log.sh"
+source "$SCRIPT_DIR/lib/tls.sh"
 source "$SCRIPT_DIR/lib/providers.sh"
 source "$SCRIPT_DIR/lib/vault.sh"
 source "$SCRIPT_DIR/lib/prod-forge.sh"   # frg-2: the forge as a stack service (POL_PROD_FORGE)
@@ -1162,9 +1163,9 @@ do_status() {
     local ip r; ip=$(public_ip); for n in $(names "${POL_PROD_DOMAIN:-x}"); do r=$(resolve "$n" || true); printf "  dns          %-32s %s%s\n" "$n" "${r:-unresolved}" "$([ -n "$ip" ] && [ "$r" = "$ip" ] && echo "  ✓ exposure address ($(exposure_source))")"; done
     forge_status_rows
     echo "  installers   $(ls "$GEN"/debs/*.deb 2>/dev/null | wc -l) staged (https://${POL_PROD_DOMAIN:-…}/downloads)   apt tree: $([ -d "$GEN/apt/dists" ] && echo present || echo 'not published')"
-    local h; h=$(curl -sk --max-time 5 -H "Host: api.prf.${POL_PROD_DOMAIN:-x}" https://127.0.0.1/api/health 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('phase'), '—', d.get('onlineCount'), '/', d.get('moduleCount'), 'modules online')" 2>/dev/null || echo "not answering yet")
+    local h; h=$(pol_curl -s --max-time 5 --resolve "api.prf.${POL_PROD_DOMAIN:-x}:443:127.0.0.1" "https://api.prf.${POL_PROD_DOMAIN:-x}/api/health" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('phase'), '—', d.get('onlineCount'), '/', d.get('moduleCount'), 'modules online')" 2>/dev/null || echo "not answering yet")
     echo "  backend      $h"
-    local t; t=$(curl -sk --max-time 5 -H "Host: api.prf.${POL_PROD_DOMAIN:-x}" "https://127.0.0.1/api/terms/active" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print('terms gate on' if d.get('pending') else 'no terms gate', '· demo bar', 'on' if d.get('show_bar') else 'off')" 2>/dev/null || echo "-")
+    local t; t=$(pol_curl -s --max-time 5 --resolve "api.prf.${POL_PROD_DOMAIN:-x}:443:127.0.0.1" "https://api.prf.${POL_PROD_DOMAIN:-x}/api/terms/active" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print('terms gate on' if d.get('pending') else 'no terms gate', '· demo bar', 'on' if d.get('show_bar') else 'off')" 2>/dev/null || echo "-")
     echo "  terms        $t"
     echo "  vault        $(vault_status | head -1 | sed 's/^vault: //')$([ -n "$POL_PROD_STASH" ] && echo " · provider stash policy: $POL_PROD_STASH")"
     local nxt=""; edge_cert_is_public || nxt="pol prod cert (public certificate) · "; [ "$(ls "$GEN"/debs/*.deb 2>/dev/null | wc -l)" -gt 0 ] || nxt="${nxt}pol prod debs build · "
