@@ -74,7 +74,10 @@ ${BOLD}EXAMPLE ROWS (tpl-6: the 2026-07-09 snapshot on a backend it does not des
   ${CYAN}example-rows${NC} [plan]   dry run: which rows retire / stay (and why) / move;
                        prints the planDigest. Changes nothing
   ${CYAN}example-rows retire --digest <d>${NC}   apply exactly that reviewed plan;
-                       the backend writes a verified backup first
+                       the backend writes a verified backup first. Host operator
+                       only: run it ON the backend's device (no --api), via ssh,
+                       or from the Isle App's planned actions; --api from elsewhere
+                       is refused (403) unless you are a Polari administrator
   ${CYAN}example-rows backups${NC}  the backups by name
   ${CYAN}example-rows restore <name>${NC}   put the rows back from a backup
 
@@ -384,9 +387,12 @@ for r in d.get('retire', []): print('    retire  %-22s %s' % (r['class'], r['nam
 for r in d.get('keep', []): print('    keep    %-22s %-34s %s' % (r['class'], r['name'], r['why']))
 for r in d.get('rehome', []): print('    move    %-22s %-34s topology %s -> %s' % (r['class'], r['name'], r['from'], r['to']))
 if d.get('retire') or d.get('rehome'):
+    pa = d.get('plannedAction') or {}
     print('  planDigest ' + d['planDigest'])
-    print('  nothing has changed. To apply exactly this plan (a backup is written first):')
-    print('    pol topology example-rows retire --digest ' + d['planDigest'] + ' [--api URL]')" ;;
+    if pa: print('  planned action: ' + pa.get('summary', ''))
+    print('  nothing has changed. Running it is the host operator\'s (a backup is written first):')
+    print('    on the backend\'s device, no --api:  pol topology example-rows retire --digest ' + d['planDigest'])
+    print('    or the Isle App\'s planned-actions run (one sudo/pkexec for the batch)')" ;;
             retire)
                 DIGEST=""
                 [ "${1:-}" = "--digest" ] && DIGEST=${2:-}

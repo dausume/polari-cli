@@ -147,6 +147,7 @@ has "example-rows plan: keep lines with the reason" "referred to by kept Instanc
 has "example-rows plan: move lines" "topology staging-a -> polari" "$out"
 has "example-rows plan: the exact apply command with the digest" "example-rows retire --digest abc123" "$out"
 has "example-rows plan: says nothing changed" "nothing has changed" "$out"
+has "example-rows plan: names the host-operator path, no --api" "on the backend's device, no --api" "$out"
 reset; route /api/topology/example-rows/retire 200 '{"ok": true, "retired": [], "rehomed": [], "backup": {"file": "retire-example-20261107T040000Z.json", "dir": "/data/topology-backups", "sha256": "dd", "bytes": 10}, "problems": [], "words": "polari: retired 1 example row"}'
 out=$(pol example-rows retire --digest abc123 --api $API 2>&1); rc=$?
 eq  "example-rows retire: exit 0" 0 "$rc"
@@ -155,6 +156,10 @@ has "example-rows retire: prints the backup" "/data/topology-backups/retire-exam
 reset; route /api/topology/example-rows/retire 409 '{"ok": false, "words": "refused: the plan changed since it was reviewed"}'
 out=$(pol example-rows retire --digest old --api $API 2>&1); rc=$?
 eq  "example-rows retire, stale digest (409): exit 1" 1 "$rc"
+reset; route /api/topology/example-rows/retire 403 '{"ok": false, "denied": true, "words": "refused: this door changes rows, and runs only for the host operator or a Polari administrator (caller 172.18.0.5). Nothing was written, backed up or deleted."}'
+out=$(pol example-rows retire --digest abc123 --api $API 2>&1); rc=$?
+eq  "example-rows retire from elsewhere (403 denied): exit 1" 1 "$rc"
+has "example-rows retire 403: the gate's words reach the person" "runs only for the host operator" "$out"
 reset
 out=$(pol example-rows retire --api $API 2>&1); rc=$?
 eq  "example-rows retire without --digest: exit 2, no call" "2:" "$rc:$(cat "$LOG")"
