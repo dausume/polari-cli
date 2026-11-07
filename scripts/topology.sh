@@ -75,9 +75,10 @@ ${BOLD}EXAMPLE ROWS (tpl-6: the 2026-07-09 snapshot on a backend it does not des
                        prints the planDigest. Changes nothing
   ${CYAN}example-rows retire --digest <d>${NC}   apply exactly that reviewed plan;
                        the backend writes a verified backup first. Host operator
-                       only: run it ON the backend's device (no --api), via ssh,
-                       or from the Isle App's planned actions; --api from elsewhere
-                       is refused (403) unless you are a Polari administrator
+                       only: run it ON the backend's device (no --api) or via ssh
+                       (an Isle App bulk run of planned actions is planned, not
+                       built yet); --api from elsewhere is refused (403) unless
+                       you are a Polari administrator
   ${CYAN}example-rows backups${NC}  the backups by name
   ${CYAN}example-rows restore <name>${NC}   put the rows back from a backup
 
@@ -392,7 +393,7 @@ if d.get('retire') or d.get('rehome'):
     if pa: print('  planned action: ' + pa.get('summary', ''))
     print('  nothing has changed. Running it is the host operator\'s (a backup is written first):')
     print('    on the backend\'s device, no --api:  pol topology example-rows retire --digest ' + d['planDigest'])
-    print('    or the Isle App\'s planned-actions run (one sudo/pkexec for the batch)')" ;;
+    if pa: print('  (' + pa.get('appRun', '') + ')')" ;;
             retire)
                 DIGEST=""
                 [ "${1:-}" = "--digest" ] && DIGEST=${2:-}

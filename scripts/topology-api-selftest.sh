@@ -137,7 +137,7 @@ out=$(pol status --api 2>&1); rc=$?; eq "--api with no URL: exit 2" 2 "$rc"
 out=$(pol bogus --api $API 2>&1); rc=$?; eq "unknown verb: exit 2" 2 "$rc"
 
 # ---- tpl-6 example-rows: plan (GET) shows the digest; retire POSTs it; usage refusals
-reset; route /api/topology/example-rows 200 '{"ok": true, "instance": "polari", "retire": [{"class": "InstanceDefinition", "name": "prf-a"}], "keep": [{"class": "PolariNodeMachine", "name": "isle-core", "why": "a 2026-07-09 example row still referred to by kept InstanceDefinition:polari (machine_name)"}], "rehome": [{"class": "InstanceDefinition", "name": "polari", "from": "staging-a", "to": "polari"}], "planDigest": "abc123", "words": "polari: retire 1 unchanged example row, keep 1, move 1 kept row onto topology polari"}'
+reset; route /api/topology/example-rows 200 '{"ok": true, "instance": "polari", "retire": [{"class": "InstanceDefinition", "name": "prf-a"}], "keep": [{"class": "PolariNodeMachine", "name": "isle-core", "why": "a 2026-07-09 example row still referred to by kept InstanceDefinition:polari (machine_name)"}], "rehome": [{"class": "InstanceDefinition", "name": "polari", "from": "staging-a", "to": "polari"}], "planDigest": "abc123", "plannedAction": {"summary": "retire 1 unchanged July example row on polari", "appRun": "not built yet: the Isle App bulk run of planned actions is planned (Isle side); today run operatorCommand on the device"}, "words": "polari: retire 1 unchanged example row, keep 1, move 1 kept row onto topology polari"}'
 out=$(pol example-rows --api $API 2>&1); rc=$?
 eq  "example-rows plan: exit 0" 0 "$rc"
 has "example-rows plan: GET the door" "$API/api/topology/example-rows" "$(cat "$LOG")"
@@ -148,6 +148,9 @@ has "example-rows plan: move lines" "topology staging-a -> polari" "$out"
 has "example-rows plan: the exact apply command with the digest" "example-rows retire --digest abc123" "$out"
 has "example-rows plan: says nothing changed" "nothing has changed" "$out"
 has "example-rows plan: names the host-operator path, no --api" "on the backend's device, no --api" "$out"
+has "example-rows plan: prints the planned action summary" "planned action: retire 1 unchanged July example row" "$out"
+has "example-rows plan: says the Isle App run is not built yet" "not built yet" "$out"
+hasnt "example-rows plan: never presents the App run as existing" "planned-actions run (one sudo" "$out"
 reset; route /api/topology/example-rows/retire 200 '{"ok": true, "retired": [], "rehomed": [], "backup": {"file": "retire-example-20261107T040000Z.json", "dir": "/data/topology-backups", "sha256": "dd", "bytes": 10}, "problems": [], "words": "polari: retired 1 example row"}'
 out=$(pol example-rows retire --digest abc123 --api $API 2>&1); rc=$?
 eq  "example-rows retire: exit 0" 0 "$rc"
