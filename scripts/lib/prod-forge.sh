@@ -22,6 +22,8 @@
 # .generated/forge/ and seeded into the volume before `docker stack deploy`; the admin user and
 # the admin token (→ vault forge ADMIN_TOKEN) after it; the re-measure gate; status + verify rows.
 
+# shellcheck source=tls.sh
+source "$(dirname "${BASH_SOURCE[0]}")/tls.sh"   # pol_curl: verified TLS by default, POL_TLS_CA / POL_TLS_INSECURE knobs
 FORGE_VOL=polari_forge_data
 FORGE_KEYS="SECRET_KEY INTERNAL_TOKEN JWT_SECRET LFS_JWT_SECRET ADMIN_PASSWORD"
 FORGE_LIMIT_MIB=512
@@ -192,7 +194,7 @@ try: d=json.load(sys.stdin)
 except Exception: d=[]
 print(len(d), sum(1 for r in d if r.get(\"mirror\")))")"; [ "${c:-0}" -gt 0 ] || break; h=$((h+m)); p=$((p+1)); done
         echo "Forgejo ${v:-?} · held $h repos"' 2>/dev/null || true)"
-    key="$(curl -sk --max-time 5 --resolve "apt.$D:443:127.0.0.1" "https://apt.$D/repository.key" 2>/dev/null | head -n1)"
+    key="$(pol_curl -s --max-time 5 --resolve "apt.$D:443:127.0.0.1" "https://apt.$D/repository.key" 2>/dev/null | head -n1)"
     case "$key" in *"BEGIN PGP PUBLIC KEY BLOCK"*) key="repository.key answers (PGP block)" ;; "") key="repository.key: no answer" ;; *) key="repository.key: not a PGP block ($(printf '%s' "$key" | cut -c1-40))" ;; esac
     echo "  forge        ${reps:-not deployed}  ${info:-not answering}  ·  apt.$D: $key"
 }

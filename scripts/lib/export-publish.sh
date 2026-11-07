@@ -12,6 +12,8 @@
 # {ok, export:{name, form, download_url, tar_sha256}}. A 404 means the
 # door is not deployed yet: say so and return 1. Only the file and
 # those fields are sent — no hostname, user or path.
+# shellcheck source=tls.sh
+source "$(dirname "${BASH_SOURCE[0]}")/tls.sh"   # pol_curl: verified TLS by default, POL_TLS_CA / POL_TLS_INSECURE knobs
 export_publish() {
     local file="${1:?file}" form="${2:?form}" solution="${3:-uno-light}"
     local api="${POLARI_API:-${POLARI_CORE_URL:-https://api.prf.$(lan_ip).nip.io}}"
@@ -23,7 +25,7 @@ export_publish() {
     sha=$(sha256sum "$file" | cut -d' ' -f1)
     if declare -F bearer >/dev/null 2>&1; then tok=$(bearer 2>/dev/null || true); fi
     body=$(mktemp)
-    code=$(curl -sk -o "$body" -w '%{http_code}' -X POST \
+    code=$(pol_curl -s -o "$body" -w '%{http_code}' -X POST \
         ${tok:+-H "Authorization: Bearer $tok"} \
         -F "solution=$solution" -F "form=$form" -F "sha256=$sha" \
         -F "file=@$file" "$api/api/firmware/exports/upload") || code=000

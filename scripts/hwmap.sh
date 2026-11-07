@@ -8,11 +8,12 @@
 set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/log.sh"
+source "$SCRIPT_DIR/lib/tls.sh"
 FW="$(cd "$SCRIPT_DIR/../.." && pwd)/polari-rf-node/polari-framework"
 API="${POLARI_API:-https://api.polari.isle}"; DEV=""; APP=""
 VERB="${1:-help}"; shift || true
 while [ $# -gt 0 ]; do case "$1" in --api) API="$2"; shift 2 ;; --device) DEV="$2"; shift 2 ;; --app) APP="$2"; shift 2 ;; *) shift ;; esac; done
-CURL="curl -sk --max-time 30 --resolve api.polari.isle:443:127.0.0.1"
+CURL="pol_curl -s --max-time 30 --resolve api.polari.isle:443:127.0.0.1"
 scan(){ (cd "$FW" && PYTHONPATH=.:modules python3 -m hwmap.custom.scanner); }
 case "$VERB" in
     scan) scan ;;

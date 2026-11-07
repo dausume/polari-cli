@@ -11,6 +11,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/log.sh
 source "$SCRIPT_DIR/lib/log.sh"
+source "$SCRIPT_DIR/lib/tls.sh"
 # shellcheck source=lib/export-publish.sh
 source "$SCRIPT_DIR/lib/export-publish.sh"
 
@@ -56,9 +57,9 @@ be_call() {
     local method=$1 path=$2
     if [ -n "${POLARI_CORE_URL:-}" ]; then
         if [ "$method" = "POST" ]; then
-            curl -sk -X POST -H 'Content-Type: application/json' --data-binary @- "$POLARI_CORE_URL$path"
+            pol_curl -s -X POST -H 'Content-Type: application/json' --data-binary @- "$POLARI_CORE_URL$path"
         else
-            curl -sk "$POLARI_CORE_URL$path"
+            pol_curl -s "$POLARI_CORE_URL$path"
         fi
     else
         docker ps --format '{{.Names}}' | grep -qx prf-backend \
@@ -91,7 +92,7 @@ bearer() {
     secret=$(grep '^KEYCLOAK_POLARI_BACKEND_CLIENT_SECRET' "$kc_env" | cut -d= -f2)
     kc_host="${api_base/api.prf./auth.prf.}"
     kc_host="${kc_host/api./auth.}"
-    curl -sk -X POST "$kc_host/realms/Polari/protocol/openid-connect/token" \
+    pol_curl -s -X POST "$kc_host/realms/Polari/protocol/openid-connect/token" \
         -d "grant_type=client_credentials&client_id=polari-backend&client_secret=$secret" \
         | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("access_token") or exit("no token: " + json.dumps(d)))'
 }
@@ -216,7 +217,7 @@ print(f\"  next (human-run): {d['suggestedCommand']}\")" ;;
         BUILDER="$POL_SUITE_ROOT/polari-app-shell/shells/build-launcher-deb.sh"
         [ -f "$BUILDER" ] || die "no $BUILDER — is polari-app-shell checked out?"
         TOK=$(bearer)
-        CONV=$(curl -sk -X POST "$API_BASE/api/appstore/shell-from-app" \
+        CONV=$(pol_curl -s -X POST "$API_BASE/api/appstore/shell-from-app" \
             -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
             -d "{\"appName\": \"$APP\"}")
         echo "$CONV" | pretty "
@@ -228,7 +229,7 @@ print(('created' if d['created'] else 'reusing')
         SHELL_NAME=$(echo "$CONV" | pretty "print(d['shell'])")
         REG=$(mktemp --suffix=.json)
         trap 'rm -f "$REG"' EXIT
-        curl -sk "$API_BASE/api/appstore/$SHELL_NAME/registration?download=1" -o "$REG"
+        pol_curl -s "$API_BASE/api/appstore/$SHELL_NAME/registration?download=1" -o "$REG"
         python3 - "$REG" <<'PYEOF' || die "registration fetch failed (not a v1 document)"
 import json, sys
 doc = json.load(open(sys.argv[1]))

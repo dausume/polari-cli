@@ -162,3 +162,11 @@ Gotchas:
 - Standalone node and combined suite share container names — run one.
 - Combined staging first `up`: prf-backend healthcheck can flap on a cold
   seed and block pol-proxy — re-run `pol suite up` once it's healthy.
+
+## TLS (every `pol` curl call; lib/tls.sh)
+```
+default                 verified against the system trust store (an isle's root comes from `isle trust`)
+POL_TLS_CA=<pem>        trust THAT file instead (self-signed dev / staging targets)  -> curl --cacert
+POL_TLS_INSECURE=1      explicit bypass for lightweight non-isle settings -> curl -k, [WARN] on stderr on EVERY call
+pol tls-selftest        scripts/tls-selftest.sh: the knobs, pol_api / core_api, and the tree audit (three remote/standalone sites keep -k, named there)
+```

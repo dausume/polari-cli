@@ -14,6 +14,7 @@
 set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/log.sh"
+source "$SCRIPT_DIR/lib/tls.sh"
 SUITE="${POL_SUITE_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 FW="$SUITE/polari-rf-node/polari-framework"
 API="${POLARI_API:-https://api.polari.isle}"
@@ -182,7 +183,7 @@ API_SET=0
 while [ $# -gt 0 ]; do case "$1" in --push) PUSH=1; shift ;; --json) JSON=1; shift ;; --api) API="$2"; API_SET=1; shift 2 ;; *) ARGS+=("$1"); shift ;; esac; done
 api_arg() { [ "$API_SET" = 1 ] && printf -- '--api\n%s\n' "$API"; return 0; }
 py() { (cd "$FW" && PYTHONPATH=.:modules python3 "$@"); }
-CURL="curl -sk --max-time 30 --resolve api.polari.isle:443:127.0.0.1"
+CURL="pol_curl -s --max-time 30 --resolve api.polari.isle:443:127.0.0.1"
 
 case "$cmd" in
     help|-h|--help) usage ;;

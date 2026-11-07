@@ -272,7 +272,7 @@ if command -v isle >/dev/null 2>&1; then
   S=$(isle status 2>/dev/null | sed "s/\x1b\[[0-9;]*m//g")
   echo "  router       $(echo "$S" | grep -m1 -E "Router is reachable|Router.*not" | sed "s/^ *//")"
   echo "  agent        $(docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -E "^isle-(vlan|remote)-agent" || echo "not running")"
-  echo "  polari.isle  HTTP $(curl -sk --max-time 6 -o /dev/null -w "%{http_code}" https://polari.isle/ 2>/dev/null) · $(docker ps --format "{{.Names}}" | grep -c "^prf-isle") prf-isle containers"
+  echo "  polari.isle  HTTP $(pol_curl -s --max-time 6 -o /dev/null -w "%{http_code}" https://polari.isle/ 2>/dev/null) · $(docker ps --format "{{.Names}}" | grep -c "^prf-isle") prf-isle containers"
   echo "  doors        $(isle url exposures 2>/dev/null | sed "s/\x1b\[[0-9;]*m//g" | tail -1 | sed "s/^ *//")"
   command -v virsh >/dev/null 2>&1 && echo "  guests       $(virsh list --all 2>/dev/null | tail -n +3 | awk "NF{print \$2\"(\"\$3\")\"}" | tr "\n" " ")"
 else
