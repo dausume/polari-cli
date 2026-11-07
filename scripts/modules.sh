@@ -21,7 +21,7 @@ ${BOLD}COMMANDS${NC}
   ${CYAN}deps${NC}        run moduleService's dependency selftest INSIDE the
               running prf-backend container (host python can't import
               the server — PyJWT mismatch)
-  ${CYAN}selftest <module>${NC}
+  ${CYAN}selftest <module>${NC} [--container <name>]
               run one module's selftest suite in the container
               (e.g. scoring, aquaponics, materialsScience)
   ${CYAN}registry${NC}    the module register (modules/polari-modules.json):
@@ -59,6 +59,26 @@ the service registry's variations field is where it will hang."
 }
 
 COMMAND=$1; shift || true
+# --container NAME (any position): which LOCAL backend container, as in pol topology. A device can run several
+# (pol-core: prf-polari-pol-backend + a swarm polari-node_backend); lib/core-api.sh refuses to guess. Env:
+# POLARI_BACKEND_CONTAINER.
+_rest=(); while [ $# -gt 0 ]; do
+    case "$1" in
+        --container) [ -n "${2:-}" ] || die "--container needs a name"; export POLARI_BACKEND_CONTAINER="$2"; shift 2 ;;
+        --container=*) export POLARI_BACKEND_CONTAINER="${1#--container=}"; shift ;;
+        *) _rest+=("$1"); shift ;;
+    esac
+done; set -- "${_rest[@]+"${_rest[@]}"}"
+# the one local backend these verbs exec into; exit 2 with the words when there is none or several
+local_backend() {
+    local be rc=0
+    be=$(core_backend_container) || rc=$?
+    if [ "$rc" -ne 0 ] || [ -z "$be" ]; then
+        [ "$rc" -eq 2 ] || log_error "no local backend container (compose prf-backend, isle prf-isle-backend or prf-<name>-backend, swarm polari-node_backend) — pol suite up / pol node up / pol swarm deploy node / isle core-install first, or name one with --container <name>"
+        exit 2
+    fi
+    echo "$be"
+}
 case "$COMMAND" in
     health)
         # reg-1: the unified module health check (the registrar). pol modules health [--api URL] [<module>] [--verify]
@@ -317,7 +337,7 @@ print(f"registered: {mod} kind={fresh['kind']} path={fresh['path']} "
 PYEOF
         ;;
     deps)
-        BE=$(core_backend_container) || die "no local backend container (compose prf-backend, isle prf-isle-backend, or swarm polari-node_backend) — pol suite up / pol node up / pol swarm deploy node / isle core-install first"
+        BE=$(local_backend)
         log_info "Running module dependency selftest in $BE"
         docker exec "$BE" python3 -m moduleService.selftest_module_dependencies ;;
     selftest)
@@ -325,7 +345,7 @@ PYEOF
         [ -n "$MOD" ] || die "usage: pol modules selftest <module> (see pol modules list)"
         # vpn-1: the backend may be the compose container OR the swarm
         # task (dev = swarm since 2026-08-26) — core-api.sh knows both.
-        BE=$(core_backend_container) || die "no local backend container (compose prf-backend, isle prf-isle-backend, or swarm polari-node_backend) — pol suite up / pol node up / pol swarm deploy node / isle core-install first"
+        BE=$(local_backend)
         FOUND=0
         # mp-1: modules live in either import root; PYTHONPATH in the
         # image resolves modules/<m> under its plain name.
