@@ -41,8 +41,8 @@ eq "default: mode verified" "verified" "$(run -- bash -c "source '$HERE/lib/tls.
 eq "POL_TLS_CA: --cacert FILE" "--cacert $CA " "$(run POL_TLS_CA="$CA" -- bash -c "source '$HERE/lib/tls.sh'; pol_tls_flags | tr '\n' ' '")"
 out=$(run POL_TLS_CA="$T/nope.pem" -- bash -c "source '$HERE/lib/tls.sh'; pol_tls_flags" 2>&1); rc=$?
 eq  "POL_TLS_CA missing file: exit 2" 2 "$rc"; has "POL_TLS_CA missing file: says so" "not a readable PEM" "$out"
-eq "POL_TLS_INSECURE=1: -k" "-k " "$(run POL_TLS_INSECURE=1 -- bash -c "source '$HERE/lib/tls.sh'; pol_tls_flags | tr '\n' ' '") 2>/dev/null)"
-eq "POL_TLS_INSECURE=true: -k" "-k " "$(run POL_TLS_INSECURE=true -- bash -c "source '$HERE/lib/tls.sh'; pol_tls_flags | tr '\n' ' '") 2>/dev/null)"
+eq "POL_TLS_INSECURE=1: -k" "-k " "$(run POL_TLS_INSECURE=1 -- bash -c "source '$HERE/lib/tls.sh'; pol_tls_flags | tr '\n' ' '" 2>/dev/null)"
+eq "POL_TLS_INSECURE=true: -k" "-k " "$(run POL_TLS_INSECURE=true -- bash -c "source '$HERE/lib/tls.sh'; pol_tls_flags | tr '\n' ' '" 2>/dev/null)"
 eq "POL_TLS_INSECURE=0: verified" "verified" "$(run POL_TLS_INSECURE=0 -- bash -c "source '$HERE/lib/tls.sh'; pol_tls_mode")"
 eq "both set: POL_TLS_CA wins (cacert, the safer explicit choice)" "cacert" "$(run POL_TLS_INSECURE=1 POL_TLS_CA="$CA" -- bash -c "source '$HERE/lib/tls.sh'; pol_tls_mode" 2>/dev/null)"
 err=$(run POL_TLS_INSECURE=1 POL_TLS_CA="$CA" -- bash -c "source '$HERE/lib/tls.sh'; pol_curl -s https://x.invalid/p >/dev/null" 2>&1 >/dev/null)
