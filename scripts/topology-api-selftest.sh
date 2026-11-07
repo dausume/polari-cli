@@ -105,6 +105,21 @@ out=$(pol graph nope --api $API --json 2>/dev/null); rc=$?
 eq  "refused --json: exit 1" 1 "$rc"
 has "refused --json: the body still on stdout" '"error": "no topology named nope"' "$out"
 
+# ---- an older backend without the door: the REAL Falcon 404 body (seen live on api.polari-pol.isle, image 3b088dca)
+reset; route /api/topology/isle-needs 404 '{"title": "404 Not Found"}'
+out=$(pol isle-needs --api $API 2>/dev/null); rc=$?; err=$(pol isle-needs --api $API 2>&1 >/dev/null)
+eq  "404 without ok:false: exit 1" 1 "$rc"
+eq  "404: nothing rendered as if it were a report" "" "$out"
+has "404: the status and words on stderr" "HTTP 404: 404 Not Found" "$err"
+out=$(pol isle-needs --api $API --json 2>/dev/null); rc=$?
+eq  "404 --json: exit 1" 1 "$rc"
+eq  "404 --json: the body verbatim" '{"title": "404 Not Found"}' "$out"
+reset; route /api/topology/summary 200 '<html>bad gateway</html>'
+out=$(pol status --api $API 2>&1); rc=$?
+eq  "a non-JSON 200: exit 1" 1 "$rc"
+has "a non-JSON 200: says so, no traceback" "not JSON" "$out"
+hasnt "a non-JSON 200: no Python traceback" "Traceback" "$out"
+
 # ---- unreachable: exit 2, with and without an implied name lookup
 reset; echo 7 > "$CURLRC"
 out=$(pol status --api $API 2>&1); rc=$?
@@ -120,6 +135,35 @@ reset
 out=$(pol status --api ftp://x 2>&1); rc=$?; eq "--api must be http(s): exit 2" 2 "$rc"
 out=$(pol status --api 2>&1); rc=$?; eq "--api with no URL: exit 2" 2 "$rc"
 out=$(pol bogus --api $API 2>&1); rc=$?; eq "unknown verb: exit 2" 2 "$rc"
+
+# ---- tpl-6 example-rows: plan (GET) shows the digest; retire POSTs it; usage refusals
+reset; route /api/topology/example-rows 200 '{"ok": true, "instance": "polari", "retire": [{"class": "InstanceDefinition", "name": "prf-a"}], "keep": [{"class": "PolariNodeMachine", "name": "isle-core", "why": "a 2026-07-09 example row still referred to by kept InstanceDefinition:polari (machine_name)"}], "rehome": [{"class": "InstanceDefinition", "name": "polari", "from": "staging-a", "to": "polari"}], "planDigest": "abc123", "words": "polari: retire 1 unchanged example row, keep 1, move 1 kept row onto topology polari"}'
+out=$(pol example-rows --api $API 2>&1); rc=$?
+eq  "example-rows plan: exit 0" 0 "$rc"
+has "example-rows plan: GET the door" "$API/api/topology/example-rows" "$(cat "$LOG")"
+hasnt "example-rows plan: a GET only" "POST" "$(cat "$LOG")"
+has "example-rows plan: retire lines" "retire  InstanceDefinition     prf-a" "$out"
+has "example-rows plan: keep lines with the reason" "referred to by kept InstanceDefinition:polari" "$out"
+has "example-rows plan: move lines" "topology staging-a -> polari" "$out"
+has "example-rows plan: the exact apply command with the digest" "example-rows retire --digest abc123" "$out"
+has "example-rows plan: says nothing changed" "nothing has changed" "$out"
+reset; route /api/topology/example-rows/retire 200 '{"ok": true, "retired": [], "rehomed": [], "backup": {"file": "retire-example-20261107T040000Z.json", "dir": "/data/topology-backups", "sha256": "dd", "bytes": 10}, "problems": [], "words": "polari: retired 1 example row"}'
+out=$(pol example-rows retire --digest abc123 --api $API 2>&1); rc=$?
+eq  "example-rows retire: exit 0" 0 "$rc"
+has "example-rows retire: POSTs the digest" '"planDigest": "abc123"' "$(cat "$BODY" 2>/dev/null)"
+has "example-rows retire: prints the backup" "/data/topology-backups/retire-example-20261107T040000Z.json" "$out"
+reset; route /api/topology/example-rows/retire 409 '{"ok": false, "words": "refused: the plan changed since it was reviewed"}'
+out=$(pol example-rows retire --digest old --api $API 2>&1); rc=$?
+eq  "example-rows retire, stale digest (409): exit 1" 1 "$rc"
+reset
+out=$(pol example-rows retire --api $API 2>&1); rc=$?
+eq  "example-rows retire without --digest: exit 2, no call" "2:" "$rc:$(cat "$LOG")"
+out=$(pol example-rows restore --api $API 2>&1); rc=$?
+eq  "example-rows restore without a name: exit 2" 2 "$rc"
+reset; route /api/topology/example-rows/restore 200 '{"ok": true, "created": [], "unrehomed": [], "words": "restored 1 row from retire-example-x.json"}'
+out=$(pol example-rows restore retire-example-x.json --api $API 2>&1); rc=$?
+eq  "example-rows restore: exit 0" 0 "$rc"
+has "example-rows restore: POSTs the name" '"backup": "retire-example-x.json"' "$(cat "$BODY" 2>/dev/null)"
 
 # ---- the CLI boundary: verbs that run things on THIS machine refuse another backend, before any call
 for verb in "apply --plan" "deploy x" "allocate scope polari"; do

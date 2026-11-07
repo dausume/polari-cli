@@ -70,6 +70,14 @@ ${BOLD}ISLE (what this backend has observed from an isle; tpl-4)${NC}
                        configured / last-reported / stale / clock-skew) and
                        its fallback; Polari-only features show 'supported'
 
+${BOLD}EXAMPLE ROWS (tpl-6: the 2026-07-09 snapshot on a backend it does not describe)${NC}
+  ${CYAN}example-rows${NC} [plan]   dry run: which rows retire / stay (and why) / move;
+                       prints the planDigest. Changes nothing
+  ${CYAN}example-rows retire --digest <d>${NC}   apply exactly that reviewed plan;
+                       the backend writes a verified backup first
+  ${CYAN}example-rows backups${NC}  the backups by name
+  ${CYAN}example-rows restore <name>${NC}   put the rows back from a backup
+
 ${BOLD}ANY BACKEND (cis)${NC}
   ${CYAN}--api https://api.<name>.isle${NC}   run a READ/SYNC/WRITE/ISLE verb against
                        that backend (verified TLS; else \$POL_API / \$POLARI_API)
@@ -103,10 +111,12 @@ need_pyyaml() {
 source "$SCRIPT_DIR/lib/core-api.sh"
 be_call() {
     if [ -n "${POL_API:-}" ]; then
-        local body=''
+        local body='' out rc=0
         [ "$1" = "POST" ] && body=$(cat)
-        pol_api "$1" "$2" "$body"     # words on stderr; body on stdout even when refused; rc 0/1/2
-        return
+        out=$(pol_api "$1" "$2" "$body") || rc=$?     # words on stderr; rc 0/1/2
+        # A refused answer is never rendered as data: --json still gets the body; the formatter gets a marker (exit 1).
+        if [ "$rc" = 1 ] && [ "${JSON:-0}" != 1 ]; then printf '__POL_REFUSED__\n'; else printf '%s\n' "$out"; fi
+        return $rc
     fi
     core_api "$@" || die "no local backend container (compose prf-backend or swarm polari-node_backend) and POLARI_CORE_URL unset — start the node/suite, point POLARI_CORE_URL at the core, or pass --api https://api.<name>.isle"
 }
@@ -118,7 +128,11 @@ pretty() {
 import json, sys
 raw = sys.stdin.read()
 if not raw.strip(): sys.exit(2)
-d = json.loads(raw)
+if raw.strip() == '__POL_REFUSED__': sys.exit(1)
+try:
+    d = json.loads(raw)
+except ValueError:
+    sys.stderr.write('[FAIL] the backend answered with something that is not JSON: %r\n' % raw[:200]); sys.exit(1)
 if sys.argv[1] == '1':
     print(raw.rstrip('\n'))
     sys.exit(1 if isinstance(d, dict) and d.get('ok') is False else 0)
@@ -359,6 +373,41 @@ for f in d.get('features', []):
     if f.get('fallback'): print('      without it: ' + f['fallback'])
 polari = [f['key'] for f in d.get('features', []) if not f.get('requiresIsle')]
 print('  Polari-only (supported with or without an isle): ' + ', '.join(polari))" ;;
+    example-rows)
+        # tpl-6: the 2026-07-09 example snapshot's rows — one backend operation, this is its CLI door
+        SUB=${1:-plan}; shift || true
+        case "$SUB" in
+            plan)
+                be_call GET /api/topology/example-rows | pretty "
+print('  ' + d.get('words', ''))
+for r in d.get('retire', []): print('    retire  %-22s %s' % (r['class'], r['name']))
+for r in d.get('keep', []): print('    keep    %-22s %-34s %s' % (r['class'], r['name'], r['why']))
+for r in d.get('rehome', []): print('    move    %-22s %-34s topology %s -> %s' % (r['class'], r['name'], r['from'], r['to']))
+if d.get('retire') or d.get('rehome'):
+    print('  planDigest ' + d['planDigest'])
+    print('  nothing has changed. To apply exactly this plan (a backup is written first):')
+    print('    pol topology example-rows retire --digest ' + d['planDigest'] + ' [--api URL]')" ;;
+            retire)
+                DIGEST=""
+                [ "${1:-}" = "--digest" ] && DIGEST=${2:-}
+                [ -n "$DIGEST" ] || { log_error "usage: pol topology example-rows retire --digest <planDigest from 'pol topology example-rows plan'>"; exit 2; }
+                python3 -c 'import json,sys; print(json.dumps({"planDigest": sys.argv[1]}))' "$DIGEST" \
+                    | be_call POST /api/topology/example-rows/retire | pretty "
+print('  ' + d.get('words', ''))
+b = d.get('backup') or {}
+if b: print('  backup %s/%s  sha256 %s  %s bytes' % (b.get('dir'), b.get('file'), b.get('sha256'), b.get('bytes')))
+for p in d.get('problems') or []: print('  PROBLEM ' + p)" ;;
+            backups)
+                be_call GET /api/topology/example-rows/backups | pretty "
+print('  backups in ' + d.get('dir', ''))
+for b in d.get('backups', []): print('    ' + b)
+if not d.get('backups'): print('    (none)')" ;;
+            restore)
+                [ -n "${1:-}" ] || { log_error "usage: pol topology example-rows restore <backup name from 'pol topology example-rows backups'>"; exit 2; }
+                python3 -c 'import json,sys; print(json.dumps({"backup": sys.argv[1]}))' "$1" \
+                    | be_call POST /api/topology/example-rows/restore | pretty "print('  ' + d.get('words', ''))" ;;
+            *) log_error "usage: pol topology example-rows [plan|retire --digest D|backups|restore NAME]"; exit 2 ;;
+        esac ;;
     render)
         need_pyyaml
         NAME=$(resolve_name "$1"); [ -n "$NAME" ] || die "no active topology"
