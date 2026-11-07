@@ -18,6 +18,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/log.sh"
 source "$SCRIPT_DIR/lib/pol-api.sh"
 COMMAND=${1:-}; shift || true
+# --container NAME: which local backend container (a device may run several; lib/core-api.sh refuses to guess)
+_rest=(); while [ $# -gt 0 ]; do
+    case "$1" in
+        --container) [ -n "${2:-}" ] || { echo "[FAIL] --container needs a name" >&2; exit 2; }; export POLARI_BACKEND_CONTAINER="$2"; shift 2 ;;
+        --container=*) export POLARI_BACKEND_CONTAINER="${1#--container=}"; shift ;;
+        *) _rest+=("$1"); shift ;;
+    esac
+done; set -- "${_rest[@]+"${_rest[@]}"}"
 pol_api_flags "$@" || exit 2
 set -- "${ARGS[@]+"${ARGS[@]}"}"
 # With --api the pipelines below carry the transport's exit code (be_call | pretty): 1 refused, 2 unreachable.
@@ -93,6 +101,9 @@ ${BOLD}ANY BACKEND (cis)${NC}
   ${CYAN}--api https://api.<name>.isle${NC}   run a READ/SYNC/WRITE/ISLE verb against
                        that backend (verified TLS; else \$POL_API / \$POLARI_API)
   ${CYAN}--json${NC}               print the backend's body verbatim
+  ${CYAN}--container <name>${NC}   which LOCAL backend container (no --api): a device can run several
+                       (pol-core: prf-polari-pol-backend + polari-node_backend); unnamed with
+                       several running is refused, never guessed. Env: POLARI_BACKEND_CONTAINER
   Exit: 0 ok · 1 refused (the backend said no) · 2 unreachable / usage.
   apply / deploy / allocate refuse with --api: placement on another device
   is an isle operation (sudo isle polari instance deploy / module move).
@@ -129,7 +140,12 @@ be_call() {
         if [ "$rc" = 1 ] && [ "${JSON:-0}" != 1 ]; then printf '__POL_REFUSED__\n'; else printf '%s\n' "$out"; fi
         return $rc
     fi
-    core_api "$@" || die "no local backend container (compose prf-backend or swarm polari-node_backend) and POLARI_CORE_URL unset — start the node/suite, point POLARI_CORE_URL at the core, or pass --api https://api.<name>.isle"
+    local rc=0
+    core_api "$@" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        [ "$rc" -eq 2 ] || log_error "no local backend container (prf-backend, prf-isle-backend, prf-<name>-backend, polari-node_backend) and POLARI_CORE_URL unset — start one, pass --container <name>, or --api https://api.<name>.isle"
+        exit 2
+    fi
 }
 
 # pretty PYTHON_SNIPPET — feeds be_call output through a formatter. No body = the transport already said why

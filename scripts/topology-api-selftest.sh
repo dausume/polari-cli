@@ -190,6 +190,39 @@ out=$(pol example-rows restore retire-example-x.json --api $API 2>&1); rc=$?
 eq  "example-rows restore: exit 0" 0 "$rc"
 has "example-rows restore: POSTs the name" '"backup": "retire-example-x.json"' "$(cat "$BODY" 2>/dev/null)"
 
+# ---- the LOCAL operator path (no --api): which backend container; a device may run several (pol-core does)
+DK="$T/dk"; mkdir -p "$DK"
+cat > "$DK/docker" <<SH
+#!/bin/bash
+echo "docker \$*" >> "$T/docker.log"
+case "\$1" in
+  ps) cat "$T/running" ;;
+  exec) echo '{"ok": true, "activeTopology": "polari", "topologies": [], "counts": {}}' ;;   # a GET: stdin is not read, as in the real one
+esac
+SH
+chmod +x "$DK/docker"
+lpol() { ( env PATH="$DK:$BIN:$PATH" POL_SUITE_ROOT="$S" bash "$HERE/topology.sh" "$@" ); }
+printf 'prf-polari-pol-backend\npolari-node_backend.1.abc\nprf-keycloak\n' > "$T/running"; : > "$T/docker.log"
+out=$(lpol status 2>&1); rc=$?
+eq  "local: two backends running and none named -> exit 2 (never a guess)" 2 "$rc"
+has "local: the refusal lists both and how to name one" "runs 2 Polari backends (prf-polari-pol-backend,polari-node_backend.1.abc); name one: --container" "$out"
+hasnt "local: nothing was exec'd" "docker exec" "$(cat "$T/docker.log")"
+: > "$T/docker.log"; out=$(lpol status --container prf-polari-pol-backend 2>&1); rc=$?
+eq  "local: --container names it -> exit 0" 0 "$rc"
+has "local: exec goes to THAT container" "docker exec -i prf-polari-pol-backend" "$(cat "$T/docker.log")"
+: > "$T/docker.log"; out=$(POLARI_BACKEND_CONTAINER=prf-polari-pol-backend lpol status 2>&1); rc=$?
+has "local: POLARI_BACKEND_CONTAINER works the same" "docker exec -i prf-polari-pol-backend" "$(cat "$T/docker.log")"
+: > "$T/docker.log"; out=$(lpol status --container prf-gone-backend 2>&1); rc=$?
+eq  "local: a named container that is not running -> exit 2" 2 "$rc"
+has "local: ... said in words" "POLARI_BACKEND_CONTAINER=prf-gone-backend is not a running container" "$out"
+printf 'prf-backend\nprf-keycloak\nprf-mariadb\n' > "$T/running"; : > "$T/docker.log"
+out=$(lpol status 2>&1); rc=$?
+eq  "local: exactly one backend (support containers ignored) -> used, exit 0" "0:yes" "$rc:$(grep -q 'docker exec -i prf-backend' "$T/docker.log" && echo yes)"
+printf 'prf-keycloak\n' > "$T/running"
+out=$(lpol status 2>&1); rc=$?
+eq  "local: no backend at all -> exit 2" 2 "$rc"
+has "local: ... says how to fix" "pass --container <name>, or --api" "$out"
+
 # ---- the CLI boundary: verbs that run things on THIS machine refuse another backend, before any call
 for verb in "apply --plan" "deploy x" "allocate scope polari"; do
     reset

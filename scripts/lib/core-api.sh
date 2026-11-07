@@ -23,10 +23,32 @@
 # is not installed by polari-complete at all — but a PERSON on an isle can now.
 # shellcheck source=tls.sh
 source "$(dirname "${BASH_SOURCE[0]}")/tls.sh"
+#
+# A device can run SEVERAL backends (found on pol-core 2026-11-07: the isle's named provider prf-polari-pol-backend
+# beside a swarm polari-node_backend): then guessing would act on the wrong database. So:
+#   POLARI_BACKEND_CONTAINER=<name> (or `pol topology --container <name>`) names it; it must be running.
+#   unset: exactly ONE candidate is used; several = refused in words, listing them; none = return 1 (callers decide).
+# Candidates: prf-backend, prf-isle-backend, the isle's named providers prf-<name>-backend, polari-node_backend.*
+core_backend_candidates() {
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^(prf-backend|prf-isle-backend|prf-[a-z0-9-]+-backend|polari-node_backend(\..*)?)$' \
+        | grep -vE '^prf-(psc|keycloak|mariadb|keydb|minio)' || true
+}
 core_backend_container() {
-    docker ps --format '{{.Names}}' | grep -x prf-backend && return 0
-    docker ps --format '{{.Names}}' | grep -x prf-isle-backend && return 0
-    docker ps --format '{{.Names}}' | grep '^polari-node_backend' | head -1
+    local names n
+    if [ -n "${POLARI_BACKEND_CONTAINER:-}" ]; then
+        if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$POLARI_BACKEND_CONTAINER"; then
+            echo "$POLARI_BACKEND_CONTAINER"; return 0
+        fi
+        echo "[FAIL] POLARI_BACKEND_CONTAINER=$POLARI_BACKEND_CONTAINER is not a running container" >&2; return 2
+    fi
+    names=$(core_backend_candidates)
+    n=$(printf '%s' "$names" | grep -c . || true)
+    if [ "$n" -eq 1 ]; then echo "$names"; return 0; fi
+    if [ "$n" -gt 1 ]; then
+        echo "[FAIL] this device runs $n Polari backends ($(echo $names | tr ' ' ',')); name one: --container <name> or POLARI_BACKEND_CONTAINER=<name>" >&2
+        return 2
+    fi
+    return 1
 }
 
 # core_api METHOD PATH — body on stdin for POST; response on stdout.
@@ -42,9 +64,10 @@ core_api() {
         fi
         return
     fi
-    local container
-    container=$(core_backend_container) || true
-    [ -n "$container" ] || return 1
+    local container rc=0
+    container=$(core_backend_container) || rc=$?
+    [ "$rc" -eq 0 ] || return "$rc"          # 2 = refused in words (several backends / the named one not running)
+    [ -n "$container" ] || return 1          # 1 = none here; the caller decides
     docker exec -i "$container" python3 -c "
 import sys, urllib.request
 method, path = sys.argv[1], sys.argv[2]
