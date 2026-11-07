@@ -878,7 +878,7 @@ for c in json.load(sys.stdin) or []:
         # the BACKEND gate is the upload gate — writes flow through
         # it. Idempotent per moveName -> a crashed move resumes.
         mv_step quiesce running
-        printf '{"reason":"%s relocation","moveName":"%s"}' "$SUBJECT" "$MOVE" | timeout 30 pol_curl -s -X POST -H 'Content-Type: application/json' --data-binary @- --max-time 25 "$POLARI_CORE_URL/api/quiesce" >/dev/null 2>&1 || true
+        printf '{"reason":"%s relocation","moveName":"%s"}' "$SUBJECT" "$MOVE" | timeout 30 "$SCRIPT_DIR/lib/pol-curl" -s -X POST -H 'Content-Type: application/json' --data-binary @- --max-time 25 "$POLARI_CORE_URL/api/quiesce" >/dev/null 2>&1 || true
         QOK=""
         for i in $(seq 1 720); do
             ST=$(api GET /api/quiesce/status | python3 -c "

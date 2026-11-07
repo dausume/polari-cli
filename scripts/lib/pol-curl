@@ -1,0 +1,5 @@
+#!/bin/bash
+# pol-curl — lib/tls.sh's pol_curl as an EXECUTABLE, for the places that hand the command to an external executor
+# (`timeout 30 …`, xargs, ssh-less remote shells with the lib present): those exec a file, never a shell function.
+source "$(dirname "${BASH_SOURCE[0]}")/tls.sh"
+pol_curl "$@"

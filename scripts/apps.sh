@@ -103,11 +103,12 @@ case "$CMD" in
     status|request|fetch|access)
         VERB="$CMD"; FORM=install; [ "$VERB" = access ] && { VERB=fetch; FORM=access; }
         MOD="${1:?module id}"; shift || true; FLAVOR=online; FROM="${POLARI_API:-http://127.0.0.1:3300}"; OUT=""
-        INSECURE="${POLARI_INSECURE:-0}"; while [ $# -gt 0 ]; do case "$1" in --flavor) FLAVOR="$2"; shift 2 ;; --form) FORM="$2"; shift 2 ;; --from|--api) FROM="$2"; shift 2 ;; --output|-o) OUT="$2"; shift 2 ;; --insecure) INSECURE=1; shift ;; *) shift ;; esac; done
-        python3 - "$VERB" "$MOD" "$FLAVOR" "${FROM%/}" "$OUT" "$INSECURE" "$FORM" <<'PY'
-import json, sys, time, urllib.request, urllib.error, ssl
-verb, mod, flavor, base, out, insecure, form = sys.argv[1:8]
-ctx = ssl._create_unverified_context() if insecure == '1' else None   # --insecure: a self-signed home core only
+        while [ $# -gt 0 ]; do case "$1" in --flavor) FLAVOR="$2"; shift 2 ;; --form) FORM="$2"; shift 2 ;; --from|--api) FROM="$2"; shift 2 ;; --output|-o) OUT="$2"; shift 2 ;; --insecure) export POL_TLS_INSECURE=1; shift ;; *) shift ;; esac; done   # --insecure = POL_TLS_INSECURE=1 (lib/tls.sh: one knob)
+        PYTHONPATH="$SCRIPT_DIR/lib${PYTHONPATH:+:$PYTHONPATH}" python3 - "$VERB" "$MOD" "$FLAVOR" "${FROM%/}" "$OUT" "$FORM" <<'PY'
+import json, sys, time, urllib.request, urllib.error
+from pol_tls import tls_context
+verb, mod, flavor, base, out, form = sys.argv[1:7]
+ctx = tls_context(base)   # lib/pol_tls.py: verified | POL_TLS_CA | announced POL_TLS_INSECURE
 def call(method, path):
     req = urllib.request.Request(base + path, method=method)
     try:

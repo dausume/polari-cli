@@ -163,10 +163,19 @@ Gotchas:
 - Combined staging first `up`: prf-backend healthcheck can flap on a cold
   seed and block pol-proxy — re-run `pol suite up` once it's healthy.
 
-## TLS (every `pol` curl call; lib/tls.sh)
+## TLS (every `pol` HTTPS call; lib/tls.sh + lib/pol_tls.py)
 ```
 default                 verified against the system trust store (an isle's root comes from `isle trust`)
-POL_TLS_CA=<pem>        trust THAT file instead (self-signed dev / staging targets)  -> curl --cacert
-POL_TLS_INSECURE=1      explicit bypass for lightweight non-isle settings -> curl -k, [WARN] on stderr on EVERY call
-pol tls-selftest        scripts/tls-selftest.sh: the knobs, pol_api / core_api, and the tree audit (three remote/standalone sites keep -k, named there)
+POL_TLS_CA=<pem>        trust THAT file instead (self-signed / private deployments: the VERIFYING choice) -> curl --cacert / ssl cafile
+POL_TLS_INSECURE=1      explicit bypass for intended non-isle lightweight settings -> curl -k / unverified ssl context,
+                        [WARN] once per run and on every call, on the CLI's original stderr (a call site's own 2>/dev/null
+                        does not hide it; a caller discarding the whole CLI stderr does)
+both set                POL_TLS_CA wins; the ignored bypass is said once
+POLARI_INSECURE=1, --insecure   aliases of POL_TLS_INSECURE=1 (one knob, one name)
+lib/pol-curl            the same policy as an executable, for `timeout 30 …` and other external executors
+pol tls-selftest        scripts/tls-selftest.sh (55): the modes, precedence, aliases, redirected call sites, the executable,
+                        the python side, pol_api / core_api, and the tree audit
+disclosed exceptions    three curl -k sites are NOT this policy and stay tracked one by one: deploy.sh join bootstrap (remote
+                        ssh string before the joining host trusts the isle CA; guarded by a sha256 from an authenticated channel),
+                        dev.sh remote probe (ssh string), prod-agent.sh (standalone, shipped without lib)
 ```

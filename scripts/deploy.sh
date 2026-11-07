@@ -233,7 +233,9 @@ EOF
                 FP="${ISLE_CA_FINGERPRINT:-}"
                 [ -n "$FP" ] || FP=$(ssh -o ConnectTimeout=8 isle-core "sudo -n openssl x509 -in /etc/isle-mesh/ca/isle-root.crt -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2" 2>/dev/null || true)
                 [ -n "$FP" ] || die "the isle CA fingerprint is needed (ISLE_CA_FINGERPRINT=…) — it is printed by isle core-install / isle status on the core"
-                # the JOIN INFO's own fetch: https://apt.isle/isle-bootstrap.sh resolved to the core (its CA is not trusted yet → -k; the sha check below is the guard)
+                # the JOIN INFO's own fetch: https://apt.isle/isle-bootstrap.sh resolved to the core (its CA is not trusted yet → -k; a DISCLOSED
+                # EXCEPTION to lib/tls.sh, inside a remote ssh string). The guard is the sha256 below, which comes from a DIFFERENT, authenticated
+                # channel: ISLE_BOOTSTRAP_SHA256 given by the operator, else read over ssh from the core itself - never from the fetched file.
                 SHA="${ISLE_BOOTSTRAP_SHA256:-$(ssh -o ConnectTimeout=8 isle-core "sha256sum /usr/share/isle-mesh/isle-cli/scripts/isle-bootstrap.sh 2>/dev/null | cut -d' ' -f1" 2>/dev/null || true)}"
                 STEPS=("$ENSURE_DOCKER"
                        "curl -fsSk -o /tmp/isle-bootstrap.sh --resolve apt.isle:443:$CORE_IP https://apt.isle/isle-bootstrap.sh && { [ -z '$SHA' ] || echo '$SHA  /tmp/isle-bootstrap.sh' | sha256sum -c - ; }"
