@@ -1,6 +1,6 @@
 #!/bin/bash
-# backup.sh — `pol backup`: backup sets of this machine (AI-Notes/plans/BACKUP_PLAN.md).
-#   pol backup plan [--target <mount point>] [--table]   read-only: what a set would hold, sizes, what is left out, the target
+# backup.sh — `pol backup`: device-backups of this machine (AI-Notes/plans/BACKUP_PLAN.md).
+#   pol backup plan [--target <mount point>] [--table]   read-only: what a device-backup would hold, sizes, what is left out, the target
 #   create | list | verify | restore                      not built yet; they answer so and change nothing
 set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

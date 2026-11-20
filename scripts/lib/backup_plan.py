@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """pol backup plan [--target <mount point>] [--table]   read-only, for anyone
 
-What a backup set of this machine would hold: the named Docker volumes of Polari, the isle's settings and
+What a device-backup (one backup of this machine, taken at one time) would hold: the named Docker volumes of Polari, the isle's settings and
 state, what is left out and why, the sizes, and whether the target could take it.  Nothing is copied, stopped
 or written.  The other verbs (create, list, verify, restore) are not built yet; see AI-Notes/plans/BACKUP_PLAN.md.
 """
@@ -133,7 +133,7 @@ def target(path, needed, *, usage=shutil.disk_usage, device_of=lambda p: os.stat
     free = usage(path).free
     doc.update(freeBytes=free, neededBytes=needed * 2)
     if free < needed * 2:
-        return dict(doc, reason='The target has less free space than twice the set.')
+        return dict(doc, reason='The target has less free space than twice the device-backup.')
     return dict(doc, usable=True, reason=None)
 
 
@@ -165,7 +165,7 @@ def _size(value):
 
 
 def table(doc):
-    lines = ['Backup plan for %s (nothing is copied by this verb)' % doc['device'], '']
+    lines = ['Device-backup plan for %s (nothing is copied by this verb)' % doc['device'], '']
     if not doc['dockerReachable']:
         lines += ['Docker did not answer: no volume is listed.', '']
     for item in doc['items']:
