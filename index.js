@@ -79,6 +79,7 @@ const commands = {
   shell:    { script: 'shell.sh',    desc: 'App Store native shells: build/dist/publish artifacts + mint enrollment deep links', aliases: ['appshell'] },
   allocate: { script: 'topology.sh', injectArgs: ['allocate'], desc: 'Place a module on an instance / an instance on a machine (targeted deploy)', docker: true },
   cert:     { script: 'cert.sh',     desc: 'Certs per env tier; prod: self-signed OR Let\'s Encrypt + auto-renew', aliases: ['certs', 'ca'] },
+  backup:   { script: 'backup.sh',   desc: 'Backups (plan only so far): plan = what a set of this machine would hold and whether the target can take it; read-only' },
   odoo:     { script: 'odoo.sh',     desc: 'Odoo ERP: business sims + real-ops backbone (up/init-db/backup)', aliases: ['erp'], docker: true },
   remote:   { script: 'remote.sh',   desc: 'Remote staging access over WireGuard (init/apply/up/down/status)', aliases: ['wg'] },
   hwmap:    { script: 'hwmap.sh',    desc: 'Hardware map: scan this device (usb/pci/iommu/serial/nics/kvm), push, and ask what can be mapped to a KVM', aliases: ['hw'] },
