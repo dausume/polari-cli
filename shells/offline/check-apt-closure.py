@@ -10,13 +10,15 @@ from pathlib import Path
 import re
 import subprocess
 
+from supported_target import base_image
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('medium', type=Path)
 args = parser.parse_args()
 medium = args.medium.resolve()
 manifest = json.loads((medium / 'manifest.json').read_text())
-if manifest['target'] not in ('ubuntu-22.04', 'ubuntu-24.04'):
-    parser.error('unsupported target')
+try: image = base_image(manifest['target'])
+except ValueError as refused: parser.error(str(refused))
 packages = set()
 for stanza in (medium / 'apt/Packages').read_text().split('\n\n'):
     match = re.search(r'^Package: (.+)$', stanza, re.MULTILINE)
@@ -45,7 +47,7 @@ subprocess.run([
     'docker', 'run', '--rm', '--pull', 'never', '--network', 'none',
     '--memory', '384m', '--cpus', '1',
     '--mount', f'type=bind,src={medium},dst=/medium,readonly',
-    manifest['target'].replace('-', ':'), 'bash', '-c', script, 'closure',
+    image, 'bash', '-c', script, 'closure',
     *sorted(set(roots)), '/medium/debs/' + deb,
 ], check=True, timeout=180)
 print('PASS: pristine Ubuntu resolves the complete offline core using only bundled apt files, network disabled')

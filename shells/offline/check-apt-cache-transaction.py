@@ -9,13 +9,15 @@ import json
 from pathlib import Path
 import subprocess
 
+from supported_target import base_image
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('medium', type=Path)
 args = parser.parse_args()
 medium = args.medium.resolve()
 manifest = json.loads((medium / 'manifest.json').read_text())
-if manifest['target'] not in ('ubuntu-22.04', 'ubuntu-24.04'):
-    parser.error('unsupported target')
+try: image = base_image(manifest['target'])
+except ValueError as refused: parser.error(str(refused))
 helper = Path(__file__).with_name('offline-apt.sh').resolve()
 script = r'''set -euo pipefail
 POOL=/medium
@@ -38,6 +40,6 @@ subprocess.run([
     '--memory', '384m', '--cpus', '1',
     '--mount', f'type=bind,src={medium},dst=/medium,readonly',
     '--mount', f'type=bind,src={helper},dst=/test/offline-apt.sh,readonly',
-    manifest['target'].replace('-', ':'), 'bash', '-c', script,
+    image, 'bash', '-c', script,
 ], check=True, timeout=180)
 print('PASS: real local-cache apt install and repeat run, network disabled; host untouched')
