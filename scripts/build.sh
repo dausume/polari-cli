@@ -44,6 +44,12 @@ ${BOLD}COMMANDS${NC}
   ${CYAN}clean${NC}
         Remove rendered mirror trees (jinja-build/).
 
+  ${CYAN}image${NC} backend|frontend --base <image> --tag <image> [--source <checkout>] [--commit <rev>]
+        The next backend or frontend image of a release, made without the
+        network: the image the isle runs now plus the layers that hold the
+        commit's source (backend) or its built pages (frontend). Refuses
+        what a layer cannot carry. 'pol build image help' says how.
+
 ${BOLD}PIPELINE${NC} (isle-mesh embed-jinja idiom)
   annotated working file  --detect/process-->  jinja-templates/<f>.j2
   jinja-templates/*.j2    --render--------->  jinja-build/<f>
@@ -123,6 +129,9 @@ case "$COMMAND" in
     detect)
         PROJ="${1:-$POL_RF_NODE}"
         exec bash "$POL_RF_NODE/jinja-gen/embedded-jinja-detector.sh" "$PROJ" ;;
+    image)
+        export POL_RF_NODE
+        exec python3 "$SCRIPT_DIR/lib/layer_image.py" "$@" ;;
     clean)
         rm -rf "$POL_RF_NODE/jinja-build"
         log_success "removed $POL_RF_NODE/jinja-build" ;;
