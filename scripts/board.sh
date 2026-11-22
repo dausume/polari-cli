@@ -48,7 +48,7 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
     build uno [--work DIR]            avr-gcc + avr-objcopy + avr-size through the engines ladder (local avr-gcc
                                       → the prf-board-engines image → BOARD_ENGINES_URL worker); REFUSED past
                                       32256 B flash / 2048 B RAM; the .hex sha256 + engine versions + repro block
-    flash uno [--port P] [--yes] [--api URL]
+    flash uno [--work DIR] [--port P] [--yes] [--api URL]
                                       DRY-RUN (default): prints the exact avrdude argv. A real flash needs the UNO
                                       detected on THIS host AND --yes; verified by read-back; stamps firmware_sha
     twin uno up|down|status [--adc0-mv 750 | --adc0-ramp LO,HI,MS] [--tcp 9831] [--link /tmp/polari-uno-twin-uart]
@@ -94,6 +94,12 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
     twin c3 up|down|status [--tcp 9832] [--link /tmp/polari-c3-twin-uart]
                                       the SAME merged image in Espressif's QEMU fork (-machine esp32c3); UART0 at a pty
                                       link (source=serial), UART1 = the FreeRTOS trace (status shows its tail)
+    twin c3 up --pins [--wires 0-1] [--pins-tcp N]
+                                      pt-4: the twin on the PIN MODEL (modelled pads; needs esp engines that hold it,
+                                      else REFUSED). A chip-HAL light build (pin_shim 0) asks for it by itself.
+                                      --wires joins pads outside the chip (a jumper). Pads are levels, not voltages
+    twin c3 pins                      every pad's level now (0 | 1 | z)
+    twin c3 pin <pad> 0|1|z           drive a pad from outside (a button to ground = 0), or let it go (z)
     cost c3 [--write]                 re-measure the C3 twin's cost (QEMU RSS, virtual instructions/s, wall-time ratio)
 
   ${CYAN}THE BOARD OBJECT${NC} (brd-bo; one board shared by KiCad, Zephyr, ESP-IDF/FreeRTOS, bare C and Polari — no server needed)
@@ -204,7 +210,7 @@ case "$cmd" in
            mapfile -t A < <(api_arg); py -m board.custom.gen "${ARGS[@]}" "${A[@]}" ;;
     build) [ -n "${ARGS[0]:-}" ] || die "usage: pol board build uno"
            py -m board.custom.build "${ARGS[@]}" ;;
-    flash) [ -n "${ARGS[0]:-}" ] || die "usage: pol board flash uno [--port P] [--yes]"
+    flash) [ -n "${ARGS[0]:-}" ] || die "usage: pol board flash uno [--work DIR] [--port P] [--yes]"
            mapfile -t A < <(api_arg); py -m board.custom.flash "${ARGS[@]}" "${A[@]}" ;;
     twin)  if [ "${ARGS[0]:-}" = session ]; then   # sim-1: twin SESSIONS (a client of /api/board/twins)
                [ -n "${ARGS[1]:-}" ] || die "usage: pol board twin session start <config>|list|show <id>|stop <id>|inject <id> set PD2 0|adc 0 750|events <id> [--api URL]"
