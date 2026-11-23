@@ -61,11 +61,14 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
                                       sim-1: a SIMULATED BOARD with a live control port, started on the engines worker through
                                       the server (config = a firmware variant, e.g. uno-light; its .hex sha is the LOCKED
                                       firmware; a participant twin:<board>#<n>); the control token is shown once
+                                      c3g-3: config esp32c3-light starts a C3 instead - the chip HAL image on the pin-model
+                                      QEMU, on the esp-engines worker (ESP_ENGINES_URL or its isle binding); no --free
     twin session list|show <id>|stop <id> [--api URL]
     twin session inject <id> set PD2 0|1 | adc 0 750 | reset | watch PD6,PB5 | run true|false | status
                                       press/release a pin, hold a sensor voltage in mV, power-reset, change the watch list, pause
+                                      a C3 pad is GPIO<n>: set GPIO3 0|1|z (z lets the pad go); no adc, reset or pause yet
     twin session events <id> [--seconds S] [--limit N] [--replay N]
-                                      the watched pins' edges as they happen (cycle, pin, level)
+                                      the watched pins' edges as they happen (cycle, pin, level; a C3 edge: virtual ns)
 
   ${CYAN}the breadboard layout${NC} (lay-0/lay-1: boards are objects; a built config is laid out on a breadboard, gated, and walked through)
     layout boards [--json] [--api URL]
@@ -83,10 +86,15 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
     wire-colors set <name> <key> <colour> --api URL              (red = 5 V, black = GND, signals in the pin view's colours)
 
   ${CYAN}the ESP32-C3${NC} (sc-3; D-sc-4 ruled — ESP-IDF v5.5.5 C, FreeRTOS; the prf-esp-engines worker; twin-first)
-    gen c3 [--variant V] [--api URL] [--rig-name N] [--device-id N] [--out DIR]
+    gen c3 [--variant V] [--api URL] [--rig-name N] [--device-id N] [--out DIR] [--knob NAME=VALUE ...]
                                       the ESP-IDF C project around the generated header (c_twin target=host — the
                                       UNO's wire v2, so the SAME bridge attaches); variants: c3-sim-rig (default),
+                                      esp32c3-light (the light Mission: LED, button and sense pads),
                                       c3-prio-inversion[-mutex], c3-two-lock[-ordered|-backoff] (SCENARIO ONLY)
+                                      --knob sets a knob the variant has; one it does not have is refused. The light:
+                                      led_pin, button_pin, sense_pin, debounce_ms, event_queue_len, and pin_shim
+                                      (1 = the RAM pin shim, the default; 0 = the chip HAL, which the pin model and
+                                      a real board need):  gen c3 --variant esp32c3-light --knob pin_shim=0
     build c3 [--work DIR] [--force]   idf.py build through the engines ladder (ESP_ENGINES_URL → local → the
                                       prf-esp-engines image → board.esp-engines); idf.py size; reproducible images;
                                       the build cache (same sources + image = no rebuild)
@@ -118,7 +126,11 @@ ${BOLD}pol board${NC} — boards programmed over USB / USB-C from Polari (brd ar
   ${CYAN}the firmware installer${NC} (brd-fi; different things to test on the one UNO)
     variants [--api URL]              the firmware variants: what each tests, what to watch for (offline: the seeded five
                                       — uno-sim-rig, uno-blink-only, uno-adc-sweep, uno-pair, uno-echo)
-    install uno --sim|--real [--variant V] [--dry-run | --yes] [--anyway REASON] [--api URL]
+    install uno|c3 --sim|--real [--variant V] [--dry-run | --yes] [--anyway REASON] [--api URL]
+                                      ins-c3-1: c3 = the ESP32-C3 (default variant esp32c3-light): --sim starts a twin
+                                      session on the ESP engines worker, --real prints esptool's exact command and its
+                                      checks (chip-HAL build, the three files = the image the twin ran, the Purposes ran
+                                      this image) and, with no board detected, only the dry run (refused, exit 3).
                                       plan + run + attach in one, through the server on the host holding the port:
                                       picks (or builds) the variant's compatible build, prints the plan's argv (the
                                       DRY-RUN, the default); --yes installs, attaches the bridge, prints the first
@@ -228,7 +240,7 @@ case "$cmd" in
     pins|render|ingest|conflicts|assign)   # brd-bo: THE BOARD OBJECT (rows = the seeds offline; views/conflicts in the local ledger)
            py -m board.custom.board_object_cli "$cmd" "${ARGS[@]}" ;;
     variants) mapfile -t A < <(api_arg); py -m board.custom.install_cli variants "${A[@]}" ;;
-    install) [ -n "${ARGS[0]:-}" ] || die "usage: pol board install uno --sim|--real [--variant V] [--dry-run|--yes] [--anyway REASON] [--api URL]"
+    install) [ -n "${ARGS[0]:-}" ] || die "usage: pol board install uno|c3 --sim|--real [--variant V] [--dry-run|--yes] [--anyway REASON] [--api URL]"
              py -m board.custom.install_cli install "${ARGS[@]}" --api "$API" ;;
     result)  py -m board.custom.install_cli result "${ARGS[@]}" --api "$API" ;;
     gate)    [ -n "${ARGS[0]:-}" ] || die "usage: pol board gate <config> [--api URL]"   # ins-1: the confirmed-sim gate's verdict

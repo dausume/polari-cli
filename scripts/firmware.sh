@@ -54,7 +54,9 @@ ${BOLD}pol firmware${NC} — a CGraph + a board in, a firmware build out (fs-0 a
                                        fsc-6: make a built config FINISHED: run the Mission's four Purposes' own acceptance scenarios on THAT
                                        config's firmware (the twin, here), store the runs, and with --api push each to that server's Purpose door
                                        (variant = the config), then ask the scores page if the config reads finished. --dry-run lists what would
-                                       run and where it would be pushed (nothing runs). Configs: uno-light-sense-poll, uno-light-sense-pcint.
+                                       run and where it would be pushed (nothing runs). Configs: uno-light-sense-poll, uno-light-sense-pcint,
+                                       and esp32c3-light (the ESP32-C3: built and run on the esp engines, a local image or the isle's worker
+                                       over the ladder; where the engine holds the pin model the proof is on the chip-HAL build).
                                        One scenario alone: pol faults run <scenario> --variant <config> --api URL
   ${CYAN}profile${NC} show [<name>] | create <name> [--copy-of P] [--weight term=w ...] [--purpose-weight purpose:term=w ...]
                                        | weight <name> term=w [...]       (create / weight need --api URL: the profile is a row there;
@@ -97,7 +99,7 @@ case "$cmd" in
     scores) py_fsc scores "$@" ;;
     state) [ -n "${1:-}" ] || die "usage: pol firmware state <config> [--fields|--enums|--findings] [--json]   (e.g. uno-light)"
            (cd "$FW" && PYTHONPATH=.:modules python3 -m board.custom.firmware_state "$@") ;;
-    prove) [ -n "${1:-}" ] || die "usage: pol firmware prove <config> [--mission M] [--api URL] [--dry-run] [--json]   (configs: uno-light-sense-poll, uno-light-sense-pcint)"
+    prove) [ -n "${1:-}" ] || die "usage: pol firmware prove <config> [--mission M] [--api URL] [--dry-run] [--json]   (configs: uno-light-sense-poll, uno-light-sense-pcint, esp32c3-light)"
            (cd "$FW" && PYTHONPATH=.:modules python3 -m cmod.custom.fsc_prove_cli "$@") ;;
     profile) [ -n "${1:-}" ] || die "usage: pol firmware profile show [<name>] | create <name> [--copy-of P] [--weight term=w ...] | weight <name> term=w ..."
              py_fsc profile "$@" ;;
