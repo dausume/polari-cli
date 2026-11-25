@@ -28,10 +28,14 @@ ${BOLD}pol hwnocode${NC} — one no-code graph across a board, the bridge, the b
                                     ${CYAN}pol board twin uno up --work W${NC} runs exactly that build
   ${CYAN}suggest${NC} <solution>               bare C / FreeRTOS / ESP-IDF / Zephyr with its EVIDENCE rows — SUGGEST ONLY: nothing changes
   ${CYAN}runtime${NC} <solution> <value>       would the firmware_runtime knob accept it? (bare-c accepted; auto / an RTOS refused with why)
+  ${CYAN}features${NC} [<hardware-solution>] [--write]   cb-3: solve the schematic of a board HardwareSolution (its circuit cut into components,
+                                    the pull / series / guard / filter rules + the board's electrical rules) and derive its HardwareFeature rows;
+                                    compares with the record custom/solved/<name>.json (exit 1 = stale); --write re-records. No name = the list.
+  ${CYAN}features${NC} --circuit C --board B --variant V   the same solve on a design with no HardwareSolution (e.g. c3-light esp32-c3 esp32c3-light)
 
   <solution> = uno-temp-split (seeded: the UNO sim-rig subgraph → the bridge → a moving average + threshold → a chart).
   W defaults to \$POLARI_HWNOCODE_HOME/<solution> (~/.cache/polari-hwnocode/<solution>).
-  Page: /display/hardware-solutions · API: /api/hwnocode · Selftest: pol modules selftest hwnocode
+  Page: /display/hardware-solutions · /display/schematic-components · /display/hardware-features · API: /api/hwnocode · Selftest: pol modules selftest hwnocode
   Probes (in $FW): tests/hwnocode_probe.py (the twin proof) · tests/hwnocode_liveboot_probe.py (the live boot)
 EOF2
 )"
@@ -45,6 +49,7 @@ case "$cmd" in
     solutions) py -m hwnocode.custom.hwnocode_cli solutions ;;
     demo-prepare) py -m hwnocode.custom.demo_prepare "$@" ;;   # the UNO light demo: bridge row + LightState stabilized + exposure + generate (idempotent; --dry-run)
     place|render|build|suggest) py -m hwnocode.custom.hwnocode_cli "$cmd" "${1:-uno-temp-split}" "${@:2}" ;;
+    features) py -m hwnocode.custom.schematic_solve "$@" ;;   # cb-3: the schematic solver + the HardwareFeature rows (COMPONENT_BINDING_PLAN.md §5)
     runtime) [ -n "${2:-}" ] || die "usage: pol hwnocode runtime <solution> <bare-c|freertos|esp-idf|zephyr>"
              py -m hwnocode.custom.hwnocode_cli runtime "$1" "$2" ;;
     *) log_error "unknown verb: pol hwnocode $cmd"; usage; exit 1 ;;
